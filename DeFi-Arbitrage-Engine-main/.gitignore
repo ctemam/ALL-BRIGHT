@@ -2,8 +2,8 @@
 /target/
 /**/target/
 **/*.rs.bk
-Cargo.lock
 *.pdb
+# NOTE: Cargo.lock files are intentionally tracked for reproducible builds (do not ignore)
 
 # Anchor
 .anchor/
@@ -118,10 +118,13 @@ test-output/
 test-ledger/
 .config/
 keypairs/
-*.json
+# NOTE: JSON manifests/lockfiles are intentionally tracked (Anchor.toml, package.json,
+# package-lock.json, tsconfig*.json, program manifests). Wallet material lives under
+# keypairs/ and .config/ (ignored above) — never commit keypair JSON.
 !Anchor.toml
 !package.json
-!tsconfig.json
+!package-lock.json
+!tsconfig*.json
 !programs/**/Cargo.toml
 !programs/**/Xargo.toml
 

@@ -1,0 +1,22 @@
+# ─── Tooling / agent caches ───────────────────────────
+.agent-cache/
+
+# ─── OS ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ─── Editors ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Logs ─────────────────────────────────────────────
+*.log
+
+# NOTE: the pristine prototype archives are intentionally tracked so the
+# baseline is recoverable from the repository itself:
+#   DeFi-Arbitrage-Engine-main.zip, zero-cap-arb-main.zip
