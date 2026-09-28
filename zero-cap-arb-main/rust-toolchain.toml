@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned for reproducible builds. The resolved dependency graph requires Rust >= 1.90
+# (ruint 1.20 -> 1.90, enum-ordinalize-derive -> 1.89, icu_*/time/serde_with -> 1.88).
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

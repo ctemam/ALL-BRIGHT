@@ -2,6 +2,7 @@
 name = "zero-cap-arb-backend"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.90"
 description = "Ultra-low latency DeFi arbitrage radar and execution engine"
 
 [dependencies]
@@ -15,15 +16,18 @@ axum = { version = "0.7", features = ["ws", "json"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 tower = "0.4"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Blockchain RPC (alloy-rs)
 alloy = { version = "0.3", features = ["full"] }
-alloy-providers = "0.3"
 alloy-consensus = "0.3"
 alloy-rpc-types = "0.3"
 alloy-sol-types = "0.3"
 alloy-transport = "0.3"
+# NOTE: `alloy-providers` (plural) was removed — it is not a published crate (crates.io
+# holds only a 0.0.0-reserved placeholder), which made this manifest unresolvable. The
+# real crate is `alloy-provider`, and the code uses the `alloy::providers::*` re-export
+# from the `alloy` facade anyway.
 
 # HTTP client
 reqwest = { version = "0.12", features = ["json"] }

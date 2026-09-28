@@ -90,9 +90,9 @@ tempfile = "3.27"
 default = []
 # jupiter = ["jupiter-swap-api-client"]
 
-# Build script for gRPC code generation
-[build-dependencies]
-tonic-build = "0.14"
+# NOTE: the former [build-dependencies] tonic-build entry was removed: build.rs does no
+# code generation while the Geyser gRPC integration is unfinished, so it only added
+# build time and a resolution risk. Re-add it together with real tonic/prost wiring.
 
 # Profiles are defined in the workspace root
 
