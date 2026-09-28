@@ -1,7 +1,7 @@
 [toolchain]
 # Pinned to a concrete version (was "stable"): the engine's resolved dependency graph
 # and CI/Docker images must all agree on one compiler for reproducible builds.
-channel = "1.97.0"
+channel = "1.97.1"
 components = ["rustfmt", "clippy", "rust-src"]
 # NOTE: the wasm32-unknown-unknown target was dropped — nothing in the engine, programs,
 # Dockerfile or Makefile targets wasm (Solana programs compile to SBF), so it only added

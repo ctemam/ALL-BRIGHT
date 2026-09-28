@@ -1,5 +1,6 @@
 # Multi-stage build for optimized production image
-FROM rust:1.96.1-slim as builder
+# Pin the same toolchain as rust-toolchain.toml (1.97) so local, CI and image builds agree.
+FROM rust:1.97-slim as builder
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -10,14 +11,24 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Toolchain versions for the on-chain programs.
+#
+# These MUST stay in sync with the pinned crate versions in Cargo.toml (anchor-lang 1.2,
+# solana-program 4.0). Building the programs with a different toolchain than the crates
+# expect fails; the previous values were hard-coded to Solana v1.17.0 with
+# "avm install latest", which could not build these crates and made the image
+# non-reproducible.
+ARG SOLANA_VERSION=v4.0.0
+ARG ANCHOR_VERSION=1.2.0
+
 # Install Solana CLI
-RUN sh -c "$(curl -sSfL https://release.solana.com/v1.17.0/install)"
+RUN sh -c "$(curl -sSfL https://release.solana.com/${SOLANA_VERSION}/install)"
 ENV PATH="/root/.local/share/solana/install/active_release/bin:$PATH"
 
-# Install Anchor CLI
+# Install Anchor CLI (pinned instead of "latest")
 RUN cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
-RUN avm install latest
-RUN avm use latest
+RUN avm install ${ANCHOR_VERSION}
+RUN avm use ${ANCHOR_VERSION}
 
 # Create app directory
 WORKDIR /app
@@ -29,10 +40,13 @@ COPY engine/Cargo.toml ./engine/
 # Copy source code
 COPY engine/src ./engine/src/
 COPY programs ./programs/
-COPY shared ./shared/
+# NOTE: a `COPY shared ./shared/` line used to sit here, but no `shared/` directory exists
+# in this repository, so the image could never be built.
 
 # Build dependencies first (for better caching)
-RUN cargo build --release --bin defi-arbitrage-engine
+# The package/binary is named `arbitrage-engine` (see engine/Cargo.toml); it was previously
+# built as `defi-arbitrage-engine`, which does not exist.
+RUN cargo build --release --bin arbitrage-engine
 
 # Build Anchor programs
 RUN anchor build
@@ -55,7 +69,7 @@ RUN groupadd -r arbitrage && useradd -r -g arbitrage arbitrage
 WORKDIR /app
 
 # Copy binary from builder stage
-COPY --from=builder /app/target/release/defi-arbitrage-engine /app/
+COPY --from=builder /app/target/release/arbitrage-engine /app/
 COPY --from=builder /app/target/deploy /app/programs/
 
 # Copy configuration files
@@ -77,8 +91,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8080 8081 9091
 
 # Set environment variables
-ENV RUST_LOG=info,defi_arbitrage_engine=debug
+ENV RUST_LOG=info,arbitrage_engine=debug
 ENV RUST_BACKTRACE=1
 
 # Run the application
-CMD ["./defi-arbitrage-engine", "run"]
+CMD ["./arbitrage-engine", "run"]
