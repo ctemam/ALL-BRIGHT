@@ -7,7 +7,7 @@ pub enum AlertChannel {
     Webhook,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AlertEvent {
     TradeExecuted,
     OpportunityFound,
@@ -51,8 +51,14 @@ impl AlertManager {
         Self { configs, history: Vec::new() }
     }
 
-    pub fn send_alert(&mut self, event: AlertEvent, title: &str, body: &str) {
+    /// Sends an alert to every enabled channel subscribed to `event`.
+    ///
+    /// Returns one message per channel that failed to deliver. Delivery is not implemented
+    /// yet, so this always reports failures and records history with `delivered: false`;
+    /// previously every channel returned `Ok(())` while nothing was ever sent (D-04).
+    pub fn send_alert(&mut self, event: AlertEvent, title: &str, body: &str) -> Vec<String> {
         let now = chrono::Utc::now().timestamp();
+        let mut failures = Vec::new();
         for cfg in &self.configs {
             if !cfg.enabled { continue; }
             if !cfg.events.contains(&event) { continue; }
@@ -66,9 +72,17 @@ impl AlertManager {
                 delivered: false,
             };
 
-            let _ = self.deliver(&cfg, &msg);
-            self.history.push(msg);
+            let delivered = match self.deliver(cfg, &msg) {
+                Ok(()) => true,
+                Err(e) => {
+                    failures.push(format!("{:?}: {}", cfg.channel, e));
+                    false
+                }
+            };
+
+            self.history.push(AlertMessage { delivered, ..msg });
         }
+        failures
     }
 
     fn deliver(&self, cfg: &AlertConfig, msg: &AlertMessage) -> Result<(), String> {
@@ -86,19 +100,26 @@ impl AlertManager {
 
         let formatted = format!("{} *{}*\n{}", emoji, msg.title, msg.body);
 
+        // NOTE: delivery is intentionally not implemented. This used to build a Telegram URL
+        // containing the literal string "botTOKEN", throw away the Discord payload and
+        // return Ok(()) for every channel, so the UI reported success while nothing was
+        // ever sent (D-04). Returning an error keeps the gap visible and marks the
+        // history entry as undelivered.
         match cfg.channel {
-            AlertChannel::Telegram => {
-                let url = format!("https://api.telegram.org/botTOKEN/sendMessage");
-                let _ = url;
-                Ok(())
-            }
-            AlertChannel::Discord => {
-                let _payload = serde_json::json!({ "content": formatted });
-                Ok(())
-            }
+            AlertChannel::Telegram => Err(
+                "Telegram delivery is not implemented (no bot token or HTTP client wired up)".to_string(),
+            ),
+            AlertChannel::Discord => Err(format!(
+                "Discord delivery is not implemented (payload of {} chars prepared but not sent)",
+                formatted.len()
+            )),
             AlertChannel::Webhook => {
-                let _ = cfg.webhook_url.clone();
-                Ok(())
+                let target = if cfg.webhook_url.is_empty() {
+                    "<unset>".to_string()
+                } else {
+                    cfg.webhook_url.clone()
+                };
+                Err(format!("Webhook delivery is not implemented (target: {})", target))
             }
         }
     }

@@ -19,7 +19,15 @@ use axum::{
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
+
+/// Message returned by endpoints that cannot perform the work they advertise.
+///
+/// Several routes used to answer with fabricated success: a `status: "simulated"` result,
+/// a random transaction hash, or randomised risk numbers. They now fail with 501 Not
+/// Implemented plus this explanation, so a missing capability is never mistaken for
+/// completed work. The required work is tracked in `docs/ARBITRAGE-COMPARISON.md`.
+const NOT_IMPLEMENTED_EXECUTION: &str = "Arbitrage execution is not implemented: this build has no signer and no transaction broadcast path, so nothing was submitted and no transaction hash can exist. See docs/ARBITRAGE-COMPARISON.md (P0-2, B-P0-1..B-P0-3).";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -199,7 +207,7 @@ async fn get_velora_swap(
     let amt = req["amount"].as_str().ok_or_else(|| (StatusCode::BAD_REQUEST, "amount required".to_string()))?;
     let side = req["side"].as_str().unwrap_or("SELL");
     let ua = req["user_address"].as_str();
-    let slip = req["slippage"].as_u64();
+    let slip = req["slippage"].as_u64().map(|v| v as u32);
 
     let resp = state.velora.get_swap(chain_id, src, dst, sd, dd, amt, side, ua, slip).await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Velora /swap error: {}", e)))?;
@@ -270,36 +278,33 @@ async fn submit_delta_order(
 async fn execute_arbitrage(
     State(_state): State<AppState>,
     Json(req): Json<ExecuteArbitrageRequest>,
-) -> Json<ExecuteResult> {
-    info!("Executing arbitrage: opp={:?}", req.opportunity_id);
-    Json(ExecuteResult {
-        status: "simulated".to_string(),
-        message: "Arbitrage executed via Velora + Flashbots. 0 capital, 0 upfront gas.".to_string(),
-        strategy: "flash_loan".to_string(),
-        execution_mode: "FlashLoan".to_string(),
-        tx_hash: Some(format!("0x{:064x}", rand::random::<u64>())),
-        estimated_profit_usd: Some(100.50),
-        gas_cost_usd: Some(2.30),
-    })
+) -> Result<Json<ExecuteResult>, (StatusCode, String)> {
+    // Previously answered `status: "simulated"` with a fabricated 0x... hash and invented
+    // profit/gas figures, which made a no-op look like a completed trade (D-01/D-03).
+    warn!(
+        opportunity_id = %req.opportunity_id,
+        "Rejecting /api/execute: execution is not implemented"
+    );
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        NOT_IMPLEMENTED_EXECUTION.to_string(),
+    ))
 }
 
 async fn execute_advanced(
     State(_state): State<AppState>,
     Json(req): Json<AdvancedExecuteRequest>,
-) -> Json<ExecuteResult> {
-    info!("Advanced execute: strategy={}, mode={:?}", req.strategy, req.execution_mode);
-    let profit = match req.strategy.as_str() {
-        "triangular" => 42.75, "cross_chain" => 185.20, "jit" => 67.30, "mint" => 33.10, _ => 100.50,
-    };
-    Json(ExecuteResult {
-        status: "simulated".to_string(),
-        message: format!("{} executed via Velora. 0 capital, 0 upfront gas.", req.strategy),
-        strategy: req.strategy.clone(),
-        execution_mode: match req.execution_mode { ExecutionMode::FlashLoan => "FlashLoan", ExecutionMode::DirectSwap => "DirectSwap", ExecutionMode::Mint => "Mint" }.to_string(),
-        tx_hash: Some(format!("0x{:064x}", rand::random::<u64>())),
-        estimated_profit_usd: Some(profit),
-        gas_cost_usd: Some(rand::random::<f64>() * 5.0),
-    })
+) -> Result<Json<ExecuteResult>, (StatusCode, String)> {
+    // Same as /api/execute: the previous implementation returned a fabricated hash and a
+    // profit figure selected by strategy name, without touching any chain (D-01/D-03).
+    warn!(
+        strategy = %req.strategy,
+        "Rejecting /api/execute/advanced: execution is not implemented"
+    );
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        NOT_IMPLEMENTED_EXECUTION.to_string(),
+    ))
 }
 
 // ─── Comprehensive Scan ───────────────────────────────
@@ -406,21 +411,19 @@ async fn get_llm_advice(
     let llm_cfg = state.llm_config.read().clone();
     match llm_cfg {
         Some(_cfg) => {
-            // In production: call OpenAI/Anthropic/etc. API
+            // A "configured" LLM previously produced hard-coded advice, including invented
+            // statistics ("Historical success rate: 87%") and a fabricated
+            // recommend_execute: true trading recommendation. Until a real provider call
+            // exists, say so rather than appearing to advise a trade (D-09).
             Json(LLMAdviceResponse {
-                advice: "Based on current market conditions, this opportunity has a strong probability of execution. The spread is healthy and liquidity is sufficient.".to_string(),
-                confidence: "high".to_string(),
-                recommend_execute: true,
+                advice: "LLM advisor is not implemented: no provider (OpenAI/Anthropic/etc.) call is wired up.".to_string(),
+                confidence: "none".to_string(),
+                recommend_execute: false,
                 reasoning: vec![
-                    "Spread above minimum threshold (2.5% > 0.5%)".to_string(),
-                    "Liquidity sufficient for profitable trade size".to_string(),
-                    "Low gas costs relative to profit".to_string(),
-                    "Historical success rate: 87% on similar setups".to_string(),
+                    "This endpoint previously returned hard-coded advice containing invented statistics.".to_string(),
                 ],
                 risk_factors: vec![
-                    "Market volatility may increase slippage".to_string(),
-                    "MEV risk on public mempool".to_string(),
-                    "Gas price spike could reduce margins".to_string(),
+                    "No LLM advisor is implemented - do not treat any output from this route as advice".to_string(),
                 ],
             })
         }
@@ -525,7 +528,8 @@ async fn get_bubble_data(
                 opportunity_types: if has_opp { vec![ArbitrageType::Simple] } else { vec![] },
                 best_spread_pct: if has_opp { 1.2 + (chain.id as f64 * 0.1) % 5.0 } else { 0.0 },
                 volume_24h_usd: liq * 3.0,
-                price_change_24h_pct: (-2.0..=2.0).into_iter().map(|_| 0.5).sum(),
+                // No market-data source yet (P0-1); this used to be a fake float-range sum.
+                price_change_24h_pct: 0.0,
                 dexes_available: crate::chains::get_dexes_for_chain(chain.id).iter().map(|d| d.name.clone()).collect(),
                 bubble_size: (liq / 1_000_000.0).sqrt().min(100.0),
             });
@@ -576,7 +580,13 @@ async fn get_dashboard(
                 is_profitable: true,
             },
             flash_loan_recommendation: None,
-            execution_steps: vec!["Borrow 100 ETH", "Buy on Uniswap V3", "Sell on Curve", "Repay", "Keep profit".to_string()],
+            execution_steps: vec![
+                "Borrow 100 ETH".to_string(),
+                "Buy on Uniswap V3".to_string(),
+                "Sell on Curve".to_string(),
+                "Repay".to_string(),
+                "Keep profit".to_string(),
+            ],
             confidence_score: 0.87,
             liquidity_usd: 2_500_000.0,
             timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
@@ -718,10 +728,15 @@ async fn update_mev_config(
 async fn mev_analyze(
     State(state): State<AppState>,
     Json(req): Json<serde_json::Value>,
-) -> Json<crate::mev_guard::MevDetectionResult> {
+) -> Result<Json<crate::mev_guard::MevDetectionResult>, (StatusCode, String)> {
     let chain_id = req["chain_id"].as_u64().unwrap_or(1);
     let tx_data = req["tx_data"].as_str().unwrap_or("");
-    Json(state.mev_guard.read().analyze_pending(chain_id, tx_data))
+    state
+        .mev_guard
+        .read()
+        .analyze_pending(chain_id, tx_data)
+        .map(Json)
+        .map_err(|e| (StatusCode::NOT_IMPLEMENTED, e))
 }
 
 // ─── Alerts ───────────────────────────────────────────
@@ -743,10 +758,31 @@ async fn get_alerts_history(State(state): State<AppState>) -> Json<Vec<crate::al
     Json(state.alert_manager.read().get_history(50))
 }
 
-async fn test_alert(State(state): State<AppState>) -> Json<serde_json::Value> {
+async fn test_alert(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let mut am = state.alert_manager.write();
-    am.send_alert(AlertEvent::BotStarted, "Test Alert", "This is a test alert from Zero-Cap Arbitrage");
-    Json(serde_json::json!({"status": "sent"}))
+    let failures = am.send_alert(
+        AlertEvent::BotStarted,
+        "Test Alert",
+        "This is a test alert from Zero-Cap Arbitrage",
+    );
+
+    // Previously this always answered {"status":"sent"} even though no channel ever
+    // delivered anything (D-04). Report the real outcome so alerting is never assumed
+    // to work when it does not.
+    if failures.is_empty() {
+        Ok(Json(serde_json::json!({ "status": "delivered" })))
+    } else {
+        Err((
+            StatusCode::NOT_IMPLEMENTED,
+            format!(
+                "No alert was delivered: delivery is not implemented. {} channel(s) failed: {}",
+                failures.len(),
+                failures.join("; ")
+            ),
+        ))
+    }
 }
 
 // ─── Rules Engine ─────────────────────────────────────

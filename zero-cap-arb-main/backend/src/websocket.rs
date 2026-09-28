@@ -1,4 +1,5 @@
 use crate::api::AppState;
+use crate::radar_scanner::RadarScanner;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -52,31 +53,31 @@ async fn handle_socket(socket: WebSocket, scanner: Arc<RadarScanner>) {
                                         "scan" => {
                                             if let Some(token) = payload["token"].as_str() {
                                                 let token_address = payload["token_address"].as_str();
-                                                let scanner = scanner.clone();
-                                                let mut sender_clone = sender.clone();
-
-                                                tokio::spawn(async move {
-                                                    match scanner.scan_token(token, token_address).await {
-                                                        Ok(result) => {
-                                                            let resp = json!({
-                                                                "type": "scan_result",
-                                                                "data": result
-                                                            });
-                                                            let _ = sender_clone
-                                                                .send(Message::Text(resp.to_string()))
-                                                                .await;
-                                                        }
-                                                        Err(e) => {
-                                                            let err = json!({
-                                                                "type": "error",
-                                                                "message": format!("Scan failed: {}", e)
-                                                            });
-                                                            let _ = sender_clone
-                                                                .send(Message::Text(err.to_string()))
-                                                                .await;
-                                                        }
+                                                // Handled inline: a `SplitSink` is not `Clone`, so a
+                                                // spawned task cannot hold a second sender for this
+                                                // socket. This blocks the read loop during the scan,
+                                                // which is acceptable until the scanner has a real
+                                                // data source (P0-1).
+                                                match scanner.scan_token(token, token_address).await {
+                                                    Ok(result) => {
+                                                        let resp = json!({
+                                                            "type": "scan_result",
+                                                            "data": result
+                                                        });
+                                                        let _ = sender
+                                                            .send(Message::Text(resp.to_string()))
+                                                            .await;
                                                     }
-                                                });
+                                                    Err(e) => {
+                                                        let err = json!({
+                                                            "type": "error",
+                                                            "message": format!("Scan failed: {}", e)
+                                                        });
+                                                        let _ = sender
+                                                            .send(Message::Text(err.to_string()))
+                                                            .await;
+                                                    }
+                                                }
                                             }
                                         }
                                         "subscribe" => {

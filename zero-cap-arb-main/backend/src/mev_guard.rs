@@ -44,27 +44,24 @@ impl MevGuard {
         Self { config }
     }
 
-    pub fn analyze_pending(&self, _chain_id: u64, _tx_data: &str) -> MevDetectionResult {
-        let score = rand::random::<f64>() * 100.0;
-        let risk = if score > 80.0 { MevRiskLevel::Critical }
-            else if score > 60.0 { MevRiskLevel::HighRisk }
-            else if score > 40.0 { MevRiskLevel::MediumRisk }
-            else if score > 20.0 { MevRiskLevel::LowRisk }
-            else { MevRiskLevel::Safe };
-
-        MevDetectionResult {
-            risk_level: risk,
-            score,
-            sandwich_probability: rand::random::<f64>() * 0.3,
-            frontrun_probability: rand::random::<f64>() * 0.2,
-            backrun_probability: rand::random::<f64>() * 0.15,
-            unchecked_enabled: !self.config.enabled,
-            detected_bots: if score > 50.0 { vec!["MEV Bot 0x...a3f2".into(), "JaredFromSubway.eth".into()] } else { vec![] },
-            pending_tx_count: (rand::random::<f64>() * 50.0) as u64,
-            recommended_action: if score > 60.0 { "Use Flashbots private bundle instead of public mempool".into() }
-                else if score > 30.0 { "Monitor closely, consider MEV-Share".into() }
-                else { "Safe to execute via public mempool".into() },
-        }
+    /// Real MEV analysis is not implemented.
+    ///
+    /// This used to return `rand::random()` scores, sandwich/frontrun probabilities and a
+    /// hard-coded bot list, which fed real risk decisions with noise. It now fails loudly
+    /// until pending-transaction inspection and a transaction simulator are wired up
+    /// (defect D-09 in `docs/ARBITRAGE-COMPARISON.md`).
+    pub fn analyze_pending(
+        &self,
+        chain_id: u64,
+        tx_data: &str,
+    ) -> Result<MevDetectionResult, String> {
+        let _ = (chain_id, tx_data);
+        Err(
+            "MEV analysis is not implemented: no pending-transaction inspection or \
+             simulation backend is wired up, so no risk score can be produced. This \
+             endpoint previously returned randomised values."
+                .to_string(),
+        )
     }
 
     pub fn is_safe_to_trade(&self, result: &MevDetectionResult) -> bool {
@@ -79,7 +76,16 @@ impl MevGuard {
         result.score <= max_score
     }
 
-    pub fn check_honeypot(&self, _token_address: &str) -> bool {
-        true
+    /// Real honeypot detection is not implemented.
+    ///
+    /// This used to return a hard-coded `true`, which reported every token as safe. A real
+    /// implementation must simulate a transfer against the token contract.
+    pub fn check_honeypot(&self, token_address: &str) -> Result<bool, String> {
+        let _ = token_address;
+        Err(
+            "Honeypot detection is not implemented: it requires a transfer simulation \
+             against the token contract. This previously always reported `true`."
+                .to_string(),
+        )
     }
 }

@@ -1,7 +1,17 @@
 use crate::chains::{get_chains, get_dexes_for_chain};
 use crate::types::*;
-use alloy::providers::{Provider, ProviderBuilder};
 use alloy::primitives::Address;
+use alloy::providers::{ProviderBuilder, RootProvider};
+use alloy::transports::http::Http;
+use serde::{Deserialize, Serialize};
+
+/// Concrete HTTP provider used by the scanner.
+///
+/// alloy 0.3 parameterises the `Provider` trait by transport, so a bare `Provider` bound
+/// actually means `Provider<BoxTransport, Ethereum>`, which `RootProvider<Http<..>>` does
+/// not implement. Naming the concrete type avoids that mismatch (E0277 on the first
+/// successful `cargo check`).
+type HttpProvider = RootProvider<Http<reqwest::Client>>;
 use chrono::Utc;
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -134,7 +144,7 @@ impl RadarScanner {
     /// Query a specific DEX for token price
     async fn query_dex_price(
         &self,
-        provider: impl Provider,
+        provider: &HttpProvider,
         chain: &ChainConfig,
         dex: &DexConfig,
         token_symbol: &str,
@@ -146,7 +156,7 @@ impl RadarScanner {
         let weth: Address = weth_addr.parse()?;
 
         let price_usd = self
-            .estimate_price_from_dex(&provider, dex, &token_addr, &weth)
+            .estimate_price_from_dex(provider, dex, &token_addr, &weth)
             .await
             .unwrap_or(0.0);
 
@@ -155,7 +165,7 @@ impl RadarScanner {
         }
 
         let liquidity_usd = self
-            .estimate_liquidity(&provider, &token_addr, &weth)
+            .estimate_liquidity(provider, &token_addr, &weth)
             .await
             .unwrap_or(0.0);
 
@@ -177,7 +187,7 @@ impl RadarScanner {
 
     async fn estimate_price_from_dex(
         &self,
-        _provider: impl Provider,
+        _provider: &HttpProvider,
         _dex: &DexConfig,
         _token: &Address,
         _weth: &Address,
@@ -197,7 +207,7 @@ impl RadarScanner {
 
     async fn estimate_liquidity(
         &self,
-        _provider: impl Provider,
+        _provider: &HttpProvider,
         _token: &Address,
         _weth: &Address,
     ) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
@@ -330,7 +340,7 @@ impl RadarScanner {
         token_address: Option<&str>,
     ) -> Result<AllOpportunitiesResponse, Box<dyn std::error::Error + Send + Sync>> {
         let start = Instant::now();
-        let addr = token_address.unwrap_or("").to_string();
+
 
         // 1. Simple arbitrages (buy/sell across DEXes)
         let scan = self.scan_token(token_symbol, token_address).await?;
@@ -563,10 +573,12 @@ impl RadarScanner {
         let total_net = all_opportunities.iter().map(|o| o.profit_breakdown.net_profit_usd).sum();
         let total_gas = all_opportunities.iter().map(|o| o.profit_breakdown.costs.gas_estimated_usd).sum();
         let elapsed = start.elapsed().as_millis() as u64;
+        // Take the count before the vector is moved into the response (E0382).
+        let total_opportunities = all_opportunities.len();
 
         Ok(ComprehensiveScanResponse {
             opportunities: all_opportunities,
-            total_opportunities: all_opportunities.len(),
+            total_opportunities,
             profitable_count,
             total_net_profit_usd: total_net,
             total_gas_estimated_usd: total_gas,
@@ -626,10 +638,12 @@ pub struct TokenInfo {
 }
 
 /// Try each RPC URL until one works
-fn try_build_provider(urls: &[String]) -> Result<alloy::providers::RootProvider<alloy::transports::http::Http<reqwest::Client>>, String> {
+fn try_build_provider(urls: &[String]) -> Result<HttpProvider, String> {
     for url in urls {
-        match url.parse::<alloy::transports::http::Http<reqwest::Client>>() {
-            Ok(http) => return Ok(ProviderBuilder::new().on_http(http)),
+        // NOTE: `ProviderBuilder::on_http` takes a parsed URL, not a transport, and `Http`
+        // does not implement FromStr (both surfaced on the first successful cargo check).
+        match url.parse::<reqwest::Url>() {
+            Ok(parsed) => return Ok(ProviderBuilder::new().on_http(parsed)),
             Err(e) => warn!("RPC {} failed to parse, trying next: {}", url, e),
         }
     }
