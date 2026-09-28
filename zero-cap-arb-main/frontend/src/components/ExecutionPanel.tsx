@@ -54,9 +54,14 @@ export function ExecutionPanel({ opportunity, onClose }: Props) {
     setResult(null);
     setTxHash(null);
 
+    // Base URL is configurable so a deployed backend is never shadowed by localhost.
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:3001';
+
     try {
-      // Step 1: Get ParaSwap price route
-      const priceRes = await fetch('http://localhost:3001/api/paraswap/price', {
+      // Step 1: ask the backend for a Velora (ex-ParaSwap) route.
+      // This previously called /api/paraswap/price, which the backend does not serve
+      // (the real route is /api/velora/price), so every execution began with a 404.
+      const priceRes = await fetch(`${apiBase}/api/velora/price`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -69,10 +74,18 @@ export function ExecutionPanel({ opportunity, onClose }: Props) {
           side: 'SELL',
         }),
       });
-      const priceData = await priceRes.json();
+      const priceData = (await priceRes.json().catch(() => null)) as
+        | { error?: string; message?: string }
+        | null;
+      if (!priceRes.ok) {
+        throw new Error(
+          `Velora route request failed: ${priceData?.error ?? priceData?.message ?? `HTTP ${priceRes.status}`}`
+        );
+      }
 
-      // Step 2: Submit via Flashbots/Pimlico/ZeroDev
-      const res = await fetch('http://localhost:3001/api/execute', {
+      // Step 2: request execution. The backend answers 501 until a signer and broadcast
+      // path exist, so surface that honestly instead of inventing a transaction hash.
+      const res = await fetch(`${apiBase}/api/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -83,16 +96,27 @@ export function ExecutionPanel({ opportunity, onClose }: Props) {
         }),
       });
 
-      const data = await res.json();
+      const data = (await res.json().catch(() => ({}))) as {
+        tx_hash?: string | null;
+        message?: string;
+        error?: string;
+      };
 
-      const simulatedHash = `0x${Array.from({ length: 64 }, () =>
-        Math.floor(Math.random() * 16).toString(16)
-      ).join('')}`;
+      if (!res.ok) {
+        setResult(`Not executed: ${data.error ?? data.message ?? `HTTP ${res.status}`}`);
+        return;
+      }
+      if (!data.tx_hash) {
+        setResult(
+          'Backend reported success but returned no transaction hash - nothing was submitted.'
+        );
+        return;
+      }
 
-      setTxHash(simulatedHash);
-      setResult('Arbitrage executed successfully');
+      setTxHash(data.tx_hash);
+      setResult(data.message ?? 'Transaction submitted');
 
-      // Record in transaction log
+      // Record in the transaction log using the hash the backend actually returned.
       const addTx = (window as Record<string, unknown>).__addTx as
         | ((tx: Record<string, unknown>) => void)
         | undefined;
@@ -104,8 +128,8 @@ export function ExecutionPanel({ opportunity, onClose }: Props) {
         profit: opportunity.estimated_profit_usd,
         flashLoan: flashLoanSource,
         gasStrategy: gasStrategy,
-        hash: simulatedHash,
-        status: 'success',
+        hash: data.tx_hash,
+        status: 'pending',
       });
     } catch (err) {
       setResult(err instanceof Error ? err.message : 'Execution failed');
