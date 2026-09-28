@@ -1,0 +1,109 @@
+[package]
+name = "arbitrage-engine"
+version = "0.2.0"
+edition = "2021"
+authors = ["DeFi Arbitrage Team"]
+description = "High-performance Solana DeFi arbitrage engine"
+license = "MIT"
+repository = "https://github.com/your-org/defi-arbitrage-engine"
+keywords = ["solana", "defi", "arbitrage", "trading", "blockchain"]
+categories = ["finance", "cryptocurrency", "trading"]
+readme = "README.md"
+
+[dependencies]
+# Use workspace dependencies
+tokio = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+hyper = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tungstenite = { workspace = true }
+# sqlx = { workspace = true } # Temporarily disabled due to version conflicts
+redis = { workspace = true }
+solana-client = { workspace = true }
+solana-sdk = { workspace = true }
+solana-program = { workspace = true }
+solana-account-decoder = { workspace = true }
+anchor-lang = { workspace = true }
+spl-token = { workspace = true }
+spl-associated-token-account = { workspace = true }
+
+# Additional dependencies not in workspace (temporarily disabled)
+# tonic = "0.10"
+# prost = "0.12"
+# tonic-build = "0.10"
+rand = "0.10"
+bs58 = "0.5"
+bigdecimal = { version = "0.4", features = ["serde"] }
+tokio-cron-scheduler = "0.15"
+tracing-appender = "0.2"
+config = "0.15"
+clap = { version = "4.6", features = ["derive"] }
+dashmap = "6.2"
+parking_lot = "0.12"
+byteorder = "1.5"
+governor = "0.10"
+num_cpus = "1.17"
+
+# Use workspace dependencies
+sha2 = { workspace = true }
+hmac = { workspace = true }
+rust_decimal = { workspace = true }
+num-traits = { workspace = true }
+num-bigint = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+once_cell = { workspace = true }
+lazy_static = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+prometheus = { workspace = true }
+sysinfo = { workspace = true }
+
+# Jupiter SDK (for Jupiter DEX integration)
+# jupiter-swap-api-client = { git = "https://github.com/jup-ag/jupiter-swap-api-client", optional = true }
+
+# Development dependencies
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.15"
+serial_test = "4.0"
+test-log = "0.2"
+env_logger = "0.11"
+tempfile = "3.27"
+
+# Features
+[features]
+default = []
+# jupiter = ["jupiter-swap-api-client"]
+
+# Build script for gRPC code generation
+[build-dependencies]
+tonic-build = "0.14"
+
+# Profiles are defined in the workspace root
+
+# This crate is part of the main workspace
+
+# Metadata for cargo-audit
+[package.metadata.audit]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/RustSec/advisory-db"]
+
+# Documentation
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

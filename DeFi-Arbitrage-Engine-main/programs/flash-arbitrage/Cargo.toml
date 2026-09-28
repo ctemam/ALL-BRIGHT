@@ -1,0 +1,33 @@
+[package]
+name = "flash-arbitrage"
+version = "0.2.0"
+description = "Flash arbitrage program for atomic cross-DEX arbitrage execution"
+edition = "2021"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(anchor_debug)'] }
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "flash_arbitrage"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+spl-token = { workspace = true }
+spl-associated-token-account = { workspace = true }
+solana-program = { workspace = true }
+bytemuck = "1.25"
+borsh = "1.8"
+thiserror = "2.0"
+
+[dev-dependencies]
+solana-sdk = { workspace = true }
+tokio = { version = "1.53", features = ["macros"] }

@@ -1,0 +1,34 @@
+[package]
+name = "cross-dex-router"
+version = "0.2.0"
+description = "Cross-DEX router program for multi-hop arbitrage optimization"
+edition = "2021"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(anchor_debug)'] }
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "cross_dex_router"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+spl-token = { workspace = true }
+spl-associated-token-account = { workspace = true }
+solana-program = { workspace = true }
+bytemuck = "1.25"
+borsh = "1.8"
+thiserror = "2.0"
+num-traits = "0.2"
+
+[dev-dependencies]
+solana-sdk = { workspace = true }
+tokio = { version = "1.53", features = ["macros"] }

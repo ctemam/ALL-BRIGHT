@@ -1,0 +1,27 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.20"
+evm_version = "paris"
+optimizer = true
+optimizer_runs = 1000000
+via_ir = true
+
+[profile.default.fuzz]
+runs = 10000
+
+[profile.default.invariant]
+runs = 1000
+depth = 100
+
+[etherscan]
+eth = { key = "${ETHERSCAN_API_KEY}" }
+
+[rpc_endpoints]
+eth = "${ETH_RPC_URL}"
+arb = "${ARB_RPC_URL}"
+op = "${OP_RPC_URL}"
+poly = "${POLY_RPC_URL}"
+bsc = "${BSC_RPC_URL}"
+avax = "${AVAX_RPC_URL}"

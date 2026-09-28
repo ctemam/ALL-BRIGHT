@@ -1,0 +1,34 @@
+# Rust / Cargo
+backend/target/
+**/*.rs.bk
+
+# Foundry
+contracts/out/
+contracts/cache/
+
+# Next.js
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Build artifacts
+*.o
+*.so
+*.dylib
