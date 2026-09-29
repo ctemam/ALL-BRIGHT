@@ -160,12 +160,26 @@ pub fn decode_aggregate3(return_data: &Bytes, num_calls: usize) -> Vec<SubResult
     let raw = return_data.as_ref();
     let mut out = Vec::with_capacity(num_calls);
 
-    // Need at least: 32-byte array length + one offset word.
+    // Need at least: array offset word + length word.
     if raw.len() < 64 {
         return out;
     }
-    // The first word is the array length; offsets are relative to the end of it.
-    let base = 32usize;
+    // `aggregate3` returns a single dynamic array, so the payload is
+    // `offset(0x20) | length | element-offsets | elements`, and every element
+    // offset is measured from the start of the offset table at byte 64.
+    //
+    // This used to read `raw[0..32]` as the length and take `base = 32`, which
+    // put the table 32 bytes early: the first "offset" came out of the length
+    // word, so every element was read from the wrong place and a batch whose
+    // calls had all succeeded decoded as "no pool" or as a revert. The scanner
+    // therefore resolved nothing on chains that answered correctly. The
+    // test-only encoder omitted the leading offset word, so round-trip tests
+    // could not catch it — only a payload captured from a real node can.
+    //
+    // `num_calls` disambiguates the two shapes: a prefixed payload has
+    // `raw[0] == 0x20` *and* `raw[32] == num_calls`.
+    let prefixed = read_word(raw, 0) == 0x20 && read_word(raw, 32) == num_calls as u64;
+    let base = if prefixed { 64usize } else { 32usize };
     // Offsets may not be in ascending order in malformed data, but they are
     // sequential in practice; read each element at its own declared offset.
     for i in 0..num_calls {
@@ -776,6 +790,56 @@ mod tests {
             let truncated = Bytes::from(vec![0u8; n]);
             let _ = decode_aggregate3(&truncated, 4); // must not panic
         }
+    }
+
+    /// A payload captured from a live node, not from [`encode_results`].
+    ///
+    /// Returned by `aggregate3` on Ethereum mainnet for a single
+    /// `UniswapV2Factory.getPair(USDC, WETH)` call. It carries the leading
+    /// ABI offset word that [`encode_results`] omits, which is exactly the
+    /// case the round-trip tests above could not see.
+    ///
+    /// Reproduce with:
+    /// ```text
+    /// cast call 0xcA11bde05977b3631167028862bE2a173976CA11 \
+    ///   "$(cast calldata 'aggregate3((address,bool,bytes)[])' \
+    ///     '[(0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f,true,<getPair calldata>)]')" \
+    ///   --rpc-url https://ethereum-rpc.publicnode.com
+    /// ```
+    const MAINNET_SINGLE_CALL: &str =
+        "0000000000000000000000000000000000000000000000000000000000000020\
+0000000000000000000000000000000000000000000000000000000000000001\
+0000000000000000000000000000000000000000000000000000000000000020\
+0000000000000000000000000000000000000000000000000000000000000001\
+0000000000000000000000000000000000000000000000000000000000000040\
+0000000000000000000000000000000000000000000000000000000000000020\
+000000000000000000000000b4e16d0168e52d35cacd2c6185b44281ec28c9dc";
+
+    #[test]
+    fn decode_reads_payload_captured_from_a_real_node() {
+        let payload = Bytes::from(hex::decode(MAINNET_SINGLE_CALL).expect("valid hex"));
+        let out = decode_aggregate3(&payload, 1);
+        assert_eq!(out.len(), 1, "one sub-call in, one result out");
+        assert!(out[0].success, "the on-chain call succeeded");
+        let decoded = decode_address(&out[0].return_data)
+            .expect("the canonical USDC/WETH pair must decode as a pool");
+        assert_eq!(
+            format!("{decoded:?}").to_lowercase(),
+            "0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc"
+        );
+    }
+
+    /// The prefixed and unprefixed shapes must both decode; production always
+    /// sends the prefixed one.
+    #[test]
+    fn decode_accepts_both_offset_shapes() {
+        let prefixed = Bytes::from(hex::decode(MAINNET_SINGLE_CALL).expect("valid hex"));
+        assert!(decode_aggregate3(&prefixed, 1)[0].success);
+
+        let bare = encode_results(&[(true, vec![0x22; 32])]);
+        let out = decode_aggregate3(&bare, 1);
+        assert!(out[0].success);
+        assert_eq!(out[0].return_data[0], 0x22);
     }
 
     #[test]
