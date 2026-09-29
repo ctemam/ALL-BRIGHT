@@ -14,9 +14,9 @@ export const SUPPORTED_CHAINS = [
 export const wagmiConfig = createConfig({
   chains: SUPPORTED_CHAINS,
   connectors: [
-    metaMask({
-      shimDisconnect: true,
-    }),
+    // The MetaMask connector is SDK-based and has no `shimDisconnect` option;
+    // only the `injected` connector below accepts it.
+    metaMask(),
     walletConnect({
       projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? '',
       showQrModal: true,

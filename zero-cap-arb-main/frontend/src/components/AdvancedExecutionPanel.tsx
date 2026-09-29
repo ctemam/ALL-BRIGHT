@@ -143,7 +143,7 @@ export function AdvancedExecutionPanel({ opportunities, token, onClose }: Props)
       });
       setResult(res);
 
-      const addTx = (window as Record<string, unknown>).__addTx as ((tx: Record<string, unknown>) => void) | undefined;
+      const addTx = (window as unknown as Record<string, unknown>).__addTx as ((tx: Record<string, unknown>) => void) | undefined;
       addTx?.({
         token,
         strategy: selectedStrat.label,
@@ -154,7 +154,7 @@ export function AdvancedExecutionPanel({ opportunities, token, onClose }: Props)
         status: 'success',
       });
     } catch (err) {
-      const addTx = (window as Record<string, unknown>).__addTx as ((tx: Record<string, unknown>) => void) | undefined;
+      const addTx = (window as unknown as Record<string, unknown>).__addTx as ((tx: Record<string, unknown>) => void) | undefined;
       addTx?.({
         token,
         strategy: selectedStrat.label,

@@ -64,7 +64,9 @@ impl RulesEngine {
     pub fn evaluate(&self, opportunity: &OpportunityDetail) -> Vec<RuleEvaluationResult> {
         let mut results = Vec::new();
         for rule in &self.rules {
-            if !rule.enabled { continue; }
+            if !rule.enabled {
+                continue;
+            }
             let field_value = self.get_field_value(opportunity, &rule.field);
             let matched = self.evaluate_operator(&field_value, &rule.operator, &rule.value);
             results.push(RuleEvaluationResult {
@@ -73,8 +75,13 @@ impl RulesEngine {
                 matched,
                 action: rule.action.clone(),
                 reason: if matched {
-                    format!("Rule '{}' matched: {} {} {}", rule.name, format!("{:?}", rule.field),
-                        format!("{:?}", rule.operator), rule.value)
+                    format!(
+                        "Rule '{}' matched: {} {} {}",
+                        rule.name,
+                        format!("{:?}", rule.field),
+                        format!("{:?}", rule.operator),
+                        rule.value
+                    )
                 } else {
                     format!("Rule '{}' not matched", rule.name)
                 },
@@ -83,7 +90,10 @@ impl RulesEngine {
         results
     }
 
-    pub fn should_execute(&self, opportunity: &OpportunityDetail) -> (bool, Vec<RuleEvaluationResult>) {
+    pub fn should_execute(
+        &self,
+        opportunity: &OpportunityDetail,
+    ) -> (bool, Vec<RuleEvaluationResult>) {
         let results = self.evaluate(opportunity);
         let execute = results.iter().all(|r| {
             if r.matched {
@@ -93,7 +103,9 @@ impl RulesEngine {
                     RuleAction::NotifyMe => true,
                     RuleAction::AskApproval => false,
                 }
-            } else { true }
+            } else {
+                true
+            }
         });
         (execute, results)
     }
@@ -111,7 +123,12 @@ impl RulesEngine {
         }
     }
 
-    fn evaluate_operator(&self, field_value: &str, operator: &RuleOperator, rule_value: &str) -> bool {
+    fn evaluate_operator(
+        &self,
+        field_value: &str,
+        operator: &RuleOperator,
+        rule_value: &str,
+    ) -> bool {
         match operator {
             RuleOperator::GreaterThan => {
                 let fv: f64 = field_value.parse().unwrap_or(0.0);
@@ -130,9 +147,13 @@ impl RulesEngine {
                     let l: f64 = lo.trim().parse().unwrap_or(0.0);
                     let h: f64 = hi.trim().parse().unwrap_or(0.0);
                     fv >= l && fv <= h
-                } else { false }
+                } else {
+                    false
+                }
             }
-            RuleOperator::Contains => field_value.to_lowercase().contains(&rule_value.to_lowercase()),
+            RuleOperator::Contains => field_value
+                .to_lowercase()
+                .contains(&rule_value.to_lowercase()),
         }
     }
 }

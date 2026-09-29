@@ -1,8 +1,13 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { useAccount } from 'wagmi';
+import { useAccount, useWalletClient } from 'wagmi';
 import type { ArbitrageOpportunity } from '@/lib/api';
+import {
+  createSmartAccount,
+  getPimlicoStatus,
+  sendGaslessTransaction,
+} from '@/lib/pimlico';
 
 interface Props {
   opportunity: ArbitrageOpportunity;
@@ -27,7 +32,7 @@ const GAS_STRATEGIES: { value: GasStrategy; label: string; desc: string }[] = [
   {
     value: 'Pimlico',
     label: 'Pimlico (ERC-4337)',
-    desc: 'Pay gas in USDC via Pimlico paymaster.',
+    desc: 'Gasless UserOperation via Pimlico bundler + paymaster.',
   },
   {
     value: 'ZeroDev',
@@ -38,6 +43,7 @@ const GAS_STRATEGIES: { value: GasStrategy; label: string; desc: string }[] = [
 
 export function ExecutionPanel({ opportunity, onClose }: Props) {
   const { address, isConnected } = useAccount();
+  const { data: walletClient } = useWalletClient();
   const [flashLoanSource, setFlashLoanSource] = useState<FlashLoanSource>('Spark');
   const [gasStrategy, setGasStrategy] = useState<GasStrategy>('Flashbots');
   const [executing, setExecuting] = useState(false);
@@ -57,7 +63,102 @@ export function ExecutionPanel({ opportunity, onClose }: Props) {
     // Base URL is configurable so a deployed backend is never shadowed by localhost.
     const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? 'http://localhost:3001';
 
+    // Record in the transaction log using the hash the backend actually returned.
+    const addTx = (window as unknown as Record<string, unknown>).__addTx as
+      | ((tx: Record<string, unknown>) => void)
+      | undefined;
+
     try {
+      // ── ERC-4337 gasless path: a real UserOperation bundled by Pimlico ──
+      if (gasStrategy === 'Pimlico') {
+        // The Pimlico key stays server-side; this only checks the backend proxy.
+        const status = await getPimlicoStatus(opportunity.buy_chain_id);
+        if (!status.configured) {
+          throw new Error(
+            'Pimlico bundler is not configured on the backend (set PIMLICO_API_KEY in backend/.env)'
+          );
+        }
+        if (!walletClient) {
+          throw new Error(
+            'Wallet is not connected: the smart account owner must sign the UserOperation'
+          );
+        }
+
+        // Counterfactual SimpleAccount owned by the connected wallet (EntryPoint v0.7);
+        // the bundler deploys it with the first UserOperation if it does not exist yet.
+        const { account: smartAccount } = await createSmartAccount(
+          opportunity.buy_chain_id,
+          walletClient
+        );
+
+        // Real Velora calldata, with the smart account as the trade executor.
+        const swapRes = await fetch(`${apiBase}/api/velora/swap`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chain_id: opportunity.buy_chain_id,
+            src_token: '0x0000000000000000000000000000000000000000',
+            dest_token: opportunity.token_address,
+            src_decimals: 18,
+            dest_decimals: 18,
+            amount: '1000000000000000000',
+            side: 'SELL',
+            user_address: smartAccount.address,
+            slippage: 1,
+          }),
+        });
+        const swapData = (await swapRes.json().catch(() => null)) as {
+          txParams?: { to?: string; value?: string; data?: string };
+          error?: string;
+          message?: string;
+        } | null;
+        if (!swapRes.ok) {
+          throw new Error(
+            `Velora swap build failed: ${swapData?.error ?? swapData?.message ?? `HTTP ${swapRes.status}`}`
+          );
+        }
+        const tx = swapData?.txParams;
+        if (!tx?.to || !tx.data) {
+          throw new Error('Velora returned no calldata (txParams.to / txParams.data missing)');
+        }
+
+        // eth_estimateUserOperationGas → pm_sponsorUserOperation → personal_sign of the
+        // userOpHash → eth_sendUserOperation → eth_getUserOperationReceipt. Every RPC
+        // goes through the backend /api/pimlico/rpc/{chainId} proxy.
+        const { userOpHash, receipt, accountAddress } = await sendGaslessTransaction({
+          chainId: opportunity.buy_chain_id,
+          owner: walletClient,
+          calls: [
+            {
+              to: tx.to as `0x${string}`,
+              value: BigInt(tx.value ?? '0'),
+              data: tx.data as `0x${string}`,
+            },
+          ],
+        });
+
+        const minedTx = receipt.receipt.transactionHash;
+        setTxHash(minedTx);
+        setResult(
+          receipt.success
+            ? `UserOperation ${userOpHash.slice(0, 10)}… bundled into tx ${minedTx.slice(0, 10)}… from smart account ${accountAddress.slice(0, 10)}… — executed on-chain.`
+            : `UserOperation ${userOpHash.slice(0, 10)}… bundled into tx ${minedTx.slice(0, 10)}… but the call reverted${receipt.reason ? `: ${receipt.reason}` : '.'}`
+        );
+        addTx?.({
+          token: opportunity.token_symbol,
+          buyChain: opportunity.buy_chain_name,
+          sellChain: opportunity.sell_chain_name,
+          spread: opportunity.spread_pct,
+          profit: opportunity.estimated_profit_usd,
+          flashLoan: flashLoanSource,
+          gasStrategy: gasStrategy,
+          hash: minedTx,
+          status: receipt.success ? 'success' : 'failed',
+        });
+        return;
+      }
+
+      // ── Flashbots / ZeroDev: quote, then hand off to /api/execute ──
       // Step 1: ask the backend for a Velora (ex-ParaSwap) route.
       // This previously called /api/paraswap/price, which the backend does not serve
       // (the real route is /api/velora/price), so every execution began with a 404.
@@ -117,9 +218,6 @@ export function ExecutionPanel({ opportunity, onClose }: Props) {
       setResult(data.message ?? 'Transaction submitted');
 
       // Record in the transaction log using the hash the backend actually returned.
-      const addTx = (window as Record<string, unknown>).__addTx as
-        | ((tx: Record<string, unknown>) => void)
-        | undefined;
       addTx?.({
         token: opportunity.token_symbol,
         buyChain: opportunity.buy_chain_name,
@@ -134,9 +232,6 @@ export function ExecutionPanel({ opportunity, onClose }: Props) {
     } catch (err) {
       setResult(err instanceof Error ? err.message : 'Execution failed');
 
-      const addTx = (window as Record<string, unknown>).__addTx as
-        | ((tx: Record<string, unknown>) => void)
-        | undefined;
       addTx?.({
         token: opportunity.token_symbol,
         buyChain: opportunity.buy_chain_name,
@@ -151,7 +246,7 @@ export function ExecutionPanel({ opportunity, onClose }: Props) {
     } finally {
       setExecuting(false);
     }
-  }, [opportunity, flashLoanSource, gasStrategy, address, isConnected]);
+  }, [opportunity, flashLoanSource, gasStrategy, address, isConnected, walletClient]);
 
   return (
     <div className="glass-card p-6 space-y-6">

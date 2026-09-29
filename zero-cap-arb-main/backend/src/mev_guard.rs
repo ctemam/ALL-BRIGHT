@@ -65,7 +65,9 @@ impl MevGuard {
     }
 
     pub fn is_safe_to_trade(&self, result: &MevDetectionResult) -> bool {
-        if !self.config.enabled { return true; }
+        if !self.config.enabled {
+            return true;
+        }
         let max_score = match self.config.max_risk_level {
             MevRiskLevel::Safe => 10.0,
             MevRiskLevel::LowRisk => 30.0,

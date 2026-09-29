@@ -19,18 +19,19 @@ import RulesBuilder from './RulesBuilder'
 import ProfitSplitter from './ProfitSplitter'
 import GasBidder from './GasBidder'
 
+// Keys are the exact enum values the backend serialises.
 const MODES: { key: BotMode; label: string; desc: string }[] = [
-  { key: 'manual', label: 'Manual', desc: 'Bot finds opportunities, you review & approve each trade' },
-  { key: 'semi-auto', label: 'Semi-Auto', desc: 'Bot auto-executes small trades, asks for approval on large ones' },
-  { key: 'auto', label: 'Auto', desc: 'Full autonomous execution based on your strategy filters' },
+  { key: 'Manual', label: 'Manual', desc: 'Bot finds opportunities, you review & approve each trade' },
+  { key: 'SemiAuto', label: 'Semi-Auto', desc: 'Bot auto-executes small trades, asks for approval on large ones' },
+  { key: 'Auto', label: 'Auto', desc: 'Full autonomous execution based on your strategy filters' },
 ]
 
 const ARBITRAGE_TYPES: { key: ArbitrageType; label: string; icon: string; desc: string }[] = [
-  { key: 'simple', label: 'Simple', icon: '⇄', desc: 'Basic DEX arbitrage between two pools' },
-  { key: 'triangular', label: 'Triangular', icon: '△', desc: 'Three-currency cycle arbitrage' },
-  { key: 'crossChain', label: 'Cross-Chain', icon: '⛓', desc: 'Arbitrage across different chains' },
-  { key: 'mint', label: 'Mint', icon: '🪙', desc: 'Mint/burn based arbitrage' },
-  { key: 'jitLiquidity', label: 'JIT Liquidity', icon: '⚡', desc: 'Just-in-time liquidity arbitrage' },
+  { key: 'Simple', label: 'Simple', icon: '⇄', desc: 'Basic DEX arbitrage between two pools' },
+  { key: 'Triangular', label: 'Triangular', icon: '△', desc: 'Three-currency cycle arbitrage' },
+  { key: 'CrossChain', label: 'Cross-Chain', icon: '⛓', desc: 'Arbitrage across different chains' },
+  { key: 'Mint', label: 'Mint', icon: '🪙', desc: 'Mint/burn based arbitrage' },
+  { key: 'JitLiquidity', label: 'JIT Liquidity', icon: '⚡', desc: 'Just-in-time liquidity arbitrage' },
 ]
 
 const CHAINS: { id: number; name: string; label: string; currency: string }[] = [
@@ -43,15 +44,15 @@ const CHAINS: { id: number; name: string; label: string; currency: string }[] = 
 ]
 
 const FLASH_LOAN_SOURCES: { key: FlashLoanSource; label: string; fee: string }[] = [
-  { key: 'spark', label: 'Spark', fee: '0.00%' },
-  { key: 'aaveV3', label: 'Aave V3', fee: '0.05%' },
-  { key: 'radiantV2', label: 'Radiant V2', fee: '0.04%' },
+  { key: 'Spark', label: 'Spark', fee: '0.00%' },
+  { key: 'AaveV3', label: 'Aave V3', fee: '0.05%' },
+  { key: 'RadiantV2', label: 'Radiant V2', fee: '0.04%' },
 ]
 
 const GAS_STRATEGIES: { key: GasStrategy; label: string }[] = [
-  { key: 'flashbots', label: 'Flashbots' },
-  { key: 'pimlico', label: 'Pimlico' },
-  { key: 'zerodev', label: 'ZeroDev' },
+  { key: 'Flashbots', label: 'Flashbots' },
+  { key: 'Pimlico', label: 'Pimlico' },
+  { key: 'ZeroDev', label: 'ZeroDev' },
 ]
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -62,17 +63,22 @@ const LEVEL_COLORS: Record<string, string> = {
   success: 'text-green-400',
 }
 
+// Mirrors the backend's BotConfig field-for-field (snake_case, nested LLM config).
 const DEFAULT_CONFIG: BotConfig = {
-  mode: 'manual',
-  arbitrageTypes: ['simple'],
-  minNetProfit: 10,
-  maxSlippage: 0.5,
-  maxGasPrice: 50,
-  scanInterval: 10,
-  maxConcurrentTrades: 3,
-  flashLoanSource: 'spark',
-  gasStrategy: 'flashbots',
-  enabledChains: [1],
+  mode: 'Manual',
+  min_net_profit_usd: 10,
+  max_gas_price_gwei: 50,
+  enabled_strategies: ['Simple'],
+  dexes_enabled: [],
+  flash_loan_sources: ['Spark'],
+  gas_strategy: 'Flashbots',
+  max_slippage_pct: 0.5,
+  auto_restart: true,
+  llm_advisor: false,
+  llm_config: null,
+  scan_interval_secs: 10,
+  max_concurrent_tx: 3,
+  chains_enabled: [1],
 }
 
 const PRO_TABS = [
@@ -95,11 +101,16 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
   const [proTab, setProTab] = useState('paper')
   const logsEndRef = useRef<HTMLDivElement>(null)
 
+  // `getBotStatus` may return a partial `{ running, message }` error shape instead of a
+  // full BotStatus; only treat a complete payload as real status.
+  const isBotStatus = (v: Awaited<ReturnType<typeof api.getBotStatus>>): v is BotStatus =>
+    'total_trades' in v
+
   useEffect(() => {
     Promise.all([api.getBotConfig(), api.getBotStatus()])
       .then(([cfg, st]) => {
         setConfig(cfg)
-        setStatus(st)
+        if (isBotStatus(st)) setStatus(st)
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -116,17 +127,17 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
 
   const toggleArbitrage = useCallback((type: ArbitrageType) => {
     setConfig((prev) => {
-      const set = new Set(prev.arbitrageTypes)
+      const set = new Set(prev.enabled_strategies)
       set.has(type) ? set.delete(type) : set.add(type)
-      return { ...prev, arbitrageTypes: Array.from(set) }
+      return { ...prev, enabled_strategies: Array.from(set) }
     })
   }, [])
 
   const toggleChain = useCallback((chainId: number) => {
     setConfig((prev) => {
-      const set = new Set(prev.enabledChains)
+      const set = new Set(prev.chains_enabled)
       set.has(chainId) ? set.delete(chainId) : set.add(chainId)
-      return { ...prev, enabledChains: Array.from(set) }
+      return { ...prev, chains_enabled: Array.from(set) }
     })
   }, [])
 
@@ -155,8 +166,10 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
   const stopBot = useCallback(async () => {
     setSaving(true)
     try {
-      const st = await api.stopBot()
-      setStatus(st)
+      // `stopBot` acknowledges with `{ status }` only, so flip the running flag locally
+      // rather than assigning the acknowledgement to BotStatus.
+      await api.stopBot()
+      setStatus((prev) => (prev ? { ...prev, running: false } : prev))
     } catch {
     } finally {
       setSaving(false)
@@ -206,7 +219,7 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
         <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-400 mb-4">Strategies</h2>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           {ARBITRAGE_TYPES.map((a) => {
-            const active = config.arbitrageTypes.includes(a.key)
+            const active = config.enabled_strategies.includes(a.key)
             return (
               <button
                 key={a.key}
@@ -240,11 +253,11 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
         <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-400 mb-4">Filters &amp; Limits</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {([
-            { label: 'Min Net Profit ($)', key: 'minNetProfit', min: 0, max: 1000, step: 1 },
-            { label: 'Max Slippage (%)', key: 'maxSlippage', min: 0, max: 10, step: 0.1 },
-            { label: 'Max Gas Price (Gwei)', key: 'maxGasPrice', min: 1, max: 500, step: 1 },
-            { label: 'Scan Interval (seconds)', key: 'scanInterval', min: 1, max: 300, step: 1 },
-            { label: 'Max Concurrent Trades', key: 'maxConcurrentTrades', min: 1, max: 20, step: 1 },
+            { label: 'Min Net Profit ($)', key: 'min_net_profit_usd', min: 0, max: 1000, step: 1 },
+            { label: 'Max Slippage (%)', key: 'max_slippage_pct', min: 0, max: 10, step: 0.1 },
+            { label: 'Max Gas Price (Gwei)', key: 'max_gas_price_gwei', min: 1, max: 500, step: 1 },
+            { label: 'Scan Interval (seconds)', key: 'scan_interval_secs', min: 1, max: 300, step: 1 },
+            { label: 'Max Concurrent Trades', key: 'max_concurrent_tx', min: 1, max: 20, step: 1 },
           ] as const).map((field) => (
             <div key={field.key}>
               <label className="text-xs text-gray-400 mb-1.5 block">{field.label}</label>
@@ -286,7 +299,7 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
               <label
                 key={f.key}
                 className={`flex items-center gap-3 rounded-xl px-4 py-3 cursor-pointer transition-all ${
-                  config.flashLoanSource === f.key
+                  config.flash_loan_sources[0] === f.key
                     ? 'bg-white/10 border border-cyan-400/60'
                     : 'bg-white/[0.03] border border-white/10 hover:bg-white/10'
                 }`}
@@ -294,8 +307,8 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
                 <input
                   type="radio"
                   name="flashLoan"
-                  checked={config.flashLoanSource === f.key}
-                  onChange={() => setConfig((p) => ({ ...p, flashLoanSource: f.key }))}
+                  checked={config.flash_loan_sources[0] === f.key}
+                  onChange={() => setConfig((p) => ({ ...p, flash_loan_sources: [f.key] }))}
                   className="appearance-none w-4 h-4 rounded-full border-2 border-white/20 checked:border-cyan-400 checked:bg-cyan-400/30 checked:shadow-[0_0_8px_rgba(34,211,238,0.4)] transition-all"
                 />
                 <span className="text-sm font-medium flex-1">{f.label}</span>
@@ -312,7 +325,7 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
               <label
                 key={g.key}
                 className={`flex items-center gap-3 rounded-xl px-4 py-3 cursor-pointer transition-all ${
-                  config.gasStrategy === g.key
+                  config.gas_strategy === g.key
                     ? 'bg-white/10 border border-cyan-400/60'
                     : 'bg-white/[0.03] border border-white/10 hover:bg-white/10'
                 }`}
@@ -320,8 +333,8 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
                 <input
                   type="radio"
                   name="gasStrategy"
-                  checked={config.gasStrategy === g.key}
-                  onChange={() => setConfig((p) => ({ ...p, gasStrategy: g.key }))}
+                  checked={config.gas_strategy === g.key}
+                  onChange={() => setConfig((p) => ({ ...p, gas_strategy: g.key }))}
                   className="appearance-none w-4 h-4 rounded-full border-2 border-white/20 checked:border-cyan-400 checked:bg-cyan-400/30 checked:shadow-[0_0_8px_rgba(34,211,238,0.4)] transition-all"
                 />
                 <span className="text-sm font-medium">{g.label}</span>
@@ -336,7 +349,7 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
         <h2 className="text-sm font-semibold uppercase tracking-widest text-gray-400 mb-4">Chains</h2>
         <div className="flex flex-wrap gap-3">
           {CHAINS.map((c) => {
-            const active = config.enabledChains.includes(c.id)
+            const active = config.chains_enabled.includes(c.id)
             return (
               <button
                 key={c.id}
@@ -400,20 +413,20 @@ export default function BotPanel({ rtl }: { rtl?: boolean }) {
         <div className="flex items-center gap-5 text-sm">
           <div className="text-center">
             <div className="text-xs text-gray-500">Total</div>
-            <div className="font-medium">{status?.stats?.total ?? 0}</div>
+            <div className="font-medium">{status?.total_trades ?? 0}</div>
           </div>
           <div className="text-center">
             <div className="text-xs text-gray-500">Successful</div>
-            <div className="font-medium text-green-400">{status?.stats?.successful ?? 0}</div>
+            <div className="font-medium text-green-400">{status?.successful_trades ?? 0}</div>
           </div>
           <div className="text-center">
             <div className="text-xs text-gray-500">Failed</div>
-            <div className="font-medium text-red-400">{status?.stats?.failed ?? 0}</div>
+            <div className="font-medium text-red-400">{status?.failed_trades ?? 0}</div>
           </div>
           <div className="text-center">
             <div className="text-xs text-gray-500">Profit</div>
             <div className="font-medium text-cyan-300">
-              ${(status?.stats?.totalProfit ?? 0).toFixed(2)}
+              ${(status?.total_profit_usd ?? 0).toFixed(2)}
             </div>
           </div>
         </div>

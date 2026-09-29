@@ -205,6 +205,45 @@ pub struct ExecuteArbitrageRequest {
     pub flash_loan_source: FlashLoanSource,
     pub gas_strategy: GasStrategy,
     pub user_address: String,
+    /// Chain for the Pimlico ERC-4337 path (`gas_strategy: Pimlico`).
+    #[serde(default)]
+    pub chain_id: Option<u64>,
+    /// Client-signed ERC-4337 UserOperation, bundled via Pimlico when present.
+    #[serde(default)]
+    pub user_operation: Option<UserOperation>,
+}
+
+/// ERC-4337 v0.7 UserOperation in the flat/unpacked JSON-RPC shape Pimlico accepts.
+///
+/// Field names are camelCase exactly as required by `eth_sendUserOperation`,
+/// `eth_estimateUserOperationGas` and `pm_sponsorUserOperation` (verified against the
+/// live API: packed `accountGasLimits`/`gasFees` and v0.6 `initCode`/`paymasterAndData`
+/// are rejected). Optional fields are omitted when absent so `null` never replaces a
+/// missing key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserOperation {
+    pub sender: String,
+    pub nonce: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory_data: Option<String>,
+    pub call_data: String,
+    pub verification_gas_limit: String,
+    pub call_gas_limit: String,
+    pub pre_verification_gas: String,
+    pub max_fee_per_gas: String,
+    pub max_priority_fee_per_gas: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paymaster: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paymaster_data: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paymaster_verification_gas_limit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paymaster_post_op_gas_limit: Option<String>,
+    pub signature: String,
 }
 
 /// Unified view of all opportunities across all strategies
@@ -238,7 +277,13 @@ impl FlashLoanSource {
     }
     pub fn fee_pct(&self, token: &str) -> f64 {
         match self {
-            FlashLoanSource::Spark => if token == "DAI" { 0.0 } else { 0.05 },
+            FlashLoanSource::Spark => {
+                if token == "DAI" {
+                    0.0
+                } else {
+                    0.05
+                }
+            }
             FlashLoanSource::AaveV3 => 0.05,
             FlashLoanSource::RadiantV2 => 0.03,
         }
@@ -283,6 +328,10 @@ pub struct AdvancedExecuteRequest {
     pub amount: Option<String>,
     pub chain_id: Option<u64>,
     pub opportunity_id: Option<String>,
+    /// Client-signed ERC-4337 UserOperation, bundled via Pimlico when
+    /// `gas_strategy` is `Pimlico`.
+    #[serde(default)]
+    pub user_operation: Option<UserOperation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -472,9 +521,9 @@ pub struct BotConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BotMode {
-    Manual,    // Bot finds opportunities, user reviews & approves
-    Auto,      // Bot executes automatically
-    SemiAuto,  // Bot auto-executes below threshold, asks above
+    Manual,   // Bot finds opportunities, user reviews & approves
+    Auto,     // Bot executes automatically
+    SemiAuto, // Bot auto-executes below threshold, asks above
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

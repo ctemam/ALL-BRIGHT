@@ -48,7 +48,10 @@ pub struct AlertManager {
 
 impl AlertManager {
     pub fn new(configs: Vec<AlertConfig>) -> Self {
-        Self { configs, history: Vec::new() }
+        Self {
+            configs,
+            history: Vec::new(),
+        }
     }
 
     /// Sends an alert to every enabled channel subscribed to `event`.
@@ -60,8 +63,12 @@ impl AlertManager {
         let now = chrono::Utc::now().timestamp();
         let mut failures = Vec::new();
         for cfg in &self.configs {
-            if !cfg.enabled { continue; }
-            if !cfg.events.contains(&event) { continue; }
+            if !cfg.enabled {
+                continue;
+            }
+            if !cfg.events.contains(&event) {
+                continue;
+            }
 
             let msg = AlertMessage {
                 channel: cfg.channel.clone(),
@@ -107,7 +114,8 @@ impl AlertManager {
         // history entry as undelivered.
         match cfg.channel {
             AlertChannel::Telegram => Err(
-                "Telegram delivery is not implemented (no bot token or HTTP client wired up)".to_string(),
+                "Telegram delivery is not implemented (no bot token or HTTP client wired up)"
+                    .to_string(),
             ),
             AlertChannel::Discord => Err(format!(
                 "Discord delivery is not implemented (payload of {} chars prepared but not sent)",
@@ -119,7 +127,10 @@ impl AlertManager {
                 } else {
                     cfg.webhook_url.clone()
                 };
-                Err(format!("Webhook delivery is not implemented (target: {})", target))
+                Err(format!(
+                    "Webhook delivery is not implemented (target: {})",
+                    target
+                ))
             }
         }
     }

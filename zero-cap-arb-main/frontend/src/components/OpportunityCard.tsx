@@ -18,8 +18,9 @@ const usd = (n: number) =>
 const pct = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n / 100);
 
-const relTime = (iso: string) => {
-  const diff = Date.now() - new Date(iso).getTime();
+// The API returns `timestamp` as Unix seconds (u64), not an ISO string.
+const relTime = (unixSeconds: number) => {
+  const diff = Date.now() - unixSeconds * 1000;
   const s = Math.floor(diff / 1000);
   if (s < 60) return `${s}s ago`;
   const m = Math.floor(s / 60);
@@ -33,7 +34,7 @@ const typeColors: Record<string, string> = {
   Triangular: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
   CrossChain: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
   Mint: 'bg-green-500/20 text-green-300 border-green-500/40',
-  Jit: 'bg-red-500/20 text-red-300 border-red-500/40',
+  JitLiquidity: 'bg-red-500/20 text-red-300 border-red-500/40',
 };
 
 const ArrowUp = () => <span className="text-green-400">&#9650;</span>;
@@ -67,24 +68,28 @@ const OpportunityCard = ({
     totalCost,
     spreadPct,
   } = useMemo(() => {
-    const conf = o.confidenceScore ?? 0;
+    // The API nests profit data: confidence_score is 0.0-1.0 and all USD figures live
+    // under profit_breakdown.
+    const pb = o.profit_breakdown;
+    const conf = (o.confidence_score ?? 0) * 100;
     const cc =
       conf >= 80
         ? 'text-green-400'
         : conf >= 50
           ? 'text-yellow-400'
           : 'text-red-400';
-    const pt = o.isProfitable
+    const pt = pb.is_profitable
       ? 'bg-green-500/20 text-green-300 border border-green-500/40'
       : 'bg-red-500/20 text-red-300 border border-red-500/40';
-    const sd = o.isProfitable ? <ArrowUp /> : <ArrowDown />;
-    const np = o.netProfit ?? 0;
+    const sd = pb.is_profitable ? <ArrowUp /> : <ArrowDown />;
+    const np = pb.net_profit_usd ?? 0;
     const npc = np >= 0 ? 'text-green-400' : 'text-red-400';
-    const g = o.grossProfit ?? 0;
-    const tc = o.gasCost + o.flashLoanFee + o.slippage + o.bridgeFee + o.veloraFee;
-    const npp = g > 0 ? (np / g) * 100 : 0;
-    const rp = tc > 0 ? (np / tc) * 100 : 0;
-    const sp = o.spreadPercent ?? 0;
+    const tc = pb.costs.total_cost_usd ?? 0;
+    // The backend already computes both ratios, guarding for zero denominators:
+    // net_profit_pct is measured against total cost, roi_pct against notional value.
+    const npp = pb.net_profit_pct ?? 0;
+    const rp = pb.roi_pct ?? 0;
+    const sp = o.spread_pct ?? 0;
     return {
       confidenceColor: cc,
       profitableTag: pt,
@@ -97,20 +102,12 @@ const OpportunityCard = ({
     };
   }, [o]);
 
-  const flashLoanPrimary = useMemo(() => {
-    if (!o.flashLoan || o.flashLoan.length === 0) return null;
-    return o.flashLoan[0];
-  }, [o.flashLoan]);
+  // `flash_loan_recommendation` is null when no flash loan is warranted; when present it
+  // carries a single primary plus any alternatives.
+  const flashLoanPrimary = o.flash_loan_recommendation?.primary ?? null;
+  const flashLoanAlternatives = o.flash_loan_recommendation?.alternatives ?? [];
 
-  const flashLoanAlternatives = useMemo(() => {
-    if (!o.flashLoan || o.flashLoan.length <= 1) return [];
-    return o.flashLoan.slice(1);
-  }, [o.flashLoan]);
-
-  const steps = useMemo(() => {
-    if (!o.executionSteps || o.executionSteps.length === 0) return [];
-    return o.executionSteps;
-  }, [o.executionSteps]);
+  const steps = useMemo(() => o.execution_steps ?? [], [o.execution_steps]);
 
   return (
     <div
@@ -125,18 +122,18 @@ const OpportunityCard = ({
       {/* Header Row */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${typeColors[o.arbType] ?? 'bg-gray-500/20 text-gray-300 border-gray-500/40'}`}>
-            {o.arbType}
+          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${typeColors[o.arbitrage_type] ?? 'bg-gray-500/20 text-gray-300 border-gray-500/40'}`}>
+            {o.arbitrage_type}
           </span>
-          <span className="text-white font-bold">{o.tokenSymbol}</span>
-          <span className="text-gray-400 text-sm truncate max-w-[120px]">{o.tokenName}</span>
+          <span className="text-white font-bold">{o.token}</span>
+          <span className="text-gray-400 text-sm truncate max-w-[120px]">{o.chain_name}</span>
         </div>
         <div className="flex items-center gap-2">
           <span className={`text-sm font-semibold ${confidenceColor}`}>
-            {o.confidenceScore ?? 0}%
+            {((o.confidence_score ?? 0) * 100).toFixed(0)}%
           </span>
           <span className={`text-xs font-medium px-2 py-0.5 rounded ${profitableTag}`}>
-            {o.isProfitable ? 'Profitable' : 'Not Profitable'}
+            {o.profit_breakdown.is_profitable ? 'Profitable' : 'Not Profitable'}
           </span>
         </div>
       </div>
@@ -144,10 +141,10 @@ const OpportunityCard = ({
       {/* Price Spread Section */}
       <div className="grid grid-cols-3 gap-3 mb-4 p-3 bg-white/5 rounded-xl">
         <div className="text-left">
-          <div className="text-xs text-gray-400 mb-1">{o.buyDex} &middot; {o.buyChain}</div>
+          <div className="text-xs text-gray-400 mb-1">{o.buy_dex ?? '—'} &middot; {o.chain_name}</div>
           <div className="flex items-center gap-1">
             <ArrowDown />
-            <span className="text-white font-mono text-sm">{usd(o.buyPrice)}</span>
+            <span className="text-white font-mono text-sm">{usd(o.buy_price)}</span>
           </div>
         </div>
         <div className="text-center">
@@ -158,24 +155,25 @@ const OpportunityCard = ({
           </div>
         </div>
         <div className="text-right">
-          <div className="text-xs text-gray-400 mb-1">{o.sellDex} &middot; {o.sellChain}</div>
+          <div className="text-xs text-gray-400 mb-1">{o.sell_dex ?? '—'} &middot; {o.chain_name}</div>
           <div className="flex items-center justify-end gap-1">
             <ArrowUp />
-            <span className="text-white font-mono text-sm">{usd(o.sellPrice)}</span>
+            <span className="text-white font-mono text-sm">{usd(o.sell_price)}</span>
           </div>
         </div>
       </div>
 
-      {/* Spread Progress Bar */}
+      {/* Spread Progress Bar — scaled against a 1% reference spread, since the API
+          exposes no per-opportunity minimum threshold. */}
       <div className="mb-4">
         <div className="flex justify-between text-xs text-gray-400 mb-1">
           <span>Spread</span>
-          <span>{spreadPct.toFixed(2)}% / {o.minThreshold?.toFixed(2) ?? '?'}%</span>
+          <span>{spreadPct.toFixed(2)}% / 1.00% ref</span>
         </div>
         <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
           <div
             className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500"
-            style={{ width: `${Math.min((spreadPct / (o.minThreshold ?? 1)) * 100, 100)}%` }}
+            style={{ width: `${Math.min(spreadPct, 100)}%` }}
           />
         </div>
       </div>
@@ -206,14 +204,14 @@ const OpportunityCard = ({
             </thead>
             <tbody>
               <tr className="text-white font-mono">
-                <td className="py-1 pr-2">{usd(o.grossProfit)}</td>
-                <td className="py-1 pr-2">{usd(o.gasCost)}</td>
-                <td className="py-1 pr-2">{usd(o.flashLoanFee)}</td>
-                <td className="py-1 pr-2">{usd(o.slippage)}</td>
-                <td className="py-1 pr-2">{usd(o.bridgeFee)}</td>
-                <td className="py-1 pr-2">{usd(o.veloraFee)}</td>
+                <td className="py-1 pr-2">{usd(o.profit_breakdown.gross_profit_usd)}</td>
+                <td className="py-1 pr-2">{usd(o.profit_breakdown.costs.gas_estimated_usd)}</td>
+                <td className="py-1 pr-2">{usd(o.profit_breakdown.costs.flash_loan_fee_usd)}</td>
+                <td className="py-1 pr-2">{usd(o.profit_breakdown.costs.slippage_estimated_usd)}</td>
+                <td className="py-1 pr-2">{o.profit_breakdown.costs.bridge_fee_usd != null ? usd(o.profit_breakdown.costs.bridge_fee_usd) : '—'}</td>
+                <td className="py-1 pr-2">{usd(o.profit_breakdown.costs.velora_fee_usd)}</td>
                 <td className="py-1 pr-2">{usd(totalCost)}</td>
-                <td className={`py-1 font-bold ${netProfitColor}`}>{usd(o.netProfit)}</td>
+                <td className={`py-1 font-bold ${netProfitColor}`}>{usd(o.profit_breakdown.net_profit_usd)}</td>
               </tr>
             </tbody>
           </table>
@@ -230,8 +228,8 @@ const OpportunityCard = ({
           <div className="text-xs text-indigo-300 font-semibold mb-1">Flash Loan Recommendation</div>
           <div className="text-white text-sm font-medium">{flashLoanPrimary.source}</div>
           <div className="flex gap-3 text-xs text-gray-400 mt-1">
-            <span>Fee: {flashLoanPrimary.feePercent?.toFixed(2) ?? '?'}%</span>
-            {flashLoanPrimary.feeUsd != null && <span>({usd(flashLoanPrimary.feeUsd)})</span>}
+            <span>Fee: {flashLoanPrimary.fee_pct?.toFixed(2) ?? '?'}%</span>
+            <span>({usd(flashLoanPrimary.fee_usd)})</span>
           </div>
           {flashLoanPrimary.reason && (
             <div className="text-xs text-gray-300 mt-1">{flashLoanPrimary.reason}</div>
@@ -263,7 +261,7 @@ const OpportunityCard = ({
 
       {/* Action Footer */}
       <div className="flex items-center justify-between pt-3 border-t border-white/10">
-        {o.isProfitable && !botMode ? (
+        {o.profit_breakdown.is_profitable && !botMode ? (
           <button
             onClick={(e) => { e.stopPropagation(); handleExecute(); }}
             className="px-5 py-2 rounded-xl text-white text-sm font-semibold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 transition-all duration-200 shadow-lg shadow-indigo-500/25"
@@ -274,9 +272,9 @@ const OpportunityCard = ({
           <div />
         )}
         <div className="flex items-center gap-3">
-          {o.liquidity != null && (
+          {o.liquidity_usd != null && (
             <span className="text-xs text-gray-400">
-              {usd(o.liquidity)} liquidity
+              {usd(o.liquidity_usd)} liquidity
             </span>
           )}
           {o.timestamp && (

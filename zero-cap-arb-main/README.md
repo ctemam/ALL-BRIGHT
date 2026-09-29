@@ -238,53 +238,40 @@ USER ACTION                    SYSTEM RESPONSE
 
 ---
 
-### 🗺 Component Map
+### 🗺 Master Modules and Files Table
 
-```
-FRONTEND (components/)
-├── WalletConnect.tsx          ← MetaMask + WalletConnect
-├── RadarDashboard.tsx         ← Main radar scan UI (3 tabs)
-├── OpportunityTable.tsx       ← Simple arbitrage table
-├── AllPricesTable.tsx         ← Full DEX price matrix
-├── AdvancedExecutionPanel.tsx ← 6-strategy execution engine
-├── ExecutionPanel.tsx         ← Flash loan + gas strategy selectors
-├── RouteVisualization.tsx     ← Recharts pie chart (Velora split routes)
-├── TransactionLog.tsx         ← Persistent trade history
-├── RadarAnimation.tsx         ← Animated radar sweep
-├── OpportunityCard.tsx        ← Full detailed opportunity (cost breakdown + FL rec)
-├── CryptoBubbleChart.tsx       ← Token bubbles sized by liquidity
-├── LiquidityMap.tsx           ← Chain/DEX liquidity distribution
-├── LLMConfig.tsx              ← AI advisor (OpenAI/Anthropic/Groq/etc.)
-├── BotPanel.tsx               ← Bot config + 7 Pro sub-tabs
-├── PaperTraderPanel.tsx       ← Paper trading / backtesting
-├── PortfolioManager.tsx       ← Multi-strategy allocation
-├── MevGuard.tsx               ← MEV sandwich protection
-├── AlertsConfig.tsx           ← Telegram/Discord alerts
-├── RulesBuilder.tsx           ← Conditional execution rules
-├── ProfitSplitter.tsx         ← Multi-wallet profit distribution
-└── GasBidder.tsx              ← Adaptive gas bidding
+| Module | Files | Location & Key Files | Modular Function | Wiring & Status |
+|--------|-------|----------------------|------------------|-----------------|
+| **Radar & Pricing Fabric** | 3 | `backend/src/` (`radar_scanner.rs`, `multicall.rs`, `chains.rs`) | MultiCall3 batch price quoting across Uniswap V2/V3 and Slipstream venues across 10 EVM chains; spread & cross-chain arbitrage detection. | `WIRED` (Tested with Foundry golden bytes) |
+| **RPC Pool & Catalog** | 2 | `backend/src/` (`rpc_pool.rs`, `rpc_catalog.rs`) | Dynamic multi-endpoint RPC pool with 161+ curated public endpoints, latency-ranked selection, 429 rate limit cooldown, quarantine, and automatic failover. | `WIRED` (Integrated in AppState) |
+| **Execution & Aggregation** | 4 | `backend/src/` (`velora_client.rs`, `pimlico_client.rs`, `gas_bidder.rs`, `mev_guard.rs`) | DEX split-route optimization via Velora Augustus, ERC-4337 paymaster/bundler execution via Pimlico, adaptive EIP-1559 gas bidding, and Flashbots private mempool protection. | `WIRED` (API routes active) |
+| **Simulation & Portfolio** | 2 | `backend/src/` (`paper_trader.rs`, `portfolio_manager.rs`) | Real-time zero-capital paper trading, historical backtesting, Sharpe ratio/drawdown calculation, and 5-strategy risk-weighted portfolio allocation. | `WIRED` (Simulation gate active) |
+| **Automation, Rules & Treasury** | 4 | `backend/src/` (`rules_engine.rs`, `profit_splitter.rs`, `profit_transfer.rs`, `alert_manager.rs`) | Declarative conditional execution triggers, multi-wallet profit splitting (70/20/10), safe on-chain profit sweeping (manual/auto), and Telegram/Discord alerts. | `WIRED` (Background sweep active) |
+| **Control Plane & Transport** | 5 | `backend/src/` (`main.rs`, `api.rs`, `config.rs`, `types.rs`, `websocket.rs`) | Axum REST API server (40+ endpoints), WebSocket real-time broadcast engine, environment configuration, and core domain models. | `WIRED` (Axum server & graceful shutdown) |
+| **Smart Contracts** | 8 | `contracts/` (`src/ZeroRiskArb.sol`, 5 interfaces, `foundry.toml`, `test/ZeroRiskArb.t.sol`) | On-chain atomic flash loan execution (Aave V3, Radiant V2, Spark) + DEX swap via Velora Augustus with strict non-loss revert guarantees (`balance < loan + fee + minProfit => REVERT`). | `WIRED` (Solidity 0.8.20 + Foundry tests) |
+| **Frontend Dashboard & UI** | 27 | `frontend/` (`src/app/`, `src/components/`, `src/lib/`, `src/hooks/`) | Next.js 14 reactive dashboard providing real-time multi-chain radar visualization, one-click execution, paper trade simulation telemetry, risk management configuration, and wallet connection. | `WIRED` (Wagmi + Viem + TailwindCSS) |
+| **Process Supervision & DevOps** | 8 | Repo Root (`ports.config.json`, `ecosystem.config.js`, `Dockerfile`, `docker-entrypoint.sh`, `render.yaml`, `DEPLOYMENT.md`, `HANDOFF.md`, `.env.example`) | PM2 process supervision with disjoint port ranges (3001/3000 Simulation vs 4001/4000 Production), Frankfurt low-latency containerization, and configuration blueprints. | `WIRED` (Verified disjoint port mapping) |
 
-BACKEND (src/)
-├── main.rs                    ← Entry point, state init, CORS
-├── types.rs                   ← All shared types (3500+ lines)
-├── chains.rs                  ← 6 chains × 55 DEX configs
-├── radar_scanner.rs           ← Core price scanner + comprehensive scan
-├── velora_client.rs           ← Velora Market API + Delta API
-├── websocket.rs               ← Real-time WS broadcasts
-├── api.rs                     ← 40+ REST endpoints
-├── paper_trader.rs            ← Backtest + simulation engine
-├── portfolio_manager.rs       ← Strategy allocation + risk mgmt
-├── mev_guard.rs               ← Sandwich/frontrun/backrun detection
-├── alert_manager.rs           ← Telegram/Discord/Webhook alerts
-├── rules_engine.rs            ← If/Then condition evaluator
-├── profit_splitter.rs         ← Multi-wallet percentage splitter
-└── gas_bidder.rs              ← Dynamic gas pricing strategies
+---
 
-CONTRACTS (contracts/)
-├── src/ZeroRiskArb.sol        ← Flash loan + Velora + profit safety
-├── src/interfaces/             ← IVeloraAugustus, IFlashLoan, etc.
-└── src/ZeroRiskArb.t.sol      ← Foundry tests (8 cases)
-```
+### 🌐 10 Chains × Optimal Arbitrage Tokens Matrix
+
+The platform monitors high-liquidity arbitrage routes across **10 EVM chains** and **optimal token pairs**:
+
+| # | Chain | Chain ID | Native Wrapped | Primary Stable | Optimal Arbitrage Tokens (x per chain) | Target DEX Venues |
+|---|-------|----------|----------------|----------------|----------------------------------------|-------------------|
+| 1 | **Ethereum** | `1` | `WETH` | `USDC` | `WETH`, `WBTC`, `USDC`, `USDT`, `DAI`, `LINK`, `UNI`, `AAVE` | Uniswap V2, Uniswap V3, SushiSwap, Curve, Balancer |
+| 2 | **Arbitrum One** | `42161` | `WETH` | `USDC` | `WETH`, `WBTC`, `USDC`, `USDC.e`, `USDT`, `DAI`, `ARB`, `GMX` | Uniswap V3, SushiSwap V2, Camelot, Trader Joe, Balancer |
+| 3 | **Optimism** | `10` | `WETH` | `USDC` | `WETH`, `WBTC`, `USDC`, `USDC.e`, `USDT`, `DAI`, `OP`, `VELO` | Uniswap V3, Uniswap V2, Velodrome, Curve |
+| 4 | **Polygon** | `137` | `WMATIC/POL`| `USDC` | `WMATIC`, `WETH`, `WBTC`, `USDC`, `USDC.e`, `USDT`, `DAI`, `QUICK` | Uniswap V3, Uniswap V2, QuickSwap, SushiSwap |
+| 5 | **BSC** | `56` | `WBNB` | `USDC` | `WBNB`, `BTCB`, `ETH`, `USDT`, `USDC`, `BUSD`, `DAI`, `CAKE` | PancakeSwap V2/V3, Uniswap V3, BiSwap |
+| 6 | **Avalanche** | `43114` | `WAVAX` | `USDC` | `WAVAX`, `WETH.e`, `WBTC.e`, `USDC`, `USDC.e`, `USDt`, `JOE` | Trader Joe, Uniswap V3, Pangolin, SushiSwap |
+| 7 | **Base** | `8453` | `WETH` | `USDC` | `WETH`, `cbBTC`, `USDC`, `USDbC`, `DAI`, `AERO`, `DEGEN` | Aerodrome, Uniswap V3, Uniswap V2, BaseSwap |
+| 8 | **Celo** | `42220` | `CELO` | `cUSD` | `CELO`, `cUSD`, `cEUR`, `cREAL`, `USDC`, `USDT` | Uniswap V3, Velodrome Slipstream |
+| 9 | **Gnosis** | `100` | `WXDAI` | `sDAI` | `WXDAI`, `sDAI`, `USDC`, `USDT`, `EURe`, `GNO`, `WETH` | Honeyswap V2, Uniswap V3, SushiSwap V3, Curve |
+| 10 | **Linea** | `59144`| `WETH` | `USDC` | `WETH`, `WBTC`, `USDC`, `USDT`, `DAI`, `FOXY` | Uniswap V3, Uniswap V2, Lynex, SyncSwap |
+
+---
 
 ---
 

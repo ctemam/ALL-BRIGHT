@@ -1,0 +1,15 @@
+{
+  "_comment": "Single source of truth for Zero-Cap Arbitrage local port allocation. Simulation and production ranges are disjoint so both stacks can run simultaneously. Mirrored by backend/src/ports.rs defaults. Do not hardcode port numbers anywhere else.",
+  "services": {
+    "backend": {
+      "envVar": "PORT",
+      "simulation": { "primary": 3001, "backup1": 3011, "backup2": 3021 },
+      "production": { "primary": 4001, "backup1": 4011, "backup2": 4021 }
+    },
+    "frontend": {
+      "envVar": "FRONTEND_PORT",
+      "simulation": { "primary": 3000, "backup1": 3010, "backup2": 3020 },
+      "production": { "primary": 4000, "backup1": 4010, "backup2": 4020 }
+    }
+  }
+}

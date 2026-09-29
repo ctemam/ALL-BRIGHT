@@ -60,14 +60,14 @@ export default function LiquidityMap({ data, rtl }: Props) {
   const [expandedChains, setExpandedChains] = useState<Set<string>>(new Set());
 
   const sortedChains = useMemo(() => {
-    if (!data?.chains) return [];
-    return [...data.chains].sort(
-      (a, b) => b.totalLiquidity - a.totalLiquidity
+    if (!data?.by_chain) return [];
+    return [...data.by_chain].sort(
+      (a, b) => b.total_liquidity_usd - a.total_liquidity_usd
     );
   }, [data]);
 
   const totalLiquidity = useMemo(
-    () => sortedChains.reduce((sum, c) => sum + c.totalLiquidity, 0),
+    () => sortedChains.reduce((sum, c) => sum + c.total_liquidity_usd, 0),
     [sortedChains]
   );
 
@@ -82,16 +82,22 @@ export default function LiquidityMap({ data, rtl }: Props) {
     });
   };
 
-  const getDexList = (
-    chain: LiquidityChainSummary
-  ): { dexes: DexInfo[]; total: number } => {
-    if ('dexes' in chain && Array.isArray((chain as any).dexes)) {
-      const dexes = (chain as any).dexes as DexInfo[];
-      const sorted = [...dexes].sort((a, b) => b.liquidity - a.liquidity);
-      return { dexes: sorted, total: chain.totalLiquidity };
+  // Per-DEX liquidity lives in the sibling `by_dex` array; join it onto each chain here.
+  const dexesByChain = useMemo(() => {
+    const grouped = new Map<number, DexInfo[]>();
+    for (const d of data?.by_dex ?? []) {
+      const list = grouped.get(d.chain_id) ?? [];
+      list.push({
+        name: d.dex_name,
+        liquidity: d.total_liquidity_usd,
+      });
+      grouped.set(d.chain_id, list);
     }
-    return { dexes: [], total: chain.totalLiquidity };
-  };
+    return grouped;
+  }, [data]);
+
+  const getDexList = (chain: LiquidityChainSummary): DexInfo[] =>
+    (dexesByChain.get(chain.chain_id) ?? []).sort((a, b) => b.liquidity - a.liquidity);
 
   return (
     <div
@@ -114,13 +120,13 @@ export default function LiquidityMap({ data, rtl }: Props) {
           {sortedChains.map((chain, index) => {
             const percentage =
               totalLiquidity > 0
-                ? (chain.totalLiquidity / totalLiquidity) * 100
+                ? (chain.total_liquidity_usd / totalLiquidity) * 100
                 : 0;
             const icon =
-              CHAIN_ICONS[chain.chainName] ??
-              chain.chainName.slice(0, 3).toUpperCase();
-            const { dexes } = getDexList(chain);
-            const isExpanded = expandedChains.has(chain.chainName);
+              CHAIN_ICONS[chain.chain_name] ??
+              chain.chain_name.slice(0, 3).toUpperCase();
+            const dexes = getDexList(chain);
+            const isExpanded = expandedChains.has(chain.chain_name);
             const displayDexes = isExpanded
               ? dexes
               : dexes.slice(0, 5);
@@ -128,8 +134,8 @@ export default function LiquidityMap({ data, rtl }: Props) {
 
             return (
               <button
-                key={chain.chainName}
-                onClick={() => toggleChain(chain.chainName)}
+                key={chain.chain_id}
+                onClick={() => toggleChain(chain.chain_name)}
                 className="w-full text-left"
               >
                 <div className="bg-white/[0.03] hover:bg-white/[0.06] transition-colors rounded-xl p-4 border border-white/5">
@@ -139,11 +145,11 @@ export default function LiquidityMap({ data, rtl }: Props) {
                         {icon}
                       </span>
                       <span className="text-sm font-medium text-white">
-                        {chain.chainName}
+                        {chain.chain_name}
                       </span>
                     </div>
                     <span className="text-sm font-semibold text-white">
-                      {compactUsd(chain.totalLiquidity)}
+                      {compactUsd(chain.total_liquidity_usd)}
                     </span>
                   </div>
 
@@ -158,10 +164,10 @@ export default function LiquidityMap({ data, rtl }: Props) {
 
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/60">
-                      {chain.dexCount ?? dexes.length} DEXes
+                      {chain.dex_count ?? dexes.length} DEXes
                     </span>
                     <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/60">
-                      {chain.tokenCount ?? 0} Tokens
+                      {chain.token_count ?? 0} Tokens
                     </span>
                     <span className="text-[11px] text-white/40 ml-auto">
                       {percentage < 0.1 ? '<0.1' : percentage.toFixed(1)}%
@@ -172,8 +178,8 @@ export default function LiquidityMap({ data, rtl }: Props) {
                     <div className="mt-4 pt-3 border-t border-white/5 space-y-2">
                       {displayDexes.map((dex) => {
                         const dexPct =
-                          chain.totalLiquidity > 0
-                            ? (dex.liquidity / chain.totalLiquidity) * 100
+                          chain.total_liquidity_usd > 0
+                            ? (dex.liquidity / chain.total_liquidity_usd) * 100
                             : 0;
                         return (
                           <div
@@ -221,15 +227,14 @@ export default function LiquidityMap({ data, rtl }: Props) {
               {sortedChains.map((chain, index) => {
                 const percentage =
                   totalLiquidity > 0
-                    ? (chain.totalLiquidity / totalLiquidity) * 100
+                    ? (chain.total_liquidity_usd / totalLiquidity) * 100
                     : 0;
                 const icon =
-                  CHAIN_ICONS[chain.chainName] ??
-                  chain.chainName.slice(0, 3).toUpperCase();
-                const { dexes } = getDexList(chain);
+                  CHAIN_ICONS[chain.chain_name] ??
+                  chain.chain_name.slice(0, 3).toUpperCase();
                 return (
                   <div
-                    key={chain.chainName}
+                    key={chain.chain_id}
                     className="flex items-center gap-3"
                   >
                     <span className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[9px] font-bold text-white/60 shrink-0">
@@ -238,7 +243,7 @@ export default function LiquidityMap({ data, rtl }: Props) {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-xs text-white/70 truncate">
-                          {chain.chainName}
+                          {chain.chain_name}
                         </span>
                         <span className="text-xs text-white/50">
                           {percentage.toFixed(1)}%
@@ -254,7 +259,7 @@ export default function LiquidityMap({ data, rtl }: Props) {
                       </div>
                     </div>
                     <span className="text-xs text-white/60 w-14 text-right shrink-0">
-                      {compactUsd(chain.totalLiquidity)}
+                      {compactUsd(chain.total_liquidity_usd)}
                     </span>
                   </div>
                 );

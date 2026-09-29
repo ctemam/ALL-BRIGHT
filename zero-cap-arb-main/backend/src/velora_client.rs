@@ -72,7 +72,12 @@ impl VeloraClient {
             url.push_str(&format!("&apiKey={}", key));
         }
 
-        let resp = self.client.get(&url).header("Accept", "application/json").send().await?;
+        let resp = self
+            .client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -108,7 +113,12 @@ impl VeloraClient {
             url.push_str(&format!("&apiKey={}", key));
         }
 
-        let resp = self.client.get(&url).header("Accept", "application/json").send().await?;
+        let resp = self
+            .client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -159,7 +169,13 @@ impl VeloraClient {
         }
 
         info!("Building Velora tx on chain {}", chain_id);
-        let resp = self.client.post(&url).json(&body).header("Accept", "application/json").send().await?;
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -180,7 +196,12 @@ impl VeloraClient {
         chain_id: u64,
     ) -> Result<Vec<TokenInfo>, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!("{}/tokens/{}", self.base_url, chain_id);
-        let resp = self.client.get(&url).header("Accept", "application/json").send().await?;
+        let resp = self
+            .client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
         let raw: Value = resp.json().await?;
 
         let mut tokens = Vec::new();
@@ -245,7 +266,10 @@ impl VeloraSwapResponse {
     pub fn from_value(raw: Value) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let pr = VeloraPriceRoute::from_value(raw["priceRoute"].clone())?;
         let tx = VeloraTxParams::from_value(raw["txParams"].clone())?;
-        Ok(Self { price_route: pr, tx_params: tx })
+        Ok(Self {
+            price_route: pr,
+            tx_params: tx,
+        })
     }
 }
 
@@ -256,7 +280,9 @@ pub struct VeloraPriceResponse {
 
 impl VeloraPriceResponse {
     pub fn from_value(raw: Value) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(Self { price_route: VeloraPriceRoute::from_value(raw["priceRoute"].clone())? })
+        Ok(Self {
+            price_route: VeloraPriceRoute::from_value(raw["priceRoute"].clone())?,
+        })
     }
 }
 
@@ -293,15 +319,30 @@ impl VeloraPriceRoute {
                         swaps.push(VeloraSwapDetail {
                             src_token: s["srcToken"].as_str().unwrap_or("").to_string(),
                             dest_token: s["destToken"].as_str().unwrap_or("").to_string(),
-                            exchange: s["swapExchanges"][0]["exchange"].as_str().unwrap_or("Unknown").to_string(),
-                            src_amount: s["swapExchanges"][0]["srcAmount"].as_str().unwrap_or("0").to_string(),
-                            dest_amount: s["swapExchanges"][0]["destAmount"].as_str().unwrap_or("0").to_string(),
-                            percent: s["swapExchanges"][0]["percent"].as_str().and_then(|p| p.parse().ok()).unwrap_or(0.0),
+                            exchange: s["swapExchanges"][0]["exchange"]
+                                .as_str()
+                                .unwrap_or("Unknown")
+                                .to_string(),
+                            src_amount: s["swapExchanges"][0]["srcAmount"]
+                                .as_str()
+                                .unwrap_or("0")
+                                .to_string(),
+                            dest_amount: s["swapExchanges"][0]["destAmount"]
+                                .as_str()
+                                .unwrap_or("0")
+                                .to_string(),
+                            percent: s["swapExchanges"][0]["percent"]
+                                .as_str()
+                                .and_then(|p| p.parse().ok())
+                                .unwrap_or(0.0),
                         });
                     }
                 }
                 segments.push(VeloraRouteSegment {
-                    percent: r["percent"].as_str().and_then(|p| p.parse().ok()).unwrap_or(0.0),
+                    percent: r["percent"]
+                        .as_str()
+                        .and_then(|p| p.parse().ok())
+                        .unwrap_or(0.0),
                     swaps,
                 });
             }

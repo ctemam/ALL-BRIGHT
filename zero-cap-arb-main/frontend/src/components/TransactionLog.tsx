@@ -51,9 +51,9 @@ export function TransactionLog({ newTx }: { newTx?: Omit<TxRecord, 'id' | 'times
 
   // Expose addTx globally for the execution panel
   useEffect(() => {
-    (window as Record<string, unknown>).__addTx = addTx;
+    (window as unknown as Record<string, unknown>).__addTx = addTx;
     return () => {
-      delete (window as Record<string, unknown>).__addTx;
+      delete (window as unknown as Record<string, unknown>).__addTx;
     };
   }, [addTx]);
 

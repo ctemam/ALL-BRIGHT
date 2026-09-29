@@ -11,10 +11,7 @@ use tokio::time;
 use tracing::{info, warn};
 
 /// Handle WebSocket upgrade for real-time radar updates
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state.scanner.clone()))
 }
 

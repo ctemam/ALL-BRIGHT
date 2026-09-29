@@ -64,9 +64,18 @@ impl PortfolioManager {
     }
 
     pub fn can_trade(&self, strategy: &str, profit_usd: f64) -> bool {
-        if self.config.open_positions >= self.config.max_open_positions { return false; }
-        if self.config.daily_loss.abs() >= self.config.max_daily_loss_usd { return false; }
-        if profit_usd < 0.0 && profit_usd.abs() > (self.config.total_balance_usd * self.config.risk_per_trade_pct / 100.0) { return false; }
+        if self.config.open_positions >= self.config.max_open_positions {
+            return false;
+        }
+        if self.config.daily_loss.abs() >= self.config.max_daily_loss_usd {
+            return false;
+        }
+        if profit_usd < 0.0
+            && profit_usd.abs()
+                > (self.config.total_balance_usd * self.config.risk_per_trade_pct / 100.0)
+        {
+            return false;
+        }
         true
     }
 
@@ -75,10 +84,16 @@ impl PortfolioManager {
         self.config.open_positions += 1;
         self.config.daily_loss += profit_usd.min(0.0);
         self.trades.push(format!("{}:${:.2}", strategy, profit_usd));
-        let entry = self.strategy_stats.entry(strategy.to_string()).or_insert((0, 0, 0, 0.0));
+        let entry = self
+            .strategy_stats
+            .entry(strategy.to_string())
+            .or_insert((0, 0, 0, 0.0));
         entry.0 += 1;
-        if profit_usd > 0.0 { entry.1 += 1; }
-        else { entry.2 += 1; }
+        if profit_usd > 0.0 {
+            entry.1 += 1;
+        } else {
+            entry.2 += 1;
+        }
         entry.3 += profit_usd;
     }
 
@@ -87,28 +102,46 @@ impl PortfolioManager {
     }
 
     pub fn get_status(&self) -> PortfolioStatus {
-        let breakdown: Vec<StrategyBreakdown> = self.strategy_stats.iter().map(|(strat, &(total, wins, losses, pnl))| {
-            StrategyBreakdown {
+        let breakdown: Vec<StrategyBreakdown> = self
+            .strategy_stats
+            .iter()
+            .map(|(strat, &(total, wins, losses, pnl))| StrategyBreakdown {
                 strategy: strat.clone(),
                 total_trades: total,
                 wins,
                 losses,
                 pnl_usd: pnl,
-                win_rate_pct: if total > 0 { (wins as f64 / total as f64) * 100.0 } else { 0.0 },
-                allocation_pct: self.config.strategies.iter()
+                win_rate_pct: if total > 0 {
+                    (wins as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                },
+                allocation_pct: self
+                    .config
+                    .strategies
+                    .iter()
                     .find(|s| format!("{:?}", s.strategy) == *strat)
-                    .map(|s| s.weight_pct).unwrap_or(0.0),
-            }
-        }).collect();
+                    .map(|s| s.weight_pct)
+                    .unwrap_or(0.0),
+            })
+            .collect();
 
         let total_trades: u32 = breakdown.iter().map(|b| b.total_trades).sum();
         let total_wins: u32 = breakdown.iter().map(|b| b.wins).sum();
-        let win_rate = if total_trades > 0 { (total_wins as f64 / total_trades as f64) * 100.0 } else { 0.0 };
+        let win_rate = if total_trades > 0 {
+            (total_wins as f64 / total_trades as f64) * 100.0
+        } else {
+            0.0
+        };
 
         PortfolioStatus {
             config: self.config.clone(),
             total_pnl_usd: self.total_pnl,
-            total_pnl_pct: if self.config.total_balance_usd > 0.0 { (self.total_pnl / self.config.total_balance_usd) * 100.0 } else { 0.0 },
+            total_pnl_pct: if self.config.total_balance_usd > 0.0 {
+                (self.total_pnl / self.config.total_balance_usd) * 100.0
+            } else {
+                0.0
+            },
             daily_pnl_usd: self.total_pnl,
             open_trades: self.config.open_positions,
             today_trades: total_trades,

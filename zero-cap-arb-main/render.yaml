@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+#
+# Zero-Cap Arbitrage — Frankfurt-region deployment description.
+#
+# The `region` key below is a platform hint. On Render it selects the Frankfurt
+# instance type; on Fly.io it is ignored (Fly regions are chosen at
+# `fly launch`); on a plain VPS it has no effect and the host itself must be
+# located in Frankfurt. See DEPLOYMENT.md for each path.
+#
+# The image is region-agnostic — DEPLOYMENT_REGION=frankfurt is baked in as a
+# telemetry label so the backend logs its intended region and prefers EU-hosted
+# RPC endpoints.
+
+services:
+  - type: web
+    name: zero-cap-arb
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    # Frankfurt — closest Render region to the EU MEV builder set
+    # (Flashbots/Titan/MEV-Share relays and most Ethereum/Arbitrum RPC hosts).
+    region: frankfurt
+    numInstances: 1
+    healthCheckPath: /api/health
+    autoDeploy: false
+    # Disambiguates the simulation and production services in the same project.
+    nameSuffix: "-sim"
+    envVars:
+      - key: ZCA_MODE
+        value: simulation
+      - key: DEPLOYMENT_REGION
+        value: frankfurt
+      - key: PORT
+        value: 3001
+      - key: FRONTEND_PORT
+        value: 3000
+      - key: RUST_BACKEND_URL
+        value: http://127.0.0.1:3001
+      - key: PROFIT_TRANSFER_MODE
+        value: MANUAL
+      - key: PROFIT_TRANSFER_MIN_USD
+        value: "25"
+      - key: RUST_LOG
+        value: info
+      - key: VELORA_API_KEY
+        sync: false
+      - key: PIMLICO_API_KEY
+        sync: false
+      - key: PRIVATE_KEY
+        sync: false

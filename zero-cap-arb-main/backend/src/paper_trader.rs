@@ -1,7 +1,7 @@
 use crate::types::*;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use parking_lot::RwLock;
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,10 +11,18 @@ pub enum PaperTradeMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PaperTradeResult { Win, Loss, BreakEven }
+pub enum PaperTradeResult {
+    Win,
+    Loss,
+    BreakEven,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TradeStatus { Simulated, Executed, Failed }
+pub enum TradeStatus {
+    Simulated,
+    Executed,
+    Failed,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaperTrade {
@@ -132,7 +140,10 @@ impl PaperTrader {
     pub fn start(&mut self) {
         self.is_running = true;
         self.start_time = Some(chrono::Utc::now().timestamp());
-        info!("Paper trader started with balance ${:.2}", self.initial_balance_usd);
+        info!(
+            "Paper trader started with balance ${:.2}",
+            self.initial_balance_usd
+        );
     }
 
     pub fn stop(&mut self) -> BacktestResult {
@@ -153,13 +164,17 @@ impl PaperTrader {
             self.balance_usd += net_profit;
             self.wins += 1;
             self.total_profit_usd += net_profit;
-            if net_profit > self.largest_win_usd { self.largest_win_usd = net_profit; }
+            if net_profit > self.largest_win_usd {
+                self.largest_win_usd = net_profit;
+            }
             (Some(PaperTradeResult::Win), net_profit)
         } else if net_profit < 0.0 {
             self.balance_usd += net_profit;
             self.losses += 1;
             self.total_loss_usd += net_profit.abs();
-            if net_profit.abs() > self.largest_loss_usd { self.largest_loss_usd = net_profit.abs(); }
+            if net_profit.abs() > self.largest_loss_usd {
+                self.largest_loss_usd = net_profit.abs();
+            }
             (Some(PaperTradeResult::Loss), net_profit)
         } else {
             (Some(PaperTradeResult::BreakEven), 0.0)
@@ -209,8 +224,16 @@ impl PaperTrader {
 
     fn calculate_metrics(&mut self) {
         let total = self.total_trades as f64;
-        self.win_rate_pct = if total > 0.0 { (self.wins as f64 / total) * 100.0 } else { 0.0 };
-        self.profit_factor = if self.total_loss_usd > 0.0 { self.total_profit_usd / self.total_loss_usd } else { self.total_profit_usd.max(1.0) };
+        self.win_rate_pct = if total > 0.0 {
+            (self.wins as f64 / total) * 100.0
+        } else {
+            0.0
+        };
+        self.profit_factor = if self.total_loss_usd > 0.0 {
+            self.total_profit_usd / self.total_loss_usd
+        } else {
+            self.total_profit_usd.max(1.0)
+        };
         self.sharpe_ratio = calculate_sharpe_ratio(&self.returns, 2.0);
         self.max_drawdown_pct = calculate_max_drawdown(&self.equity_curve);
         self.avg_trade_duration_secs = 2.0;
@@ -218,8 +241,16 @@ impl PaperTrader {
 
     fn to_result(&self) -> BacktestResult {
         let final_bal = self.balance_usd;
-        let total_return = if self.initial_balance_usd > 0.0 { ((final_bal - self.initial_balance_usd) / self.initial_balance_usd) * 100.0 } else { 0.0 };
-        let avg_profit = if self.total_trades > 0 { self.total_profit_usd / self.total_trades as f64 } else { 0.0 };
+        let total_return = if self.initial_balance_usd > 0.0 {
+            ((final_bal - self.initial_balance_usd) / self.initial_balance_usd) * 100.0
+        } else {
+            0.0
+        };
+        let avg_profit = if self.total_trades > 0 {
+            self.total_profit_usd / self.total_trades as f64
+        } else {
+            0.0
+        };
 
         BacktestResult {
             trades: self.trades.clone(),
@@ -240,42 +271,61 @@ impl PaperTrader {
             avg_profit_per_trade: avg_profit,
             best_strategy: self.find_best_strategy(),
             monthly_returns: vec![],
-            equity_curve: self.equity_curve.iter().enumerate().map(|(i, &b)| EquityPoint {
-                timestamp: self.start_time.unwrap_or(0) + (i as i64 * 30),
-                balance: b,
-            }).collect(),
+            equity_curve: self
+                .equity_curve
+                .iter()
+                .enumerate()
+                .map(|(i, &b)| EquityPoint {
+                    timestamp: self.start_time.unwrap_or(0) + (i as i64 * 30),
+                    balance: b,
+                })
+                .collect(),
         }
     }
 
     fn find_best_strategy(&self) -> String {
-        let mut strat_profits: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        let mut strat_profits: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
         for trade in &self.trades {
             let key = format!("{:?}", trade.opportunity.arbitrage_type);
             *strat_profits.entry(key).or_insert(0.0) += trade.profit_usd;
         }
-        strat_profits.into_iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        strat_profits
+            .into_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(k, _)| k)
             .unwrap_or_else(|| "N/A".to_string())
     }
 }
 
 pub fn calculate_sharpe_ratio(returns: &[f64], risk_free_rate: f64) -> f64 {
-    if returns.len() < 2 { return 0.0; }
+    if returns.len() < 2 {
+        return 0.0;
+    }
     let mean = returns.iter().sum::<f64>() / returns.len() as f64;
-    let variance = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (returns.len() - 1) as f64;
+    let variance =
+        returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (returns.len() - 1) as f64;
     let std_dev = variance.sqrt();
-    if std_dev == 0.0 { return 0.0; }
+    if std_dev == 0.0 {
+        return 0.0;
+    }
     (mean - risk_free_rate / 100.0) / std_dev
 }
 
 pub fn calculate_max_drawdown(balances: &[f64]) -> f64 {
-    if balances.is_empty() { return 0.0; }
+    if balances.is_empty() {
+        return 0.0;
+    }
     let mut peak = balances[0];
     let mut max_dd = 0.0;
     for &b in balances {
-        if b > peak { peak = b; }
+        if b > peak {
+            peak = b;
+        }
         let dd = (peak - b) / peak;
-        if dd > max_dd { max_dd = dd; }
+        if dd > max_dd {
+            max_dd = dd;
+        }
     }
     max_dd * 100.0
 }

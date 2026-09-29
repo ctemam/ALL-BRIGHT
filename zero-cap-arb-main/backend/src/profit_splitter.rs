@@ -42,7 +42,9 @@ impl ProfitSplitter {
     pub fn calculate_split(&self, total_profit_usd: f64) -> ProfitSplitResult {
         let mut splits = Vec::new();
         for wallet in &self.config.wallets {
-            if !wallet.enabled { continue; }
+            if !wallet.enabled {
+                continue;
+            }
             splits.push(SplitEntry {
                 address: wallet.address.clone(),
                 label: wallet.label.clone(),
