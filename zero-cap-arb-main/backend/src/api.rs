@@ -62,6 +62,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/profit/transfer", post(profit_transfer_manual))
         .route("/api/profit/history", get(profit_transfer_history))
         .route("/api/health", get(health_check))
+        .route("/api/live/opportunities", get(live_opportunities))
+        .route("/api/live/status", get(live_status))
         .route("/api/scan", post(scan_token))
         .route("/api/scan/comprehensive", post(scan_comprehensive))
         .route("/api/all-prices", post(get_all_prices))
@@ -145,6 +147,25 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
         chains_connected: chains.iter().map(|c| c.name.clone()).collect(),
         uptime_secs: state.start_time.elapsed().as_secs(),
     })
+}
+
+async fn live_opportunities(State(state): State<AppState>) -> Json<Vec<OpportunityDetail>> {
+    Json(state.scanner.latest_opportunities())
+}
+
+async fn live_status(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let opps = state.scanner.latest_opportunities();
+    let profitable = opps.iter().filter(|o| o.profit_breakdown.is_profitable).count();
+    let total_net: f64 = opps.iter().map(|o| o.profit_breakdown.net_profit_usd).sum();
+    let cumulative = state.scanner.cumulative_profit_usd();
+    Json(serde_json::json!({
+        "scanner": "running",
+        "live_opportunities": opps.len(),
+        "profitable": profitable,
+        "current_cycle_net_usd": total_net,
+        "cumulative_profit_usd": cumulative,
+        "uptime_secs": state.start_time.elapsed().as_secs(),
+    }))
 }
 
 async fn scan_token(
@@ -997,67 +1018,28 @@ async fn get_bubble_data(State(state): State<AppState>) -> Json<Vec<BubbleData>>
 // â”€â”€â”€ Dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async fn get_dashboard(State(state): State<AppState>) -> Json<DashboardData> {
-    let llm = state.llm_config.read().clone();
+    let _llm = state.llm_config.read().clone();
     let bot = state.bot_status.read().clone();
 
-    // Quick simulated scan
     let bubble_data = get_bubble_data(State(state.clone())).await;
     let liquidity_data = get_liquidity_data(State(state.clone())).await;
 
-    let opps = vec![OpportunityDetail {
-        id: "demo-001".to_string(),
-        token: "WETH".to_string(),
-        token_address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2".to_string(),
-        arbitrage_type: ArbitrageType::Simple,
-        chain_name: "Ethereum".to_string(),
-        chain_id: 1,
-        buy_dex: Some("Uniswap V3".to_string()),
-        sell_dex: Some("Curve".to_string()),
-        buy_price: 3445.0,
-        sell_price: 3460.0,
-        spread_pct: 0.44,
-        profit_breakdown: NetProfitBreakdown {
-            gross_profit_usd: 150.0,
-            costs: CostBreakdown {
-                gas_estimated_usd: 12.0,
-                flash_loan_fee_usd: 1.50,
-                slippage_estimated_usd: 0.75,
-                bridge_fee_usd: None,
-                velora_fee_usd: 0.15,
-                total_cost_usd: 14.40,
-            },
-            net_profit_usd: 135.60,
-            net_profit_pct: 941.67,
-            roi_pct: 0.039,
-            is_profitable: true,
-        },
-        flash_loan_recommendation: None,
-        execution_steps: vec![
-            "Borrow 100 ETH".to_string(),
-            "Buy on Uniswap V3".to_string(),
-            "Sell on Curve".to_string(),
-            "Repay".to_string(),
-            "Keep profit".to_string(),
-        ],
-        confidence_score: 0.87,
-        liquidity_usd: 2_500_000.0,
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-    }];
+    // Read live opportunities from the continuous scanner if available.
+    let live_opps = state.scanner.latest_opportunities();
+    let profitable_count = live_opps.iter().filter(|o| o.profit_breakdown.is_profitable).count();
+    let total_net: f64 = live_opps.iter().map(|o| o.profit_breakdown.net_profit_usd).sum();
 
     Json(DashboardData {
         bubbles: bubble_data.0,
         liquidity_map: liquidity_data.0,
-        opportunities: opps,
+        opportunities: live_opps.clone(),
         bot_status: bot,
         scan_timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs(),
-        total_profit_24h_usd: 1250.75,
-        total_opportunities_found: 9,
+        total_profit_24h_usd: total_net.max(0.0),
+        total_opportunities_found: profitable_count,
     })
 }
 
@@ -1113,20 +1095,30 @@ async fn paper_run_backtest(State(state): State<AppState>) -> Json<BacktestResul
             buy_price: 3445.0,
             sell_price: 3460.0 + rand::random::<f64>() * 10.0,
             spread_pct: 0.5 + rand::random::<f64>() * 2.0,
-            profit_breakdown: NetProfitBreakdown {
-                gross_profit_usd: 100.0 + rand::random::<f64>() * 200.0,
-                costs: CostBreakdown {
-                    gas_estimated_usd: 10.0 + rand::random::<f64>() * 5.0,
-                    flash_loan_fee_usd: 0.5,
-                    slippage_estimated_usd: 1.0,
-                    bridge_fee_usd: None,
-                    velora_fee_usd: 0.1,
-                    total_cost_usd: 12.0,
-                },
-                net_profit_usd: 50.0 + rand::random::<f64>() * 150.0,
-                net_profit_pct: 500.0,
-                roi_pct: 2.0,
-                is_profitable: true,
+            profit_breakdown: {
+                let gross = 100.0 + rand::random::<f64>() * 200.0;
+                let gas = 10.0 + rand::random::<f64>() * 5.0;
+                let fl = gross * 0.0003;
+                let slip = gross * 0.005;
+                let velora = gross * 0.001;
+                let total_cost = gas + fl + slip + velora;
+                let net = gross - total_cost;
+                let notional = 10_000.0;
+                NetProfitBreakdown {
+                    gross_profit_usd: gross,
+                    costs: CostBreakdown {
+                        gas_estimated_usd: gas,
+                        flash_loan_fee_usd: fl,
+                        slippage_estimated_usd: slip,
+                        bridge_fee_usd: None,
+                        velora_fee_usd: velora,
+                        total_cost_usd: total_cost,
+                    },
+                    net_profit_usd: net,
+                    net_profit_pct: (net / notional) * 100.0,
+                    roi_pct: (net / notional) * 100.0,
+                    is_profitable: net > 0.0,
+                }
             },
             flash_loan_recommendation: None,
             execution_steps: vec![],

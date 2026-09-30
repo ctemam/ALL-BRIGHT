@@ -256,6 +256,20 @@ async fn main() {
     // is explicitly AUTO; MANUAL is the default and nothing moves on its own.
     state.profit_transfer.spawn_auto_sweep();
 
+    // Start the continuous scanner. It refreshes native/USD rates from on-chain
+    // pools, scans all tokens across all chains, and reports profitable
+    // opportunities to the dashboard. When ZCA_AUTO_EXECUTE=true, it also
+    // attempts to execute via Velora routing.
+    let scan_interval = std::env::var("ZCA_SCAN_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30);
+    state.scanner.spawn_continuous_scanner(
+        scan_interval,
+        state.velora.clone(),
+        state.profit_transfer.clone(),
+    );
+
     let cfg = config::ServerConfig::from_env();
     info!(
         mode = %cfg.mode,

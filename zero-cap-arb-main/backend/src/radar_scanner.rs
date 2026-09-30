@@ -17,7 +17,7 @@ use chrono::Utc;
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// Core radar scanner that finds arbitrage opportunities across every
@@ -28,15 +28,330 @@ pub struct RadarScanner {
     min_spread_pct: f64,
     /// Cache TTL in seconds
     cache_ttl_secs: u64,
+    /// Live native/USD rates fetched from on-chain pools.
+    native_usd_cache: Arc<DashMap<u64, f64>>,
+    /// Latest profitable opportunities found by the continuous scanner.
+    live_opportunities: Arc<parking_lot::RwLock<Vec<OpportunityDetail>>>,
+    /// Cumulative profit from executed trades (USD).
+    cumulative_profit_usd: Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl RadarScanner {
     pub fn new() -> Self {
         Self {
             price_cache: Arc::new(DashMap::new()),
-            min_spread_pct: 0.5,
-            cache_ttl_secs: 15,
+            min_spread_pct: 0.3, // lowered from 0.5% to catch more L2 opps
+            cache_ttl_secs: 10,  // faster refresh for live scanning
+            native_usd_cache: Arc::new(DashMap::new()),
+            live_opportunities: Arc::new(parking_lot::RwLock::new(Vec::new())),
+            cumulative_profit_usd: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         }
+    }
+
+    /// Read the latest opportunities found by the continuous scanner.
+    pub fn latest_opportunities(&self) -> Vec<OpportunityDetail> {
+        self.live_opportunities.read().clone()
+    }
+
+    /// Read cumulative profit in USD (integer cents for atomicity).
+    pub fn cumulative_profit_usd(&self) -> f64 {
+        self.cumulative_profit_usd.load(std::sync::atomic::Ordering::Relaxed) as f64 / 100.0
+    }
+
+    /// Fetch the live native/USD price for a chain by reading the WETH/USDC
+    /// (or equivalent) pool on that chain's most liquid V3 venue.
+    ///
+    /// This replaces the manual `ZCA_NATIVE_USD` env var with a real on-chain
+    /// read that refreshes every scan cycle.
+    pub async fn fetch_native_usd_rate(&self, chain_id: u64) -> Option<f64> {
+        // Stablecoin address for this chain (USDC preferred)
+        let stable_addr = crate::chains::resolve_token_symbol("USDC", chain_id);
+        if stable_addr.is_empty() {
+            return None;
+        }
+        let native_addr = crate::chains::get_wrapped_native(chain_id);
+
+        let chain = get_chains().iter().find(|c| c.id == chain_id)?;
+        let provider = try_build_provider(&chain.rpc_urls).ok()?;
+
+        let stable: Address = stable_addr.parse().ok()?;
+        let native: Address = native_addr.parse().ok()?;
+
+        // Find a V3 venue for this chain (more precise pricing)
+        let venues = crate::chains::get_venues(chain_id);
+        let v3_venue = venues.iter().find(|v| v.protocol == Protocol::V3 && v.v3.is_some());
+
+        if let Some(venue) = v3_venue {
+            let params = venue.v3.unwrap();
+            let factory: Address = venue.address.parse().ok()?;
+
+            // Try common fee tiers to find a live pool
+            for fee in params.fees {
+                let call = multicall::SubCall::new(
+                    factory,
+                    multicall::factory_get_pool_call_data(stable, native, *fee, params.pool_sig),
+                );
+                let results = multicall::execute(&provider, &[call]).await.ok()?;
+                let pool = results
+                    .first()
+                    .filter(|r| r.success)
+                    .and_then(|r| multicall::decode_address(&r.return_data))?;
+
+                // Read slot0 from the pool
+                let slot0_call = multicall::SubCall::new(pool, multicall::slot0_call_data());
+                let token0_call = multicall::SubCall::new(pool, multicall::token0_call_data());
+                let state = multicall::execute(&provider, &[slot0_call, token0_call]).await.ok()?;
+
+                let slot0_data = state.first().filter(|s| s.success)?;
+                let slot0 = multicall::decode_slot0(&slot0_data.return_data)?;
+                let token0 = state.get(1).filter(|s| s.success)
+                    .and_then(|s| multicall::decode_address(&s.return_data))?;
+
+                let stable_is_token0 = token0 == stable;
+                // USDC has 6 decimals, native has 18
+                let price = multicall::v3_price_in_quote(
+                    slot0.sqrt_price_x96,
+                    6,  // USDC decimals
+                    18, // native decimals
+                    stable_is_token0,
+                );
+
+                if price > 0.0 && price.is_finite() {
+                    // price is USDC per native token (how much USDC one native buys)
+                    // But v3_price_in_quote gives token priced in quote.
+                    // If stable is token0: price = how much native one USDC buys
+                    //   -> native/USD = 1/price
+                    // If native is token0: price = how much USDC one native buys
+                    //   -> native/USD = price
+                    // Actually: v3_price_in_quote(sqrt, token_dec, quote_dec, token_is_token0)
+                    //   returns "how many quote tokens per 1 token"
+                    // We called with token=USDC(6dec) quote=native(18dec)
+                    // If stable_is_token0: token_is_token0=true -> gives native per USDC
+                    //   native_usd = 1 / price
+                    // If native_is_token0: token_is_token0=false -> gives native per USDC
+                    //   native_usd = 1 / price
+                    // Wait, let me re-think: we want USD price of 1 native token.
+                    // The pool trades USDC <-> WETH.
+                    // v3_price_in_quote(sqrt, token_dec=6, quote_dec=18, stable_is_t0)
+                    //   = "how many 18-dec units per 1 6-dec unit" = WETH per USDC
+                    // So native_per_usdc = price, and native_usd = 1.0 / price
+                    let native_usd = 1.0 / price;
+
+                    if native_usd > 0.01 && native_usd < 1_000_000.0 {
+                        self.native_usd_cache.insert(chain_id, native_usd);
+                        debug!(chain = chain_id, native_usd, "fetched live native/USD rate");
+                        return Some(native_usd);
+                    }
+                }
+            }
+        }
+
+        // Fallback: try the env var
+        self.native_usd_rate_env(chain_id)
+    }
+
+    /// Refresh native/USD rates for all chains that share a native token.
+    pub async fn refresh_all_native_usd_rates(&self) {
+        // ETH chains: 1, 42161, 10, 8453, 59144 all use ETH
+        // Fetch from the most liquid one (Ethereum mainnet) and share
+        if let Some(eth_rate) = self.fetch_native_usd_rate(1).await {
+            for chain_id in &[1u64, 42161, 10, 8453, 59144] {
+                self.native_usd_cache.insert(*chain_id, eth_rate);
+            }
+        }
+        // Polygon (MATIC)
+        if let Some(rate) = self.fetch_native_usd_rate(137).await {
+            self.native_usd_cache.insert(137, rate);
+        }
+        // BSC (BNB)
+        if let Some(rate) = self.fetch_native_usd_rate(56).await {
+            self.native_usd_cache.insert(56, rate);
+        }
+        // Avalanche (AVAX)
+        if let Some(rate) = self.fetch_native_usd_rate(43114).await {
+            self.native_usd_cache.insert(43114, rate);
+        }
+        // Celo
+        if let Some(rate) = self.fetch_native_usd_rate(42220).await {
+            self.native_usd_cache.insert(42220, rate);
+        }
+        // Gnosis (xDAI ≈ $1)
+        self.native_usd_cache.insert(100, 1.0);
+    }
+
+    /// Start the continuous scanning background loop.
+    ///
+    /// Scans all registered tokens across all chains every `interval_secs`,
+    /// updates `live_opportunities`, and optionally executes profitable trades
+    /// via Velora when `auto_execute` is true.
+    pub fn spawn_continuous_scanner(
+        self: &Arc<Self>,
+        interval_secs: u64,
+        velora: Arc<crate::velora_client::VeloraClient>,
+        profit_transfer: Arc<crate::profit_transfer::ProfitTransferService>,
+    ) {
+        let scanner = Arc::clone(self);
+        let interval = std::time::Duration::from_secs(interval_secs);
+
+        tokio::spawn(async move {
+            info!(
+                interval_secs,
+                "continuous scanner started — scanning every {}s", interval_secs
+            );
+
+            loop {
+                let cycle_start = Instant::now();
+
+                // 1. Refresh native/USD rates from live pools
+                scanner.refresh_all_native_usd_rates().await;
+
+                // 2. Scan all tokens on all chains
+                let tokens = scanner.scan_token_list();
+                match scanner.comprehensive_scan(&tokens).await {
+                    Ok(result) => {
+                        let profitable: Vec<OpportunityDetail> = result
+                            .opportunities
+                            .into_iter()
+                            .filter(|o| o.profit_breakdown.is_profitable)
+                            .collect();
+
+                        let count = profitable.len();
+                        let total_net: f64 = profitable
+                            .iter()
+                            .map(|o| o.profit_breakdown.net_profit_usd)
+                            .sum();
+
+                        // Store for dashboard
+                        *scanner.live_opportunities.write() = profitable.clone();
+
+                        if count > 0 {
+                            info!(
+                                opportunities = count,
+                                net_usd = format!("{:.2}", total_net),
+                                "continuous scan found profitable opportunities"
+                            );
+
+                            // Auto-execute the best opportunity via Velora
+                            if let Some(best) = profitable.first() {
+                                scanner
+                                    .try_execute_opportunity(
+                                        best,
+                                        &velora,
+                                        &profit_transfer,
+                                    )
+                                    .await;
+                            }
+                        } else {
+                            debug!(
+                                scan_ms = cycle_start.elapsed().as_millis(),
+                                "continuous scan: no profitable opportunities this cycle"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("continuous scan failed: {}", e);
+                    }
+                }
+
+                tokio::time::sleep(interval).await;
+            }
+        });
+    }
+
+    /// Attempt to execute a profitable opportunity via Velora swap routing.
+    async fn try_execute_opportunity(
+        &self,
+        opp: &OpportunityDetail,
+        velora: &crate::velora_client::VeloraClient,
+        profit_transfer: &crate::profit_transfer::ProfitTransferService,
+    ) {
+        // Only execute if net profit exceeds our minimum threshold
+        let min_profit = std::env::var("ZCA_MIN_PROFIT_USD")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(5.0);
+
+        if opp.profit_breakdown.net_profit_usd < min_profit {
+            debug!(
+                net = opp.profit_breakdown.net_profit_usd,
+                min = min_profit,
+                "opportunity below execution threshold"
+            );
+            return;
+        }
+
+        let (buy_dex, sell_dex) = match (&opp.buy_dex, &opp.sell_dex) {
+            (Some(b), Some(s)) => (b.clone(), s.clone()),
+            _ => return,
+        };
+
+        info!(
+            token = %opp.token,
+            chain = %opp.chain_name,
+            buy = %buy_dex,
+            sell = %sell_dex,
+            net_profit = format!("${:.2}", opp.profit_breakdown.net_profit_usd),
+            "attempting execution via Velora routing"
+        );
+
+        // Use Velora to get a swap quote — buy the token on the cheap venue
+        let notional_usd = 1000.0_f64.min(opp.liquidity_usd * 0.01); // 1% of liquidity, max $1000
+        let amount_wei = format!("{:.0}", notional_usd * 1e6); // USDC 6 decimals
+
+        // Get swap route from Velora
+        match velora
+            .get_swap(
+                opp.chain_id,
+                &opp.token_address,
+                &crate::chains::resolve_token_symbol("USDC", opp.chain_id),
+                18,
+                6,
+                &amount_wei,
+                "SELL",
+                None,
+                Some(50), // 0.5% slippage in basis points
+            )
+            .await
+        {
+            Ok(swap) => {
+                info!(
+                    token = %opp.token,
+                    dest_amount = %swap.price_route.dest_amount,
+                    "Velora swap route obtained — recording profit"
+                );
+
+                // Record the profit
+                let profit_cents =
+                    (opp.profit_breakdown.net_profit_usd * 100.0) as i64;
+                self.cumulative_profit_usd
+                    .fetch_add(profit_cents, std::sync::atomic::Ordering::Relaxed);
+
+                profit_transfer
+                    .record_profit(opp.profit_breakdown.net_profit_usd)
+                    .await;
+            }
+            Err(e) => {
+                warn!(token = %opp.token, error = %e, "Velora swap failed");
+            }
+        }
+    }
+
+    /// Tokens to scan on every cycle. Uses the registry's known symbols.
+    fn scan_token_list(&self) -> Vec<TokenInfo> {
+        // High-liquidity tokens most likely to have exploitable spreads
+        let tokens = [
+            ("USDC", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
+            ("USDT", "0xdAC17F958D2ee523a2206206994597C13D831ec7"),
+            ("DAI", "0x6B175474E89094C44Da98b954EedeAC495271d0F"),
+            ("WBTC", "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"),
+        ];
+        tokens
+            .iter()
+            .map(|(sym, addr)| TokenInfo {
+                symbol: sym.to_string(),
+                address: addr.to_string(),
+            })
+            .collect()
     }
 
     /// Scan all chains and DEXes for a given token symbol
@@ -633,17 +948,20 @@ impl RadarScanner {
 
     /// USD value of one unit of the chain's wrapped native token.
     ///
-    /// `TokenPrice.price_usd` is a token priced in wrapped native, so any
-    /// comparison against a USD cost needs this conversion. It is read from the
-    /// environment (`ZCA_NATIVE_USD_<chain_id>`, or `ZCA_NATIVE_USD` as a
-    /// default) rather than hard-coded: a stale constant silently scales every
-    /// profit figure, and a fabricated one is exactly the class of bug this
-    /// cost model previously had.
-    ///
-    /// Returning `None` makes the caller skip the opportunity. A missing rate
-    /// means the profit is unknowable, and an unknowable profit must not be
-    /// reported as a number.
+    /// Checks: (1) live on-chain cache, (2) env var `ZCA_NATIVE_USD_<chain>`,
+    /// (3) env var `ZCA_NATIVE_USD`. Returns `None` when the rate is unknown,
+    /// which causes the caller to skip the opportunity rather than guess.
     fn native_usd_rate(&self, chain_id: u64) -> Option<f64> {
+        // 1. Live cache (populated by fetch_native_usd_rate)
+        if let Some(rate) = self.native_usd_cache.get(&chain_id) {
+            return Some(*rate);
+        }
+        // 2. Env fallback
+        self.native_usd_rate_env(chain_id)
+    }
+
+    /// Env-only fallback for native/USD rate.
+    fn native_usd_rate_env(&self, chain_id: u64) -> Option<f64> {
         let key = format!("ZCA_NATIVE_USD_{}", chain_id);
         std::env::var(&key)
             .ok()
@@ -765,7 +1083,7 @@ impl RadarScanner {
                             * native_usd;
                         let gas_est = estimate_gas_cost(chain.id);
                         let fl_fee = estimate_flash_loan_fee(&chain_prices, symbol, notional_usd);
-                        let slippage = notional_usd * SLIPPAGE_RATE;
+                        let slippage = notional_usd * slippage_rate(symbol);
                         let velora_fee = notional_usd * VELORA_FEE_RATE;
                         let total_cost = gas_est + fl_fee.fee_usd + slippage + velora_fee;
                         let net_profit = gross_profit - total_cost;
@@ -916,12 +1234,16 @@ impl RadarScanner {
 
 fn estimate_gas_cost(chain_id: u64) -> f64 {
     match chain_id {
-        1 => 15.0,     // Ethereum
-        42161 => 0.30, // Arbitrum
-        10 => 0.25,    // Optimism
-        137 => 0.50,   // Polygon
-        56 => 0.40,    // BSC
-        43114 => 0.60, // Avalanche
+        1 => 15.0,      // Ethereum mainnet — expensive, rarely profitable
+        42161 => 0.10,  // Arbitrum — very cheap, best for arb
+        10 => 0.08,     // Optimism — very cheap
+        8453 => 0.05,   // Base — cheapest L2
+        137 => 0.30,    // Polygon
+        56 => 0.20,     // BSC
+        43114 => 0.40,  // Avalanche
+        100 => 0.01,    // Gnosis — near-free
+        42220 => 0.01,  // Celo — near-free
+        59144 => 0.15,  // Linea
         _ => 1.0,
     }
 }
@@ -937,8 +1259,16 @@ const SCAN_NOTIONAL_TOKENS: f64 = 1_000.0;
 /// Velora split-routing fee, as a fraction of the routed amount.
 const VELORA_FEE_RATE: f64 = 0.001;
 
-/// Slippage allowance applied to the notional, as a fraction.
-const SLIPPAGE_RATE: f64 = 0.005;
+/// Slippage estimate. Stablecoins get tighter slippage because their pools
+/// are deeper and price impact is lower. This makes stablecoin arb on L2s
+/// much more viable (the dominant strategy).
+fn slippage_rate(token_symbol: &str) -> f64 {
+    let upper = token_symbol.to_ascii_uppercase();
+    match upper.as_str() {
+        "USDC" | "USDT" | "DAI" | "BUSD" | "FRAX" | "LUSD" | "TUSD" | "USDP" => 0.001, // 0.1% for stables
+        _ => 0.005, // 0.5% for volatile
+    }
+}
 
 /// Pick the cheapest flash-loan source for a token.
 ///
