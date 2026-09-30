@@ -1031,21 +1031,36 @@ impl RadarScanner {
             }
         }
 
-        let provider = match try_build_provider(&chain.rpc_urls) {
-            Ok(p) => p,
-            Err(e) => {
-                error!("All RPCs failed for {}: {}", chain.name, e);
-                return Vec::new();
-            }
-        };
+        // Try up to 3 different RPC endpoints before giving up. Round-robin
+        // picks a different starting endpoint each time, so retries naturally
+        // try a different provider.
+        let mut quotes = Vec::new();
+        let mut last_err = String::new();
+        for _attempt in 0..3u8 {
+            let provider = match try_build_provider(&chain.rpc_urls) {
+                Ok(p) => p,
+                Err(e) => {
+                    last_err = e;
+                    continue;
+                }
+            };
 
-        let quotes = match quote_venues_on_chain(&provider, chain, token_address).await {
-            Ok(q) => q,
-            Err(e) => {
-                warn!("venue quoting failed on {}: {}", chain.name, e);
-                return Vec::new();
+            match quote_venues_on_chain(&provider, chain, token_address).await {
+                Ok(q) => {
+                    quotes = q;
+                    last_err.clear();
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    // Will retry with the next endpoint
+                }
             }
-        };
+        }
+        if !last_err.is_empty() && quotes.is_empty() {
+            warn!("venue quoting failed on {} after 3 attempts: {}", chain.name, last_err);
+            return Vec::new();
+        }
 
         let timestamp = Utc::now().timestamp() as u64;
         let prices: Vec<TokenPrice> = quotes
@@ -1063,6 +1078,7 @@ impl RadarScanner {
                 price_usd: quote.price,
                 liquidity_usd: quote.depth,
                 timestamp,
+                pool_fee_bps_hundredths: quote.fee_bps_hundredths,
             })
             .collect();
 
@@ -1078,6 +1094,9 @@ struct VenueQuote {
     price: f64,
     /// Depth of the quote side at the current tick, in wrapped native.
     depth: f64,
+    /// V3 pool fee in hundredths of a basis point (e.g. 3000 = 0.30%).
+    /// V2 uses 30 (0.30% constant swap fee).
+    fee_bps_hundredths: u32,
 }
 
 /// One venue/tier that can be resolved to a pool.
@@ -1305,6 +1324,17 @@ async fn quote_venues_on_chain(
                 } else {
                     (reserves.reserve1, reserves.reserve0)
                 };
+
+                // Reject pools where either reserve is negligible. A reserve
+                // of <1e-12 in human terms means the pool is effectively
+                // empty and any price derived from it is noise.
+                let min_reserve = std::cmp::min(reserve_token, reserve_weth);
+                if min_reserve < 1_000_000 {
+                    // < 1e6 raw units: for 18-decimal tokens that's < 1e-12,
+                    // for 6-decimal it's < 1 unit. Either way, phantom pool.
+                    continue;
+                }
+
                 let price = multicall::price_from_reserves(
                     reserve_token,
                     reserve_weth,
@@ -1314,7 +1344,8 @@ async fn quote_venues_on_chain(
                 // Under the constant-product invariant the quote side is half
                 // the pool, so two-sided depth is twice that reserve.
                 let depth = multicall::scale_amount(reserve_weth, QUOTE_DECIMALS) * 2.0;
-                VenueQuote { price, depth }
+                // Uniswap V2 has a fixed 0.30% swap fee
+                VenueQuote { price, depth, fee_bps_hundredths: 3000 }
             }
             Protocol::V3 => {
                 let Some(slot0) = multicall::decode_slot0(primary) else {
@@ -1338,12 +1369,27 @@ async fn quote_venues_on_chain(
                         )
                     })
                     .unwrap_or(0.0);
-                VenueQuote { price, depth }
+                VenueQuote { price, depth, fee_bps_hundredths: candidate.fee }
             }
         };
 
-        // 0.0 means "no data" (empty or unreadable pool), not a cheap venue.
-        if quote.price <= 0.0 || quote.depth <= 0.0 {
+        // Reject venues with no real data or insufficient depth.
+        // depth < 0.01 WETH (~$27) means the pool is effectively empty —
+        // any trade would move the price so much that it's not executable.
+        if quote.price <= 0.0 || quote.depth < 0.01 {
+            continue;
+        }
+
+        // Sanity bound: reject absurd prices that indicate stale or
+        // broken pool state. A token priced at >1e12 or <1e-18 WETH
+        // is almost certainly garbage data.
+        if quote.price > 1e12 || quote.price < 1e-18 {
+            debug!(
+                chain = chain.id,
+                venue = candidate.label,
+                price = quote.price,
+                "price out of sanity bounds; skipping phantom quote"
+            );
             continue;
         }
         quotes.push((candidate.label.clone(), quote));
@@ -1391,11 +1437,15 @@ impl RadarScanner {
                 .iter()
                 .max_by(|a, b| a.price_usd.partial_cmp(&b.price_usd).unwrap()),
         ) {
-            let spread_pct = if cheapest.price_usd > 0.0 {
+            let raw_spread_pct = if cheapest.price_usd > 0.0 {
                 ((priciest.price_usd - cheapest.price_usd) / cheapest.price_usd) * 100.0
             } else {
                 0.0
             };
+            // Fee-adjusted spread
+            let buy_fee_pct = cheapest.pool_fee_bps_hundredths as f64 / 10_000.0;
+            let sell_fee_pct = priciest.pool_fee_bps_hundredths as f64 / 10_000.0;
+            let spread_pct = (raw_spread_pct - buy_fee_pct - sell_fee_pct).max(0.0);
 
             if spread_pct >= self.min_spread_pct && priciest.liquidity_usd > 0.0 {
                 opportunities.push(ArbitrageOpportunity {
@@ -1665,11 +1715,26 @@ impl RadarScanner {
                         .iter()
                         .max_by(|a, b| a.price_usd.partial_cmp(&b.price_usd).unwrap()),
                 ) {
-                    let spread_pct = if cheapest.price_usd > 0.0 {
+                    // ── Fee-adjusted spread ───────────────────────────
+                    // The raw price difference between venues is NOT the
+                    // executable profit. Each leg pays a pool swap fee:
+                    //   - Buy leg (cheapest venue): pay its pool fee
+                    //   - Sell leg (priciest venue): pay its pool fee
+                    // The executable spread = raw_spread - buy_fee - sell_fee.
+                    //
+                    // Without this, "spreads" between V3 [10000] and [500] on
+                    // the same DEX show 106% but are really ~0% net because
+                    // the pool prices already embed their fee tier economics.
+                    let raw_spread_pct = if cheapest.price_usd > 0.0 {
                         ((priciest.price_usd - cheapest.price_usd) / cheapest.price_usd) * 100.0
                     } else {
                         0.0
                     };
+
+                    // Pool fee as a percentage: 3000 bps-hundredths = 0.30%
+                    let buy_fee_pct = cheapest.pool_fee_bps_hundredths as f64 / 10_000.0;
+                    let sell_fee_pct = priciest.pool_fee_bps_hundredths as f64 / 10_000.0;
+                    let spread_pct = (raw_spread_pct - buy_fee_pct - sell_fee_pct).max(0.0);
 
                     // CEX deviation detection: if Binance has a price
                     // for this token, check if any DEX quote deviates
@@ -1696,21 +1761,27 @@ impl RadarScanner {
                                 chain = %chain.name,
                                 symbol = %symbol,
                                 spread = format!("{:.3}%", spread_pct),
+                                raw = format!("{:.3}%", raw_spread_pct),
+                                buy_fee = format!("{:.2}%", buy_fee_pct),
+                                sell_fee = format!("{:.2}%", sell_fee_pct),
                                 cex_dev = format!("{:.2}%", dev),
                                 buy = %cheapest.dex_name,
                                 sell = %priciest.dex_name,
                                 depth = format!("{:.2}", cheapest.liquidity_usd.min(priciest.liquidity_usd)),
-                                "spread detected (CEX-confirmed)"
+                                "spread detected (fee-adjusted)"
                             );
                         } else {
                             info!(
                                 chain = %chain.name,
                                 symbol = %symbol,
                                 spread = format!("{:.3}%", spread_pct),
+                                raw = format!("{:.3}%", raw_spread_pct),
+                                buy_fee = format!("{:.2}%", buy_fee_pct),
+                                sell_fee = format!("{:.2}%", sell_fee_pct),
                                 buy = %cheapest.dex_name,
                                 sell = %priciest.dex_name,
                                 depth = format!("{:.2}", cheapest.liquidity_usd.min(priciest.liquidity_usd)),
-                                "spread detected"
+                                "spread detected (fee-adjusted)"
                             );
                         }
                     }
@@ -2026,6 +2097,7 @@ mod tests {
             price_usd: 0.0004,
             liquidity_usd: 1_000_000.0,
             timestamp: 0,
+            pool_fee_bps_hundredths: 3000, // V2 default 0.30%
         }
     }
 

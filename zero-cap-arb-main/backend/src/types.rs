@@ -32,6 +32,12 @@ pub struct TokenPrice {
     pub price_usd: f64,
     pub liquidity_usd: f64,
     pub timestamp: u64,
+    /// Pool swap fee in hundredths of a basis point.
+    /// V3 fee tiers: 100 (0.01%), 500 (0.05%), 3000 (0.30%), 10000 (1.00%).
+    /// V2 constant: 3000 (0.30%).
+    /// Used to compute the fee-adjusted executable spread between venues.
+    #[serde(default)]
+    pub pool_fee_bps_hundredths: u32,
 }
 
 /// All prices response – shows every DEX price across every chain
