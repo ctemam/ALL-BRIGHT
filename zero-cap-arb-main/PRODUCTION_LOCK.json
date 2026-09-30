@@ -1,0 +1,142 @@
+{
+  "version": "1.0.0",
+  "locked_at": "2026-09-30T17:05:00Z",
+  "locked_by": "Commander (via Devin)",
+  "governance": {
+    "unlock_requires": "COMMANDER_APPROVAL",
+    "approval_method": "Add unlock token to commit message: COMMANDER_UNLOCK=<module_name>",
+    "auto_reject": true,
+    "description": "All modules below are production-verified and locked. Any edit to a locked file without COMMANDER_UNLOCK approval will be rejected by the pre-commit hook."
+  },
+  "verification": {
+    "rust_tests": "101/101 passed",
+    "solidity_tests": "12/12 passed (10,000 fuzz runs)",
+    "cargo_check": "0 errors",
+    "cargo_build_release": "success",
+    "forge_build": "success"
+  },
+  "modules": {
+    "radar_pricing_fabric": {
+      "status": "LOCKED",
+      "files": [
+        "backend/src/radar_scanner.rs",
+        "backend/src/multicall.rs",
+        "backend/src/chains.rs"
+      ],
+      "description": "MultiCall3 batch price quoting across V2/V3/Slipstream venues, 10 EVM chains, spread detection, Velora validation, flash loan fee estimation (7 sources incl. 3 at 0%)",
+      "tests": "chains(18) + multicall(31) + radar_scanner(5) = 54 tests"
+    },
+    "rpc_pool_catalog": {
+      "status": "LOCKED",
+      "files": [
+        "backend/src/rpc_pool.rs",
+        "backend/src/rpc_catalog.rs"
+      ],
+      "description": "246 curated RPC endpoints across 10 chains, latency-ranked selection, rate-limit cooldown, quarantine, failover",
+      "tests": "rpc_pool(12) + rpc_catalog(5) = 17 tests"
+    },
+    "execution_aggregation": {
+      "status": "LOCKED",
+      "files": [
+        "backend/src/velora_client.rs",
+        "backend/src/pimlico_client.rs",
+        "backend/src/gas_bidder.rs",
+        "backend/src/mev_guard.rs"
+      ],
+      "description": "Velora/ParaSwap DEX aggregation, Pimlico ERC-4337 paymaster/bundler, adaptive gas bidding, MEV protection"
+    },
+    "simulation_portfolio": {
+      "status": "LOCKED",
+      "files": [
+        "backend/src/paper_trader.rs",
+        "backend/src/portfolio_manager.rs"
+      ],
+      "description": "Paper trading, backtesting, Sharpe ratio, 5-strategy portfolio allocation"
+    },
+    "automation_rules_treasury": {
+      "status": "LOCKED",
+      "files": [
+        "backend/src/rules_engine.rs",
+        "backend/src/profit_splitter.rs",
+        "backend/src/profit_transfer.rs",
+        "backend/src/alert_manager.rs"
+      ],
+      "description": "Conditional execution triggers, multi-wallet profit splitting, safe on-chain profit sweeping (auto@$100 threshold), Telegram/Discord alerts",
+      "tests": "profit_transfer(14) = 14 tests"
+    },
+    "control_plane_transport": {
+      "status": "LOCKED",
+      "files": [
+        "backend/src/main.rs",
+        "backend/src/api.rs",
+        "backend/src/config.rs",
+        "backend/src/types.rs",
+        "backend/src/websocket.rs"
+      ],
+      "description": "Axum REST API (40+ endpoints), WebSocket real-time broadcast, environment config, domain models",
+      "tests": "config(3) = 3 tests"
+    },
+    "discovery_verification": {
+      "status": "LOCKED",
+      "files": [
+        "backend/src/discovery.rs",
+        "backend/src/etherscan.rs"
+      ],
+      "description": "DEX Screener + DeFiLlama + Binance CEX feeds, Etherscan tx verification, on-chain profit confirmation",
+      "tests": "discovery(5) + etherscan(7) = 12 tests"
+    },
+    "smart_contracts": {
+      "status": "LOCKED",
+      "files": [
+        "contracts/src/ZeroRiskArb.sol",
+        "contracts/src/ZeroRiskArb.t.sol",
+        "contracts/src/interfaces/IAaveV3Pool.sol",
+        "contracts/src/interfaces/IBalancerVault.sol",
+        "contracts/src/interfaces/IDssFlash.sol",
+        "contracts/src/interfaces/IERC20.sol",
+        "contracts/src/interfaces/IMorphoBlue.sol",
+        "contracts/src/interfaces/IRadiantV2Pool.sol",
+        "contracts/src/interfaces/ISparkPool.sol",
+        "contracts/src/interfaces/IUniswapV3Flash.sol",
+        "contracts/src/interfaces/IVeloraAugustus.sol"
+      ],
+      "description": "7 flash loan sources (Aave V3, Radiant V2, Spark, Balancer V2, Morpho Blue, MakerDAO DssFlash, Uniswap V3), atomic arb execution via Velora, strict non-loss revert guarantees",
+      "tests": "12 Foundry tests (incl. 10,000 fuzz runs)"
+    }
+  },
+  "checksums": {
+    "backend/src/radar_scanner.rs": "1ab238ad4b7d3a4003cedeba9af46f7eaab69daa549d38433f476349314555ec",
+    "backend/src/multicall.rs": "b15aa44b7b9241f24e50935b062c311cd74a504eacfdd5f89667558e71d83f8b",
+    "backend/src/chains.rs": "1b246a6f6d2fc28602226af167b9c0c61e118c97ccb7fcb82390e376c5c12922",
+    "backend/src/rpc_pool.rs": "712c627675ac94106d476262f4867a790127d6f02c65c5f401b9afd665b87e67",
+    "backend/src/rpc_catalog.rs": "5bb4e45a1e8571d487c5b72e27734ba2d37ba7a00a2a64abfcaf782f37c48f47",
+    "backend/src/velora_client.rs": "06bcecdcc6c0421cc9c88075ac08b306a0958f41eb8a531c0cf25b149e26d21c",
+    "backend/src/pimlico_client.rs": "ca290755b614525d13470348fd18080d674fe4a73db3ef6713f2231faa79f9c6",
+    "backend/src/gas_bidder.rs": "d8367df4b72c8d2805b3c27a2bd159ab8f2320718178bdff899ed2907ff0f72c",
+    "backend/src/mev_guard.rs": "dc70a54d2d5c19507cfba8646e0725bda2f5e3143a99aaa3f3c8e7104564b39c",
+    "backend/src/paper_trader.rs": "4dcef830f25e73ccb2a7a4356e5300a095b39e7e90fbae0d9000fb8a1e379438",
+    "backend/src/portfolio_manager.rs": "6eb17a375891388b9351649db37dc55b8cf42bbd38893165c944afeca232edca",
+    "backend/src/rules_engine.rs": "3ef78820edc58ed512261d3da55e6b7b8be6e2d754f5685481c7e2f5714357c2",
+    "backend/src/profit_splitter.rs": "1431e6ae17f8656c00c113f246c718a876eccc6c9ac6241e5581e50ee7215edf",
+    "backend/src/profit_transfer.rs": "e2cfb188c8e5c6bdb0fdc8e8dbb3303c199a4df5b8a895f8c7ff708442d268ac",
+    "backend/src/alert_manager.rs": "62b3aa0c8c75cb23e4d35ee0d229e94fda52a9a656dda2872c5fee31881b8361",
+    "backend/src/main.rs": "1fff374ec9330840fefa8bf5e9c6cd0460f2040bc2991ca952d3a74a3d298cbd",
+    "backend/src/api.rs": "a77201c5c0a5c66579eb1c0a5973fe8b4ea9222a9811b56627858c97b07edcd3",
+    "backend/src/config.rs": "58fe5d000fb8e8ae3afff476d19d59702d12a79b373b3eacf5128761718230f6",
+    "backend/src/types.rs": "884fcec77726e4c1f86309f805103a1de3e49d7857b0981a4478bc363e39c791",
+    "backend/src/websocket.rs": "3a49e5a56a477357e355e59cfbff39621f7ced185652f16174be160794f0a79d",
+    "backend/src/discovery.rs": "f928ce0919e7d40332322ba6a0e569c66fff7386c93b484303449eb81013eece",
+    "backend/src/etherscan.rs": "a468f8c1f599b5c22c198716d1570ce8c803ac6ae5bbcb0bffc687a37105c674",
+    "contracts/src/ZeroRiskArb.sol": "fa5fc0fcaa33a084c033dbcc724c9a3c0bbd9640fd95dd4287e42cffe01a3dab",
+    "contracts/src/ZeroRiskArb.t.sol": "7e4a713eac45e9ba916e8e7cb09f1710a8924ea7b23dca1236ef2b3a78d05ab1",
+    "contracts/src/interfaces/IAaveV3Pool.sol": "fc59cdb39b09245f0cf5f05f14e1dc7eca5f502a94c98628b3422a2e1197b04d",
+    "contracts/src/interfaces/IBalancerVault.sol": "59338bc6687df1cbfb5a18eb19b8b236275950a385e0d112215bf2b416fd70fa",
+    "contracts/src/interfaces/IDssFlash.sol": "6d3f2063809ff390819cea5fa2d3d94a3cfa8ccf8d71d8989bdf1dc4108a92d6",
+    "contracts/src/interfaces/IERC20.sol": "8b7e4140831ce767aef230de9d3ee34530e51130368ceea7e059ee54c888bdfb",
+    "contracts/src/interfaces/IMorphoBlue.sol": "5d863f4aafad1a7f51367fa60315fc6ebeb4a2e77b49ac06f7b5efa01917220c",
+    "contracts/src/interfaces/IRadiantV2Pool.sol": "0ef986baf610e834891f297ae12acade41775c67928fff618b2c6c0bab3d0058",
+    "contracts/src/interfaces/ISparkPool.sol": "703894eecad901b4c1c2a4c63f52ecb85abaa70501fc58397a6e23abb23613e4",
+    "contracts/src/interfaces/IUniswapV3Flash.sol": "dd413eb1a30da1c55ed670600af49e31651042cbfc9b2087ceb86f3c66471cb3",
+    "contracts/src/interfaces/IVeloraAugustus.sol": "110b8f3aac9d2d14b522bd966531fa7ea813e4704b902129aed7f8429a2ff5a1"
+  }
+}
