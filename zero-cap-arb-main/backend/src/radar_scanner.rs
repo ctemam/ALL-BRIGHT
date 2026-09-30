@@ -498,7 +498,7 @@ impl RadarScanner {
         {
             Ok(s) => s,
             Err(e) => {
-                debug!(token = %opp.token, chain = %opp.chain_name, error = %e,
+                info!(token = %opp.token, chain = %opp.chain_name, error = %e,
                     "Velora buy-leg quote failed");
                 return None;
             }
@@ -522,7 +522,7 @@ impl RadarScanner {
         {
             Ok(s) => s,
             Err(e) => {
-                debug!(token = %opp.token, chain = %opp.chain_name, error = %e,
+                info!(token = %opp.token, chain = %opp.chain_name, error = %e,
                     "Velora sell-leg quote failed");
                 return None;
             }
@@ -539,10 +539,11 @@ impl RadarScanner {
         let actual_profit_usd = profit_weth * native_usd;
 
         if actual_profit_usd <= 0.0 {
-            debug!(
+            info!(
                 token = %opp.token, chain = %opp.chain_name,
                 spent_weth = format!("{:.6}", spent_wei / 1e18),
                 received_weth = format!("{:.6}", received_wei / 1e18),
+                loss_usd = format!("${:.4}", -actual_profit_usd),
                 scanner_est = format!("${:.2}", opp.profit_breakdown.net_profit_usd),
                 "Velora round-trip not profitable — candidate rejected"
             );
@@ -1356,7 +1357,15 @@ impl RadarScanner {
                         _ => 500.0,                                   // Mainnet/BSC/Avax: $500
                     };
 
-                    if spread_pct >= self.min_spread_pct {
+                    // Chain-aware minimum spread: L2s with cheap gas can
+                    // profit on tighter spreads than mainnet.
+                    let chain_min_spread = match chain.id {
+                        42161 | 10 | 8453 | 59144 | 100 => 0.10, // L2s: 0.10%
+                        137 | 42220 => 0.15,                       // Polygon/Celo: 0.15%
+                        _ => self.min_spread_pct,                   // Mainnet/BSC/Avax: 0.30%
+                    };
+
+                    if spread_pct >= chain_min_spread {
                         let native_usd = self.native_usd_rate(chain.id);
                         let Some(native_usd) = native_usd else {
                             debug!(
