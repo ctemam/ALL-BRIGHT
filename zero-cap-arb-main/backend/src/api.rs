@@ -158,13 +158,28 @@ async fn live_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let profitable = opps.iter().filter(|o| o.profit_breakdown.is_profitable).count();
     let total_net: f64 = opps.iter().map(|o| o.profit_breakdown.net_profit_usd).sum();
     let cumulative = state.scanner.cumulative_profit_usd();
+    let accrued = state.profit_transfer.accrued_usd().await;
+
+    // Per-chain breakdown
+    let mut by_chain = std::collections::BTreeMap::new();
+    for opp in &opps {
+        let entry = by_chain
+            .entry(opp.chain_name.clone())
+            .or_insert_with(|| serde_json::json!({"count": 0, "net_usd": 0.0}));
+        entry["count"] = serde_json::json!(entry["count"].as_i64().unwrap_or(0) + 1);
+        let prev = entry["net_usd"].as_f64().unwrap_or(0.0);
+        entry["net_usd"] = serde_json::json!(prev + opp.profit_breakdown.net_profit_usd);
+    }
+
     Json(serde_json::json!({
         "scanner": "running",
         "live_opportunities": opps.len(),
         "profitable": profitable,
         "current_cycle_net_usd": total_net,
         "cumulative_profit_usd": cumulative,
+        "accrued_for_transfer_usd": accrued,
         "uptime_secs": state.start_time.elapsed().as_secs(),
+        "by_chain": by_chain,
     }))
 }
 
@@ -841,44 +856,45 @@ async fn get_llm_advice(
 // â”€â”€â”€ Liquidity Data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async fn get_liquidity_data(State(state): State<AppState>) -> Json<LiquidityMapResponse> {
-    // Gather liquidity from all chains
-    let chains = crate::chains::get_chains();
+    // Build liquidity data from the live scanner's opportunity cache.
+    let opps = state.scanner.latest_opportunities();
     let mut data_points = Vec::new();
-    let mut by_chain = Vec::new();
+    let mut chain_totals: std::collections::BTreeMap<u64, (String, f64, std::collections::HashSet<String>, usize)> =
+        std::collections::BTreeMap::new();
 
-    for chain in chains {
-        let dexes = crate::chains::get_dexes_for_chain(chain.id);
-        let chain_liq: f64 = dexes
-            .iter()
-            .enumerate()
-            .map(|(i, dex)| {
-                // In production: query on-chain reserves via multicall
-                // Here: simulated liquidity distribution
-                let simulated = 100_000.0 + (chain.id as f64 * 50_000.0) + (i as f64 * 10_000.0);
-                data_points.push(LiquidityDataPoint {
-                    chain_id: chain.id,
-                    chain_name: chain.name.clone(),
-                    dex_name: dex.name.clone(),
-                    token: "USDC".to_string(),
-                    token_address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(),
-                    liquidity_usd: simulated,
-                    price_usd: 1.0,
-                    volume_24h_usd: simulated * 2.5,
-                    pool_address: dex.address.clone(),
-                });
-                simulated
-            })
-            .sum();
-
-        by_chain.push(LiquidityChainSummary {
-            chain_id: chain.id,
-            chain_name: chain.name.clone(),
-            total_liquidity_usd: chain_liq,
-            dex_count: dexes.len(),
-            token_count: 1,
-            percentage: 0.0,
-        });
+    for opp in &opps {
+        if let Some(buy_dex) = &opp.buy_dex {
+            data_points.push(LiquidityDataPoint {
+                chain_id: opp.chain_id,
+                chain_name: opp.chain_name.clone(),
+                dex_name: buy_dex.clone(),
+                token: opp.token.clone(),
+                token_address: opp.token_address.clone(),
+                liquidity_usd: opp.liquidity_usd,
+                price_usd: opp.buy_price,
+                volume_24h_usd: 0.0, // not available from scanner
+                pool_address: String::new(),
+            });
+        }
+        let entry = chain_totals
+            .entry(opp.chain_id)
+            .or_insert_with(|| (opp.chain_name.clone(), 0.0, std::collections::HashSet::new(), 0));
+        entry.1 += opp.liquidity_usd;
+        entry.2.insert(opp.token.clone());
+        entry.3 += 1;
     }
+
+    let mut by_chain: Vec<LiquidityChainSummary> = chain_totals
+        .iter()
+        .map(|(chain_id, (name, liq, tokens, _count))| LiquidityChainSummary {
+            chain_id: *chain_id,
+            chain_name: name.clone(),
+            total_liquidity_usd: *liq,
+            dex_count: crate::chains::get_dexes_for_chain(*chain_id).len(),
+            token_count: tokens.len(),
+            percentage: 0.0,
+        })
+        .collect();
 
     let total: f64 = by_chain.iter().map(|c| c.total_liquidity_usd).sum();
     for c in &mut by_chain {
@@ -900,116 +916,30 @@ async fn get_liquidity_data(State(state): State<AppState>) -> Json<LiquidityMapR
 // â”€â”€â”€ Bubble Chart â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async fn get_bubble_data(State(state): State<AppState>) -> Json<Vec<BubbleData>> {
-    let tokens = vec![
-        (
-            "DAI",
-            "0x6B175474E89094C44Da98b954EedeAC495271d0F",
-            1.00,
-            5_000_000_000.0,
-        ),
-        (
-            "USDC",
-            "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-            1.00,
-            4_500_000_000.0,
-        ),
-        (
-            "USDT",
-            "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-            1.00,
-            6_000_000_000.0,
-        ),
-        (
-            "WETH",
-            "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-            3450.0,
-            8_000_000_000.0,
-        ),
-        (
-            "WBTC",
-            "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
-            67800.0,
-            3_500_000_000.0,
-        ),
-        (
-            "MATIC",
-            "0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0",
-            0.72,
-            1_200_000_000.0,
-        ),
-        (
-            "LINK",
-            "0x514910771AF9Ca656af840dff83E8264EcF986CA",
-            18.50,
-            800_000_000.0,
-        ),
-        (
-            "UNI",
-            "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
-            12.30,
-            600_000_000.0,
-        ),
-        (
-            "AAVE",
-            "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
-            145.0,
-            400_000_000.0,
-        ),
-        (
-            "ARB",
-            "0xB50721BCf8d664c30412Cf6036cB7b561B04C0e9",
-            1.85,
-            350_000_000.0,
-        ),
-        (
-            "OP",
-            "0x4200000000000000000000000000000000000042",
-            3.20,
-            280_000_000.0,
-        ),
-        (
-            "CRV",
-            "0xD533a949740bb3306d119CC777fa900bA034cd52",
-            0.85,
-            220_000_000.0,
-        ),
-    ];
-
-    let chains = crate::chains::get_chains();
+    // Build bubble chart from live scanner opportunities — no fabricated data.
+    let opps = state.scanner.latest_opportunities();
     let mut bubbles = Vec::new();
-    for (ticker, addr, price, mcap) in tokens {
-        for chain in chains {
-            let liq = mcap * 0.01 * (chain.id as f64 % 5.0 + 0.5);
-            let has_opp = chain.id % 2 == 0;
-            bubbles.push(BubbleData {
-                token: ticker.to_string(),
-                symbol: ticker.to_string(),
-                price_usd: price,
-                liquidity_usd: liq,
-                market_cap_usd: mcap,
-                chain_name: chain.name.clone(),
-                chain_id: chain.id,
-                has_opportunity: has_opp,
-                opportunity_types: if has_opp {
-                    vec![ArbitrageType::Simple]
-                } else {
-                    vec![]
-                },
-                best_spread_pct: if has_opp {
-                    1.2 + (chain.id as f64 * 0.1) % 5.0
-                } else {
-                    0.0
-                },
-                volume_24h_usd: liq * 3.0,
-                // No market-data source yet (P0-1); this used to be a fake float-range sum.
-                price_change_24h_pct: 0.0,
-                dexes_available: crate::chains::get_dexes_for_chain(chain.id)
-                    .iter()
-                    .map(|d| d.name.clone())
-                    .collect(),
-                bubble_size: (liq / 1_000_000.0).sqrt().min(100.0),
-            });
-        }
+
+    for opp in &opps {
+        bubbles.push(BubbleData {
+            token: opp.token.clone(),
+            symbol: opp.token.clone(),
+            price_usd: opp.buy_price,
+            liquidity_usd: opp.liquidity_usd,
+            market_cap_usd: 0.0, // not available from on-chain scanner
+            chain_name: opp.chain_name.clone(),
+            chain_id: opp.chain_id,
+            has_opportunity: opp.profit_breakdown.is_profitable,
+            opportunity_types: vec![opp.arbitrage_type.clone()],
+            best_spread_pct: opp.spread_pct,
+            volume_24h_usd: 0.0,
+            price_change_24h_pct: 0.0,
+            dexes_available: crate::chains::get_dexes_for_chain(opp.chain_id)
+                .iter()
+                .map(|d| d.name.clone())
+                .collect(),
+            bubble_size: (opp.liquidity_usd / 1_000.0).sqrt().min(100.0),
+        });
     }
 
     Json(bubbles)

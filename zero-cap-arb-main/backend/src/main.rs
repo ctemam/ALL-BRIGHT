@@ -252,8 +252,18 @@ async fn main() {
 
     let app = build_router(state.clone()).layer(CorsLayer::permissive());
 
-    // Start the AUTO profit sweep. This is a no-op unless PROFIT_TRANSFER_MODE
-    // is explicitly AUTO; MANUAL is the default and nothing moves on its own.
+    // Start the AUTO profit sweep. Defaults to AUTO when PROFIT_WALLET is
+    // set and PROFIT_TRANSFER_MODE is not explicitly MANUAL.
+    {
+        let cfg = state.profit_transfer.config().await;
+        info!(
+            auto = cfg.auto,
+            min_usd = cfg.min_usd,
+            destinations = cfg.destinations.len(),
+            interval_secs = cfg.interval_secs,
+            "profit transfer config loaded"
+        );
+    }
     state.profit_transfer.spawn_auto_sweep();
 
     // Start the continuous scanner. It refreshes native/USD rates from on-chain

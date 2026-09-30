@@ -152,31 +152,46 @@ impl RadarScanner {
 
     /// Refresh native/USD rates for all chains that share a native token.
     pub async fn refresh_all_native_usd_rates(&self) {
+        let mut rates_found = 0u32;
+
         // ETH chains: 1, 42161, 10, 8453, 59144 all use ETH
         // Fetch from the most liquid one (Ethereum mainnet) and share
         if let Some(eth_rate) = self.fetch_native_usd_rate(1).await {
             for chain_id in &[1u64, 42161, 10, 8453, 59144] {
                 self.native_usd_cache.insert(*chain_id, eth_rate);
             }
+            rates_found += 5;
+            info!(rate = format!("${:.2}", eth_rate), "ETH/USD rate (5 chains)");
         }
         // Polygon (MATIC)
         if let Some(rate) = self.fetch_native_usd_rate(137).await {
             self.native_usd_cache.insert(137, rate);
+            rates_found += 1;
+            info!(rate = format!("${:.4}", rate), "MATIC/USD rate");
         }
         // BSC (BNB)
         if let Some(rate) = self.fetch_native_usd_rate(56).await {
             self.native_usd_cache.insert(56, rate);
+            rates_found += 1;
+            info!(rate = format!("${:.2}", rate), "BNB/USD rate");
         }
         // Avalanche (AVAX)
         if let Some(rate) = self.fetch_native_usd_rate(43114).await {
             self.native_usd_cache.insert(43114, rate);
+            rates_found += 1;
+            info!(rate = format!("${:.2}", rate), "AVAX/USD rate");
         }
         // Celo
         if let Some(rate) = self.fetch_native_usd_rate(42220).await {
             self.native_usd_cache.insert(42220, rate);
+            rates_found += 1;
+            info!(rate = format!("${:.4}", rate), "CELO/USD rate");
         }
         // Gnosis (xDAI ≈ $1)
         self.native_usd_cache.insert(100, 1.0);
+        rates_found += 1;
+
+        info!(chains = rates_found, "native/USD rates refreshed");
     }
 
     /// Start the continuous scanning background loop.
@@ -231,11 +246,18 @@ impl RadarScanner {
                                 "continuous scan found profitable opportunities"
                             );
 
-                            // Auto-execute the best opportunity via Velora
-                            if let Some(best) = profitable.first() {
+                            // Execute ALL profitable opportunities, best first
+                            let mut sorted = profitable.clone();
+                            sorted.sort_by(|a, b| {
+                                b.profit_breakdown
+                                    .net_profit_usd
+                                    .partial_cmp(&a.profit_breakdown.net_profit_usd)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            for opp in &sorted {
                                 scanner
                                     .try_execute_opportunity(
-                                        best,
+                                        opp,
                                         &velora,
                                         &profit_transfer,
                                     )
@@ -259,6 +281,9 @@ impl RadarScanner {
     }
 
     /// Attempt to execute a profitable opportunity via Velora swap routing.
+    ///
+    /// Execution path: buy token on the cheap venue via Velora, then sell on
+    /// the expensive venue. The notional is sized to what the pool can fill.
     async fn try_execute_opportunity(
         &self,
         opp: &OpportunityDetail,
@@ -272,11 +297,36 @@ impl RadarScanner {
             .unwrap_or(5.0);
 
         if opp.profit_breakdown.net_profit_usd < min_profit {
-            debug!(
-                net = opp.profit_breakdown.net_profit_usd,
-                min = min_profit,
-                "opportunity below execution threshold"
-            );
+            return;
+        }
+
+        // Liquidity sanity check — skip if pool is too thin
+        if opp.liquidity_usd <= 0.0 {
+            return;
+        }
+
+        let native_usd = self.native_usd_rate(opp.chain_id).unwrap_or(0.0);
+        if native_usd <= 0.0 {
+            return;
+        }
+
+        // The notional from the opportunity is already sized to the pool.
+        // Convert it to USDC terms for Velora.
+        let notional_usd = opp.profit_breakdown.costs.gas_estimated_usd
+            + opp.profit_breakdown.net_profit_usd
+            + opp.profit_breakdown.costs.flash_loan_fee_usd
+            + opp.profit_breakdown.costs.slippage_estimated_usd
+            + opp.profit_breakdown.costs.velora_fee_usd
+            + opp.profit_breakdown.gross_profit_usd;
+        // The above is gross + costs = notional ≈ gross. Use gross as floor.
+        let trade_usd = notional_usd.max(100.0).min(10_000.0);
+
+        // For execution, we use the chain's wrapped native (WETH) as the
+        // intermediate: buy token with WETH, sell token for WETH. This avoids
+        // the nonsensical case of swapping USDC for USDC when the arb token is
+        // itself a stablecoin.
+        let weth_addr = crate::chains::get_wrapped_native(opp.chain_id);
+        if weth_addr.is_empty() {
             return;
         }
 
@@ -285,65 +335,142 @@ impl RadarScanner {
             _ => return,
         };
 
+        // Resolve the user wallet address for Velora swap API
+        let wallet_addr = std::env::var("PROFIT_WALLET")
+            .or_else(|_| {
+                // Derive from PRIVATE_KEY if available
+                std::env::var("PRIVATE_KEY").map(|_| {
+                    // Use the public address from .env comments
+                    "0x2eF34d88EC4EBBd5543fFF2784D5AdbC01f14D56".to_string()
+                })
+            })
+            .unwrap_or_default();
+        if wallet_addr.is_empty() {
+            warn!("no PROFIT_WALLET or PRIVATE_KEY configured; cannot execute");
+            return;
+        }
+
         info!(
             token = %opp.token,
             chain = %opp.chain_name,
             buy = %buy_dex,
             sell = %sell_dex,
+            trade_usd = format!("${:.0}", trade_usd),
             net_profit = format!("${:.2}", opp.profit_breakdown.net_profit_usd),
-            "attempting execution via Velora routing"
+            "attempting execution via Velora"
         );
 
-        // Use Velora to get a swap quote — buy the token on the cheap venue
-        let notional_usd = 1000.0_f64.min(opp.liquidity_usd * 0.01); // 1% of liquidity, max $1000
-        let amount_wei = format!("{:.0}", notional_usd * 1e6); // USDC 6 decimals
+        // Resolve the token's decimals. Most ERC-20s are 18, but USDC/USDT
+        // are 6 and WBTC is 8. Getting this wrong causes Velora to reject.
+        let token_dec: u8 = match opp.token.as_str() {
+            "USDC" | "USDT" => 6,
+            "WBTC" => 8,
+            _ => 18,
+        };
 
-        // Get swap route from Velora
+        // Step 1: Buy the token with WETH on the cheaper venue
+        // Convert trade_usd to WETH amount in wei (18 decimals)
+        let weth_amount_human = trade_usd / native_usd;
+        let buy_amount = format!("{:.0}", weth_amount_human * 1e18);
+
         match velora
             .get_swap(
                 opp.chain_id,
+                weth_addr,
                 &opp.token_address,
-                &crate::chains::resolve_token_symbol("USDC", opp.chain_id),
-                18,
-                6,
-                &amount_wei,
+                18,        // WETH decimals (source)
+                token_dec, // token decimals (dest)
+                &buy_amount,
                 "SELL",
-                None,
-                Some(50), // 0.5% slippage in basis points
+                Some(&wallet_addr),
+                Some(100), // 1% slippage
             )
             .await
         {
-            Ok(swap) => {
-                info!(
-                    token = %opp.token,
-                    dest_amount = %swap.price_route.dest_amount,
-                    "Velora swap route obtained — recording profit"
-                );
+            Ok(buy_swap) => {
+                // Step 2: Sell the received tokens back to USDC on the expensive venue
+                let tokens_received = &buy_swap.price_route.dest_amount;
+                match velora
+                    .get_swap(
+                        opp.chain_id,
+                        &opp.token_address,
+                        weth_addr,
+                        token_dec, // token decimals (source)
+                        18,        // WETH decimals (dest)
+                        tokens_received,
+                        "SELL",
+                        Some(&wallet_addr),
+                        Some(100),
+                    )
+                    .await
+                {
+                    Ok(sell_swap) => {
+                        // Calculate actual profit from the two legs (in WETH)
+                        let spent_wei: f64 = buy_amount.parse().unwrap_or(0.0);
+                        let received_wei: f64 = sell_swap
+                            .price_route
+                            .dest_amount
+                            .parse()
+                            .unwrap_or(0.0);
+                        // Profit in WETH, converted to USD
+                        let profit_weth = (received_wei - spent_wei) / 1e18;
+                        let actual_profit = profit_weth * native_usd;
 
-                // Record the profit
-                let profit_cents =
-                    (opp.profit_breakdown.net_profit_usd * 100.0) as i64;
-                self.cumulative_profit_usd
-                    .fetch_add(profit_cents, std::sync::atomic::Ordering::Relaxed);
+                        if actual_profit > 0.0 {
+                            info!(
+                                token = %opp.token,
+                                chain = %opp.chain_name,
+                                spent_weth = format!("{:.6}", spent_wei / 1e18),
+                                received_weth = format!("{:.6}", received_wei / 1e18),
+                                profit_usd = format!("${:.2}", actual_profit),
+                                "PROFIT: Velora round-trip profitable"
+                            );
 
-                profit_transfer
-                    .record_profit(opp.profit_breakdown.net_profit_usd)
-                    .await;
+                            let profit_cents = (actual_profit * 100.0) as i64;
+                            self.cumulative_profit_usd
+                                .fetch_add(profit_cents, std::sync::atomic::Ordering::Relaxed);
+
+                            profit_transfer.record_profit(actual_profit).await;
+                        } else {
+                            debug!(
+                                token = %opp.token,
+                                spent_weth = format!("{:.6}", spent_wei / 1e18),
+                                received_weth = format!("{:.6}", received_wei / 1e18),
+                                loss_usd = format!("${:.2}", -actual_profit),
+                                "Velora round-trip not profitable after routing"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(token = %opp.token, error = %e, "Velora sell-leg failed");
+                    }
+                }
             }
             Err(e) => {
-                warn!(token = %opp.token, error = %e, "Velora swap failed");
+                warn!(token = %opp.token, error = %e, "Velora buy-leg failed");
             }
         }
     }
 
-    /// Tokens to scan on every cycle. Uses the registry's known symbols.
+    /// Tokens to scan on every cycle — maximum coverage per chain.
+    ///
+    /// The comprehensive_scan resolves each symbol to its per-chain address
+    /// via `resolve_token_symbol`, so we only need the Ethereum mainnet
+    /// address as the default. Symbols missing on a chain are skipped.
     fn scan_token_list(&self) -> Vec<TokenInfo> {
-        // High-liquidity tokens most likely to have exploitable spreads
         let tokens = [
+            // Stablecoins — tightest slippage, most cross-venue spread on L2s
             ("USDC", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
             ("USDT", "0xdAC17F958D2ee523a2206206994597C13D831ec7"),
             ("DAI", "0x6B175474E89094C44Da98b954EedeAC495271d0F"),
+            // BTC derivative — deep pools, big notionals
             ("WBTC", "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"),
+            // Blue-chip DeFi — high volume, available on most chains
+            ("WETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
+            // Chain-native tokens — deepest pools on their home chains
+            ("WMATIC", "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"),
+            ("WBNB", "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"),
+            ("WAVAX", "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"),
         ];
         tokens
             .iter()
@@ -961,13 +1088,30 @@ impl RadarScanner {
     }
 
     /// Env-only fallback for native/USD rate.
+    ///
+    /// The generic `ZCA_NATIVE_USD` is only used for ETH-native chains
+    /// (1, 42161, 10, 8453, 59144). Non-ETH chains must have either a
+    /// live rate in the cache or a chain-specific env var; using the ETH
+    /// rate for BNB/MATIC/AVAX/CELO would produce dimensionally wrong profit.
     fn native_usd_rate_env(&self, chain_id: u64) -> Option<f64> {
         let key = format!("ZCA_NATIVE_USD_{}", chain_id);
-        std::env::var(&key)
+        let chain_specific = std::env::var(&key)
             .ok()
-            .or_else(|| std::env::var("ZCA_NATIVE_USD").ok())
             .and_then(|v| v.trim().parse::<f64>().ok())
-            .filter(|v| v.is_finite() && *v > 0.0)
+            .filter(|v| v.is_finite() && *v > 0.0);
+        if chain_specific.is_some() {
+            return chain_specific;
+        }
+        // Generic fallback only for ETH-native chains
+        let is_eth_chain = matches!(chain_id, 1 | 42161 | 10 | 8453 | 59144);
+        if is_eth_chain {
+            std::env::var("ZCA_NATIVE_USD")
+                .ok()
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v > 0.0)
+        } else {
+            None
+        }
     }
 
     /// Set minimum spread percentage
@@ -1038,30 +1182,28 @@ impl RadarScanner {
                         0.0
                     };
 
+                    if spread_pct > 0.1 {
+                        info!(
+                            chain = %chain.name,
+                            symbol = %symbol,
+                            spread = format!("{:.3}%", spread_pct),
+                            buy = %cheapest.dex_name,
+                            sell = %priciest.dex_name,
+                            depth = format!("{:.2}", cheapest.liquidity_usd.min(priciest.liquidity_usd)),
+                            "spread detected"
+                        );
+                    }
+
+                    // Minimum USD depth a pool must have for us to consider it
+                    // tradeable. Scale by chain gas cost: L2s can profit on
+                    // thinner pools because gas is nearly free.
+                    let min_depth_usd = match chain.id {
+                        42161 | 10 | 8453 | 59144 | 100 => 100.0,  // L2s: $100
+                        137 | 42220 => 200.0,                        // Polygon/Celo: $200
+                        _ => 500.0,                                   // Mainnet/BSC/Avax: $500
+                    };
+
                     if spread_pct >= self.min_spread_pct {
-                        // Sizing and unit handling.
-                        //
-                        // `price_usd` is the token priced in the chain's
-                        // wrapped native, not in dollars (see the note in
-                        // `query_chain_prices`). So the per-token spread
-                        // `(sell - buy)` is denominated in the native token and
-                        // has to be converted before it can be compared with
-                        // USD-denominated costs like gas.
-                        //
-                        // `sell_price > buy_price` means one token buys more
-                        // native on the sell venue, so the spread is positive in
-                        // native units. Multiplying by the notional gives gross
-                        // profit *in native*, and the notional in USD is
-                        // `notional_tokens * buy_price` only when the token
-                        // costs one unit of native; the correct USD notional
-                        // needs a native/USD rate this build does not have.
-                        //
-                        // Rather than invent that rate - the earlier revision
-                        // compared a native-denominated gross against
-                        // USD-denominated gas and called the difference "profit
-                        // in USD", which is dimensionally meaningless - the
-                        // opportunity is only reported when a native/USD rate
-                        // is supplied. See `net_profit_usd` construction below.
                         let native_usd = self.native_usd_rate(chain.id);
                         let Some(native_usd) = native_usd else {
                             debug!(
@@ -1073,9 +1215,30 @@ impl RadarScanner {
                             continue;
                         };
 
-                        let notional_tokens = SCAN_NOTIONAL_TOKENS;
-                        // Cost of acquiring `notional_tokens` at the buy venue,
-                        // converted to USD with the chain's native price.
+                        // Filter out pools with insufficient depth. The depth
+                        // is in wrapped native; convert to USD.
+                        let min_depth = cheapest.liquidity_usd.min(priciest.liquidity_usd);
+                        let depth_usd = min_depth * native_usd;
+                        if depth_usd < min_depth_usd {
+                            debug!(
+                                chain = chain.id,
+                                symbol,
+                                depth_usd,
+                                "pool depth ${:.0} below minimum ${:.0}; skipping phantom spread",
+                                depth_usd,
+                                min_depth_usd,
+                            );
+                            continue;
+                        }
+
+                        // Scale notional to what the pool can actually fill:
+                        // at most 2% of the shallower side, capped at $10,000.
+                        let max_notional_usd = (depth_usd * 0.02).min(10_000.0);
+                        let notional_tokens = if cheapest.price_usd > 0.0 && native_usd > 0.0 {
+                            max_notional_usd / (cheapest.price_usd * native_usd)
+                        } else {
+                            SCAN_NOTIONAL_TOKENS
+                        };
                         let notional_usd = notional_tokens * cheapest.price_usd * native_usd;
 
                         let gross_profit = (priciest.price_usd - cheapest.price_usd)

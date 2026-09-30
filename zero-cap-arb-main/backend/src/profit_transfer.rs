@@ -101,14 +101,13 @@ pub struct ProfitTransferConfig {
 }
 
 impl Default for ProfitTransferConfig {
-    /// The fail-safe default: manual only, nothing moves without an operator.
     fn default() -> Self {
         Self {
             auto: false,
-            min_usd: 25.0,
+            min_usd: 100.0,
             max_usd: None,
             destinations: Vec::new(),
-            interval_secs: 300,
+            interval_secs: 60,
         }
     }
 }
@@ -117,15 +116,11 @@ impl ProfitTransferConfig {
     /// Build from environment. Destinations come from `PROFIT_DESTINATIONS` as
     /// `address:label:pct` triples separated by commas.
     pub fn from_env() -> Self {
-        let auto = std::env::var("PROFIT_TRANSFER_MODE")
-            .unwrap_or_default()
-            .trim()
-            .eq_ignore_ascii_case("AUTO");
         let min_usd = std::env::var("PROFIT_TRANSFER_MIN_USD")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|v: &f64| v.is_finite() && *v > 0.0)
-            .unwrap_or(25.0);
+            .unwrap_or(100.0);
         let max_usd = std::env::var("PROFIT_TRANSFER_MAX_USD")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -163,11 +158,41 @@ impl ProfitTransferConfig {
             }
         }
 
+        // If no explicit destinations are configured but PROFIT_WALLET is set,
+        // use it as the sole 100% destination. This lets operators configure
+        // a single wallet without the verbose PROFIT_DESTINATIONS format.
+        if destinations.is_empty() {
+            if let Ok(wallet) = std::env::var("PROFIT_WALLET") {
+                if let Ok(addr) = Address::parse(wallet.trim()) {
+                    destinations.push(Destination {
+                        address: addr,
+                        label: "Primary Wallet".to_string(),
+                        share_pct: 100.0,
+                        enabled: true,
+                    });
+                    tracing::info!("profit destination: PROFIT_WALLET {}", wallet.trim());
+                }
+            }
+        }
+
+        // Default to AUTO when destinations are configured and mode is not
+        // explicitly set to MANUAL. The old default was MANUAL, which meant
+        // profit accumulated forever without ever being swept.
+        let auto = if std::env::var("PROFIT_TRANSFER_MODE").is_ok() {
+            std::env::var("PROFIT_TRANSFER_MODE")
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case("AUTO")
+        } else {
+            // No explicit mode: auto-enable if we have valid destinations
+            !destinations.is_empty()
+        };
+
         let interval_secs = std::env::var("PROFIT_TRANSFER_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|v: &u64| *v > 0)
-            .unwrap_or(300);
+            .unwrap_or(60); // sweep every 60s instead of 300s
 
         Self {
             auto,

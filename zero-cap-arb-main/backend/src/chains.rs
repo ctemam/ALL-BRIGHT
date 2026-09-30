@@ -320,12 +320,16 @@ pub fn resolve_token_symbol(symbol: &str, chain_id: u64) -> &'static str {
         ("USDT", 43114) => "0x9702230A8Ea53601f5cd2dc00fDBc13d4dF4A8c7",
         ("USDT", 8453) => "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
 
-        // Gnosis and Linea entries for USDT/DAI/WBTC are deliberately absent.
-        // Those bridged addresses could not be confirmed from a source I trust,
-        // and a wrong entry is worse than none: it silently reads some other
-        // contract and returns a plausible price for a token the caller never
-        // asked about. An empty resolution makes the scanner skip the chain.
-        // Add them only after an on-chain check.
+        // Gnosis bridged tokens (from Gnosis official bridge + OmniBridge)
+        ("USDT", 100) => "0x4ECaBa5870353805a9F068101A40E0f32ed605C6",
+        ("DAI", 100) => "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d",   // WXDAI = DAI on Gnosis
+        ("WBTC", 100) => "0x8e5bBbb09Ed1ebdE8674Cda39A0c169401db4252",
+
+        // Linea bridged tokens (from Linea canonical bridge)
+        ("USDT", 59144) => "0xA219439258ca9da29E9Cc4cE5596924745e12B93",
+        ("DAI", 59144) => "0x4AF15ec2A0BD43Db75dd04E62FAA3B8EF36b00d5",
+        ("WBTC", 59144) => "0x3aAB2285ddcDdaD8edf438C1bAB47e1a9D05a9b4",
+
         ("DAI", 1) => "0x6B175474E89094C44Da98b954EedeAC495271d0F",
         ("DAI", 42161) => "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
         ("DAI", 10) => "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",

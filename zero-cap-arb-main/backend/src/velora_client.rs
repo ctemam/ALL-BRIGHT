@@ -27,6 +27,8 @@ const PARTNER: &str = "zerocaparb";
 
 impl VeloraClient {
     pub fn new(api_key: Option<String>) -> Self {
+        // Filter out empty API keys — ParaSwap rejects `apiKey=` as invalid.
+        let api_key = api_key.filter(|k| !k.trim().is_empty());
         Self {
             client: Client::builder()
                 .timeout(Duration::from_secs(10))
