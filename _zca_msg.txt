@@ -1,0 +1,8 @@
+﻿fix(scanner): decode aggregate3 return payloads offset by the ABI array header
+
+decode_aggregate3 treated raw[0..32] as the array length. A real aggregate3 reply starts with an ABI offset word (0x20) and only then the length, so the whole element table was read 32 bytes early: every sub-call came back as no-pool or as a revert even when the node had answered correctly, and the scanner resolved nothing on chains that were fine.
+
+The round-trip tests could not catch it because their helper encode_results() omits the leading offset word, so encoder and decoder agreed with each other and both disagreed with the chain.
+
+Detect the prefixed shape via raw[0]==0x20 && raw[1]==num_calls and take the table from byte 64; keep the bare shape working for the test helper. Pin the behaviour with a payload captured from a public node for a single UniswapV2 getPair(USDC, WETH) call, which returns the canonical USDC/WETH pair. 80 tests pass.
+

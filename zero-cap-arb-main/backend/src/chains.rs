@@ -11,27 +11,48 @@ pub static CHAINS: OnceLock<Vec<ChainConfig>> = OnceLock::new();
 /// Or all in one:
 ///   ETH_RPC_URL="https://eth-mainnet.alchemy.io/xxx,https://mainnet.infura.io/yyy"
 fn read_rpc_urls(env_key: &str, default: &str) -> Vec<String> {
-    let primary = std::env::var(env_key).unwrap_or_else(|_| default.to_string());
+    read_rpc_urls_for_chain(env_key, default, 0)
+}
 
-    // Try splitting by comma
+/// Read env-var URLs then merge with the built-in RPC catalog so every chain
+/// has 15-27+ failover endpoints. Env-var URLs come first (operator-
+/// controlled, possibly authenticated), then the curated free public catalog.
+fn read_rpc_urls_for_chain(env_key: &str, default: &str, chain_id: u64) -> Vec<String> {
+    let primary = std::env::var(env_key).unwrap_or_else(|_| default.to_string());
+    let mut urls: Vec<String> = Vec::new();
+
+    // Env-var URLs first (operator-controlled, possibly authenticated)
     let parts: Vec<&str> = primary
         .split(',')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
     if parts.len() > 1 {
-        return parts.into_iter().map(|s| s.to_string()).collect();
+        urls.extend(parts.iter().map(|s| s.to_string()));
+    } else {
+        urls.push(primary);
     }
 
-    // Try numbered fallbacks: KEY_1, KEY_2, ...
-    let mut urls = vec![primary];
-    for i in 1..=3 {
+    // Numbered fallbacks: KEY_1, KEY_2, ... KEY_5
+    for i in 1..=5 {
         let fallback_key = format!("{}_{}", env_key, i);
-        match std::env::var(&fallback_key) {
-            Ok(url) => urls.push(url),
-            Err(_) => break,
+        if let Ok(url) = std::env::var(&fallback_key) {
+            let url = url.trim().to_string();
+            if !url.is_empty() {
+                urls.push(url);
+            }
         }
     }
+
+    // Merge in ALL endpoints from the built-in RPC catalog for this chain.
+    if chain_id > 0 {
+        let catalog = crate::rpc_catalog::all_default_endpoints(chain_id);
+        urls.extend(catalog);
+    }
+
+    // Deduplicate while preserving order (env-var URLs stay at front).
+    let mut seen = std::collections::HashSet::new();
+    urls.retain(|u| seen.insert(u.clone()));
 
     urls
 }
@@ -44,7 +65,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "Ethereum".to_string(),
                 rpc_url: std::env::var("ETH_RPC_URL")
                     .unwrap_or_else(|_| "https://eth.merkle.io".to_string()),
-                rpc_urls: read_rpc_urls("ETH_RPC_URL", "https://eth.merkle.io"),
+                rpc_urls: read_rpc_urls_for_chain("ETH_RPC_URL", "https://eth.merkle.io", 1),
                 native_currency: "ETH".to_string(),
                 explorer_url: "https://etherscan.io".to_string(),
             },
@@ -53,7 +74,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "Arbitrum".to_string(),
                 rpc_url: std::env::var("ARB_RPC_URL")
                     .unwrap_or_else(|_| "https://arb1.arbitrum.io/rpc".to_string()),
-                rpc_urls: read_rpc_urls("ARB_RPC_URL", "https://arb1.arbitrum.io/rpc"),
+                rpc_urls: read_rpc_urls_for_chain("ARB_RPC_URL", "https://arb1.arbitrum.io/rpc", 42161),
                 native_currency: "ETH".to_string(),
                 explorer_url: "https://arbiscan.io".to_string(),
             },
@@ -62,7 +83,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "Optimism".to_string(),
                 rpc_url: std::env::var("OP_RPC_URL")
                     .unwrap_or_else(|_| "https://mainnet.optimism.io".to_string()),
-                rpc_urls: read_rpc_urls("OP_RPC_URL", "https://mainnet.optimism.io"),
+                rpc_urls: read_rpc_urls_for_chain("OP_RPC_URL", "https://mainnet.optimism.io", 10),
                 native_currency: "ETH".to_string(),
                 explorer_url: "https://optimistic.etherscan.io".to_string(),
             },
@@ -71,7 +92,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "Polygon".to_string(),
                 rpc_url: std::env::var("POLY_RPC_URL")
                     .unwrap_or_else(|_| "https://polygon-rpc.com".to_string()),
-                rpc_urls: read_rpc_urls("POLY_RPC_URL", "https://polygon-rpc.com"),
+                rpc_urls: read_rpc_urls_for_chain("POLY_RPC_URL", "https://polygon-rpc.com", 137),
                 native_currency: "MATIC".to_string(),
                 explorer_url: "https://polygonscan.com".to_string(),
             },
@@ -80,7 +101,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "BSC".to_string(),
                 rpc_url: std::env::var("BSC_RPC_URL")
                     .unwrap_or_else(|_| "https://bsc-dataseed.binance.org".to_string()),
-                rpc_urls: read_rpc_urls("BSC_RPC_URL", "https://bsc-dataseed.binance.org"),
+                rpc_urls: read_rpc_urls_for_chain("BSC_RPC_URL", "https://bsc-dataseed.binance.org", 56),
                 native_currency: "BNB".to_string(),
                 explorer_url: "https://bscscan.com".to_string(),
             },
@@ -89,7 +110,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "Avalanche".to_string(),
                 rpc_url: std::env::var("AVAX_RPC_URL")
                     .unwrap_or_else(|_| "https://api.avax.network/ext/bc/C/rpc".to_string()),
-                rpc_urls: read_rpc_urls("AVAX_RPC_URL", "https://api.avax.network/ext/bc/C/rpc"),
+                rpc_urls: read_rpc_urls_for_chain("AVAX_RPC_URL", "https://api.avax.network/ext/bc/C/rpc", 43114),
                 native_currency: "AVAX".to_string(),
                 explorer_url: "https://snowtrace.io".to_string(),
             },
@@ -98,7 +119,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "Base".to_string(),
                 rpc_url: std::env::var("BASE_RPC_URL")
                     .unwrap_or_else(|_| "https://mainnet.base.org".to_string()),
-                rpc_urls: read_rpc_urls("BASE_RPC_URL", "https://mainnet.base.org"),
+                rpc_urls: read_rpc_urls_for_chain("BASE_RPC_URL", "https://mainnet.base.org", 8453),
                 native_currency: "ETH".to_string(),
                 explorer_url: "https://basescan.org".to_string(),
             },
@@ -107,7 +128,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "Celo".to_string(),
                 rpc_url: std::env::var("CELO_RPC_URL")
                     .unwrap_or_else(|_| "https://forno.celo.org".to_string()),
-                rpc_urls: read_rpc_urls("CELO_RPC_URL", "https://forno.celo.org"),
+                rpc_urls: read_rpc_urls_for_chain("CELO_RPC_URL", "https://forno.celo.org", 42220),
                 native_currency: "CELO".to_string(),
                 explorer_url: "https://celoscan.io".to_string(),
             },
@@ -116,7 +137,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "Gnosis".to_string(),
                 rpc_url: std::env::var("GNOSIS_RPC_URL")
                     .unwrap_or_else(|_| "https://rpc.gnosischain.com".to_string()),
-                rpc_urls: read_rpc_urls("GNOSIS_RPC_URL", "https://rpc.gnosischain.com"),
+                rpc_urls: read_rpc_urls_for_chain("GNOSIS_RPC_URL", "https://rpc.gnosischain.com", 100),
                 native_currency: "xDAI".to_string(),
                 explorer_url: "https://gnosisscan.io".to_string(),
             },
@@ -125,7 +146,7 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 name: "Linea".to_string(),
                 rpc_url: std::env::var("LINEA_RPC_URL")
                     .unwrap_or_else(|_| "https://rpc.linea.build".to_string()),
-                rpc_urls: read_rpc_urls("LINEA_RPC_URL", "https://rpc.linea.build"),
+                rpc_urls: read_rpc_urls_for_chain("LINEA_RPC_URL", "https://rpc.linea.build", 59144),
                 native_currency: "ETH".to_string(),
                 explorer_url: "https://lineascan.build".to_string(),
             },
@@ -388,6 +409,101 @@ pub fn resolve_token_symbol(symbol: &str, chain_id: u64) -> &'static str {
 
         // ---- OP (Optimism governance) — deep on Optimism -------------------
         ("OP", 10) => "0x4200000000000000000000000000000000000042",
+
+        // ---- PEPE — high-volume meme, deep V3 pools ----------------------
+        ("PEPE", 1) => "0x6982508145454Ce325dDbE47a25d4ec3d2311933",
+        ("PEPE", 42161) => "0x25d887Ce7a35172C62FeBFD67a1856F20FaEBB00",
+        ("PEPE", 56) => "0x25d887Ce7a35172C62FeBFD67a1856F20FaEBB00",
+        ("PEPE", 43114) => "0xa659d083b677d6bFFe1CB704E1473b896727BE6d",
+
+        // ---- SHIB — high-volume meme, Ethereum V3 TVL ---------------------
+        ("SHIB", 1) => "0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE",
+
+        // ---- MKR (Maker / Sky) — deep governance token --------------------
+        ("MKR", 1) => "0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2",
+        ("MKR", 137) => "0x6f7C932e7684666C9fd1d44527765433e01fF61d",
+
+        // ---- GRT (The Graph) — indexed across 4 chains --------------------
+        ("GRT", 1) => "0xc944E90C64B2c07662A292be6244BDf05Cda44a7",
+        ("GRT", 42161) => "0x9623063377AD1B27544C965cCd7342f7EA7e88C7",
+        ("GRT", 137) => "0x5fe2B58c013d7601147DcDd68C143A77499f5531",
+
+        // ---- PENDLE — yield trading, multi-chain --------------------------
+        ("PENDLE", 1) => "0x808507121B80c02388fAd14726482e061B8da827",
+        ("PENDLE", 42161) => "0x0c880f6761F1af8d9Aa9C466984b80DAb9a8c9e8",
+        ("PENDLE", 10) => "0xBC7B1Ff1c6989f006a1185318eD4E7b5796e66E1",
+        ("PENDLE", 56) => "0xb3Ed0A426155B79B898849803E3B36552f7ED507",
+        ("PENDLE", 8453) => "0xA99F6E6785da0F5d6fb42495Fe424BCE029EEB3e",
+
+        // ---- ENA (Ethena) — stablecoin ecosystem --------------------------
+        ("ENA", 1) => "0x57e114B691Db790C35207b2e685D4A43181e6061",
+        ("ENA", 42161) => "0x58538e6A46e07434d7E7375Bc268D3cb839C0133",
+        ("ENA", 8453) => "0x58538e6A46e07434d7E7375Bc268D3cb839C0133",
+        ("ENA", 10) => "0x58538e6A46e07434d7E7375Bc268D3cb839C0133",
+
+        // ---- WLD (Worldcoin) — deep on Optimism + Ethereum ----------------
+        ("WLD", 1) => "0x163f8C2467924be0ae7B5347228CABF260318753",
+        ("WLD", 10) => "0xdC6fF44d5d932Cbd77B52E5612Ba0529DC6226F1",
+
+        // ---- MORPHO — DeFi lending governance -----------------------------
+        ("MORPHO", 1) => "0x58D97B57BB95320F9a05dc918Aef65434969c2B2",
+        ("MORPHO", 8453) => "0xBAa5CC21fd487B8Fcc2F632f3F4E8D37262a0842",
+        ("MORPHO", 42161) => "0x40BD670a58238e6e230c430Bbb5ce6Ec0d40Df48",
+
+        // ---- 1INCH — DEX aggregator governance, multi-chain ---------------
+        ("1INCH", 1) => "0x111111111117dC0aa78b770fA6A738034120C302",
+        ("1INCH", 42161) => "0x6314C31A7a1652cE482cFFe247E9CB7c3f4BB9aF",
+        ("1INCH", 10) => "0xAd42D013ac31486B73b6b059e748172994736426",
+        ("1INCH", 56) => "0x111111111117dC0aa78b770fA6A738034120C302",
+        ("1INCH", 8453) => "0xc5feCc3a29Fb57B5024eEc8a2239d4621e111CBe",
+        ("1INCH", 59144) => "0x10F04e61Bd6019D6C9B0Bf4907e805a64b92EE3e",
+
+        // ---- FXS (Frax Share) — Frax ecosystem governance -----------------
+        ("FXS", 1) => "0x3432B6A60D23Ca0dFCa7761B7ab56459D9C964D0",
+        ("FXS", 42161) => "0x9d2F299715D94d8A7E6F5eAA8E654E8c74a988A7",
+        ("FXS", 137) => "0x1a3aCf6D19267E2d3e7f898f42803e90C9219062",
+        ("FXS", 56) => "0xe48A3d7d0Bc88D552f730B62c006bC925eadB9eE",
+
+        // ---- YFI (Yearn Finance) — deep DeFi governance -------------------
+        ("YFI", 1) => "0x0bc529c00C6401aEF6D220BE8C6Ea1667F6Ad93e",
+        ("YFI", 42161) => "0x82e3A8F066a6989666b031d916c43672085b1582",
+        ("YFI", 137) => "0xDA537104d6A5edd53c6fBba9A898708E465260b6",
+        ("YFI", 10) => "0x9046D36440290FfdE54FE0DD84Db8b1CfEE9107b",
+        ("YFI", 8453) => "0x9eAF8C1E34F05a589EDa6BAFdF391cf6AD3CB239",
+
+        // ---- FLOKI — high-volume meme across ETH+BSC ---------------------
+        ("FLOKI", 1) => "0xcf0C122c6b73ff809C693DB761e7BaeBe62b6a2E",
+        ("FLOKI", 56) => "0xfb5B838b6cfEEdC2873aB27866079AC55363D37E",
+
+        // ---- PYUSD (PayPal USD) — regulated stablecoin --------------------
+        ("PYUSD", 1) => "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8",
+        ("PYUSD", 137) => "0x99Af3eEa856556646c98C8b9b2548fE815240750",
+        ("PYUSD", 42161) => "0x46850Ad61c2B7d64D08C9C754F45254596696984",
+
+        // ---- RENDER — GPU compute token -----------------------------------
+        ("RENDER", 1) => "0x6De037ef9aD2725EB40118Bb1702EBb27e4Aeb24",
+
+        // ---- FET (Fetch.ai) — AI token ------------------------------------
+        ("FET", 1) => "0xaea46A60368A7bD060eec7DF8CBa43b7EF41Ad85",
+        ("FET", 56) => "0x031b41e504677879370e9DBcF937283A8691Fa7f",
+
+        // ---- CVX (Convex Finance) — Curve ecosystem -----------------------
+        ("CVX", 1) => "0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B",
+
+        // ---- IMX (Immutable X) — gaming/NFT L2 ----------------------------
+        ("IMX", 1) => "0xF57e7e7C23978C3cAEC3C3548E3D615c346e79fF",
+
+        // ---- ENS (Ethereum Name Service) ----------------------------------
+        ("ENS", 1) => "0xC18360217D8F7Ab5e7c516566761Ea12Ce7F9D72",
+
+        // ---- STRK (StarkNet) — L2 governance ------------------------------
+        ("STRK", 1) => "0xCa14007Eff0dB1f8135f4C25B34De49AB0d42766",
+
+        // ---- MNT (Mantle) — L2 governance ---------------------------------
+        ("MNT", 1) => "0x3c3a81e81dc49A522A592e7622A7E711c06bf354",
+
+        // ---- WSTETH (Wrapped stETH) — liquid staking ----------------------
+        ("WSTETH", 1) => "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
 
         _ => "",
     }

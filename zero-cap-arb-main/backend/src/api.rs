@@ -292,11 +292,11 @@ const MONITOR_HTML: &str = r##"<!DOCTYPE html>
 </div>
 
 <div class="section">
-  <h2>Trade History</h2>
+  <h2>Trade History (Etherscan-Verified)</h2>
   <table>
     <thead><tr>
       <th>Time</th><th>Chain</th><th>Token</th><th>Buy Venue</th><th>Sell Venue</th>
-      <th>Spent (WETH)</th><th>Received (WETH)</th><th>Profit</th><th>ROI</th>
+      <th>Profit</th><th>Gas</th><th>Status</th><th>Etherscan</th>
     </tr></thead>
     <tbody id="trades-body">
       <tr><td colspan="9" class="no-data">Waiting for first trade...</td></tr>
@@ -363,17 +363,29 @@ async function refresh() {
     // Trade history table
     const tb = document.getElementById('trades-body');
     if (trades.trades && trades.trades.length > 0) {
-      tb.innerHTML = trades.trades.slice(0, 50).map(t => `<tr>
-        <td>${t.timestamp}</td>
-        <td>${t.chain}</td>
-        <td><b>${t.token}</b></td>
-        <td>${t.buy_venue}</td>
-        <td>${t.sell_venue}</td>
-        <td>${t.spent_weth.toFixed(6)}</td>
-        <td>${t.received_weth.toFixed(6)}</td>
-        <td class="profit">${fmt(t.profit_usd)}</td>
-        <td>${t.roi_pct.toFixed(4)}%</td>
-      </tr>`).join('');
+      tb.innerHTML = trades.trades.slice(0, 50).map(t => {
+        const statusBadge = {
+          'Confirmed': '<span style="color:#3fb950;font-weight:600">VERIFIED</span>',
+          'Reverted': '<span style="color:#f85149;font-weight:600">REVERTED</span>',
+          'Pending': '<span style="color:#d29922">PENDING</span>',
+          'QuoteOnly': '<span style="color:#8b949e">QUOTE ONLY</span>',
+          'ExecutionFailed': '<span style="color:#f85149">EXEC FAILED</span>',
+        }[t.verified] || '<span style="color:#8b949e">-</span>';
+        const etherscanLink = t.tx_hash && t.explorer_url
+          ? '<a href="' + t.explorer_url + '" target="_blank" style="color:#58a6ff;text-decoration:none">' + t.tx_hash.slice(0,10) + '...</a>'
+          : '-';
+        return `<tr>
+          <td>${t.timestamp}</td>
+          <td>${t.chain}</td>
+          <td><b>${t.token}</b></td>
+          <td>${t.buy_venue}</td>
+          <td>${t.sell_venue}</td>
+          <td class="profit">${fmt(t.profit_usd)}</td>
+          <td>${fmt(t.gas_cost_usd || 0)}</td>
+          <td>${statusBadge}</td>
+          <td>${etherscanLink}</td>
+        </tr>`;
+      }).join('');
     }
   } catch(e) {
     console.error('refresh error:', e);

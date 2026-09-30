@@ -3,6 +3,7 @@ mod api;
 mod chains;
 mod config;
 mod discovery;
+mod etherscan;
 mod gas_bidder;
 mod mev_guard;
 mod multicall;
@@ -79,9 +80,13 @@ async fn main() {
                 ArbitrageType::CrossChain,
             ],
             flash_loan_sources: vec![
+                FlashLoanSource::BalancerV2,
+                FlashLoanSource::MorphoBlue,
+                FlashLoanSource::MakerDssFlash,
                 FlashLoanSource::Spark,
                 FlashLoanSource::AaveV3,
                 FlashLoanSource::RadiantV2,
+                FlashLoanSource::UniswapV3,
             ],
             gas_strategy: GasStrategy::Flashbots,
             max_slippage_pct: 1.0,

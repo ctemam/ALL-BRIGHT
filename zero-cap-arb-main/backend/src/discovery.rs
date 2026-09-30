@@ -388,13 +388,22 @@ impl BinanceClient {
 
         let mut prices = HashMap::new();
 
-        // We only want USDT-quoted pairs for USD-denominated prices
+        // We only want USDT-quoted pairs for USD-denominated prices.
+        // Covers every token in scan_token_list that has a Binance pair.
         let targets = [
+            // Tier 1–2: stablecoins + blue-chip
             "ETHUSDT", "BTCUSDT", "LINKUSDT", "UNIUSDT", "AAVEUSDT",
-            "LDOUSDT", "CRVUSDT", "ARBUSDT", "OPUSDT", "MATICUSDT",
-            "BNBUSDT", "AVAXUSDT", "CELOUSDT", "DAIUSDT", "PEPEUSDT",
-            "WLDUSDT", "PENDLEUSDT", "MKRUSDT", "SUSHIUSDT", "COMPUSDT",
-            "SNXUSDT", "INJUSDT", "RUNEUSDT", "GMXUSDT",
+            "MKRUSDT", "ARBUSDT", "OPUSDT", "DAIUSDT",
+            // Tier 3: DeFi governance
+            "LDOUSDT", "CRVUSDT", "PENDLEUSDT", "ENAUSDT", "GRTUSDT",
+            "1INCHUSDT", "FXSUSDT", "YFIUSDT", "CVXUSDT", "ENSUSDT",
+            "MORPHOUSDT",
+            // Tier 4: high-volume meme / narrative
+            "PEPEUSDT", "SHIBUSDT", "FLOKIUSDT", "WLDUSDT",
+            // Tier 5: L2/infra governance
+            "RENDERUSDT", "FETUSDT", "IMXUSDT", "STRKUSDT", "MNTUSDT",
+            // Chain-native
+            "MATICUSDT", "BNBUSDT", "AVAXUSDT", "CELOUSDT",
         ];
 
         for t in &tickers {
@@ -415,6 +424,7 @@ impl BinanceClient {
         prices.insert("USDC".to_string(), 1.0);
         prices.insert("USDT".to_string(), 1.0);
         prices.insert("DAI".to_string(), 1.0);
+        prices.insert("PYUSD".to_string(), 1.0);
 
         prices
     }

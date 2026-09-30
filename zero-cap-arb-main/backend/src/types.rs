@@ -265,6 +265,10 @@ pub enum FlashLoanSource {
     AaveV3,
     RadiantV2,
     Spark,
+    BalancerV2,
+    MorphoBlue,
+    MakerDssFlash,
+    UniswapV3,
 }
 
 impl FlashLoanSource {
@@ -273,19 +277,37 @@ impl FlashLoanSource {
             FlashLoanSource::AaveV3 => "Aave V3",
             FlashLoanSource::RadiantV2 => "Radiant V2",
             FlashLoanSource::Spark => "Spark Protocol",
+            FlashLoanSource::BalancerV2 => "Balancer V2 (0%)",
+            FlashLoanSource::MorphoBlue => "Morpho Blue (0%)",
+            FlashLoanSource::MakerDssFlash => "MakerDAO DssFlash (0%)",
+            FlashLoanSource::UniswapV3 => "Uniswap V3 Flash",
         }
     }
+    /// Returns the flash-loan fee as a percentage of the borrowed amount.
+    /// 0% sources: Balancer V2, Morpho Blue, MakerDAO (DAI), Spark (DAI).
     pub fn fee_pct(&self, token: &str) -> f64 {
         match self {
+            FlashLoanSource::BalancerV2 => 0.0,     // 0% always
+            FlashLoanSource::MorphoBlue => 0.0,      // 0% always
+            FlashLoanSource::MakerDssFlash => 0.0,   // 0% (DAI only, toll=0)
             FlashLoanSource::Spark => {
-                if token == "DAI" {
-                    0.0
-                } else {
-                    0.05
-                }
+                if token == "DAI" { 0.0 } else { 0.05 }
             }
             FlashLoanSource::AaveV3 => 0.05,
             FlashLoanSource::RadiantV2 => 0.03,
+            FlashLoanSource::UniswapV3 => 0.01,      // lowest pool fee tier
+        }
+    }
+    /// Contract source index used by ZeroRiskArb.execute().
+    pub fn source_id(&self) -> u8 {
+        match self {
+            FlashLoanSource::AaveV3 => 0,
+            FlashLoanSource::RadiantV2 => 1,
+            FlashLoanSource::Spark => 2,
+            FlashLoanSource::BalancerV2 => 3,
+            FlashLoanSource::MorphoBlue => 4,
+            FlashLoanSource::MakerDssFlash => 5,
+            FlashLoanSource::UniswapV3 => 6,
         }
     }
 }
