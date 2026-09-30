@@ -346,6 +346,49 @@ pub fn resolve_token_symbol(symbol: &str, chain_id: u64) -> &'static str {
         ("WBTC", 43114) => "0x50b7545627a5162F82A992c33b87aDc75187B218",
         ("WBTC", 8453) => "0x0555E30Da8f98308eB51565D3f9DeA4765DcE1D6",
 
+        // ---- LINK (Chainlink) — $12.5M Ethereum V3 TVL, $1M Arbitrum ------
+        ("LINK", 1) => "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+        ("LINK", 42161) => "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
+        ("LINK", 10) => "0x350a791Bfc2C21F9Ed5d10980Dad2e2638ffa7f6",
+        ("LINK", 137) => "0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39",
+        ("LINK", 56) => "0xF8A0BF9cF54Bb92F17374d9e9A321E6a111a51bD",
+        ("LINK", 43114) => "0x5947BB275c521040051D82396f893D0d34a62C10",
+        ("LINK", 8453) => "0x88Fb150BDc53A65fe94Dea0c9BA0a6dAf8C6e196",
+
+        // ---- UNI (Uniswap governance) — $5.1M Ethereum V3 TVL -------------
+        ("UNI", 1) => "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984",
+        ("UNI", 42161) => "0xFa7F8980b0f1E64A2062791cc3b0871572f1F7f0",
+        ("UNI", 10) => "0x6fd9d7AD17242c41f7131d257212c54A0e816691",
+        ("UNI", 137) => "0xb33EaAd8d922B1083446DC23f610c2567fB5180f",
+        ("UNI", 8453) => "0xc3De830EA07524a0761646a6a4e4be0e114a3C83",
+
+        // ---- AAVE — deep pools on Ethereum/Arbitrum ------------------------
+        ("AAVE", 1) => "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
+        ("AAVE", 42161) => "0xba5DdD1f9d7F570dc94a51479a000E3BCE967196",
+        ("AAVE", 10) => "0x76FB31fb4af56892A25e32cFC43De717950c9278",
+        ("AAVE", 137) => "0xD6DF932A45C0f255f85145f286eA0b292B21C90B",
+        ("AAVE", 8453) => "0x63706e401c06aC8513145B7687A14804d17f2804",
+
+        // ---- LDO (Lido DAO) — $1M+ Ethereum, liquid on Arbitrum -----------
+        ("LDO", 1) => "0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32",
+        ("LDO", 42161) => "0x13Ad51ed4F1B7e9Dc168d8a00cB3f4dDD85EfA60",
+        ("LDO", 10) => "0xFdb794692724153d1488CcdBE0C56c0C3a69b3B0",
+        ("LDO", 137) => "0xC3C7d422809852031b44ab29EEC9F1EfF2A58756",
+
+        // ---- CRV (Curve DAO) — deep Curve ecosystem pools ------------------
+        ("CRV", 1) => "0xD533a949740bb3306d119CC777fa900bA034cd52",
+        ("CRV", 42161) => "0x11cDb42B0EB46D95f990BeDD4695A6e3fA034978",
+        ("CRV", 10) => "0x0994206dfE8De6Ec6920FF4D779B0d950605Fb53",
+        ("CRV", 137) => "0x172370d5Cd63279eFa6d502DAB29171933a610AF",
+
+        // ---- ARB (Arbitrum governance) — deep on Arbitrum ------------------
+        ("ARB", 42161) => "0x912CE59144191C1204E64559FE8253a0e49E6548",
+        ("ARB", 1) => "0xB50721BCf8d664c30412Cfbc6cf7a15145234ad1",
+        ("ARB", 8453) => "0x1DEBd73E752bEaF79865Fd6446b0c970EaE7732f",
+
+        // ---- OP (Optimism governance) — deep on Optimism -------------------
+        ("OP", 10) => "0x4200000000000000000000000000000000000042",
+
         _ => "",
     }
 }
@@ -649,7 +692,7 @@ mod tests {
         for id in CHAINS {
             for sym in [
                 "USDC", "USDT", "DAI", "WETH", "ETH", "WBTC", "WMATIC", "WBNB", "WAVAX", "CELO",
-                "WXDAI",
+                "WXDAI", "LINK", "UNI", "AAVE", "LDO", "CRV", "ARB", "OP",
             ] {
                 let a = resolve_token_symbol(sym, id);
                 if a.is_empty() {

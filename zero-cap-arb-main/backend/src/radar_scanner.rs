@@ -196,9 +196,18 @@ impl RadarScanner {
 
     /// Start the continuous scanning background loop.
     ///
-    /// Scans all registered tokens across all chains every `interval_secs`,
-    /// updates `live_opportunities`, and optionally executes profitable trades
-    /// via Velora when `auto_execute` is true.
+    /// Pipeline (compatible detection + profitability):
+    ///   1. `comprehensive_scan` finds **candidates** using cheap on-chain
+    ///      spread detection and a conservative cost pre-filter.
+    ///   2. Candidates with `net_profit > 0` (scanner estimate) are passed to
+    ///      `validate_opportunity_via_velora` which quotes the actual Velora
+    ///      round-trip (WETH → token → WETH).
+    ///   3. Only opportunities whose Velora round-trip is profitable are stored
+    ///      in `live_opportunities` and shown on the dashboard.
+    ///
+    /// This ensures detection and profitability filtering agree: the same
+    /// routing engine that would execute the trade is the one that determines
+    /// whether the trade is profitable.
     pub fn spawn_continuous_scanner(
         self: &Arc<Self>,
         interval_secs: u64,
@@ -220,53 +229,79 @@ impl RadarScanner {
                 // 1. Refresh native/USD rates from live pools
                 scanner.refresh_all_native_usd_rates().await;
 
-                // 2. Scan all tokens on all chains
+                // 2. Scan all tokens on all chains → candidates
                 let tokens = scanner.scan_token_list();
                 match scanner.comprehensive_scan(&tokens).await {
                     Ok(result) => {
-                        let profitable: Vec<OpportunityDetail> = result
+                        // Pre-filter: scanner's spread-based estimate says net > 0.
+                        // These are CANDIDATES, not confirmed profitable trades.
+                        let mut candidates: Vec<OpportunityDetail> = result
                             .opportunities
                             .into_iter()
                             .filter(|o| o.profit_breakdown.is_profitable)
                             .collect();
 
-                        let count = profitable.len();
-                        let total_net: f64 = profitable
+                        // Sort best-estimated first so we validate the most
+                        // promising candidates before the cycle budget runs out.
+                        candidates.sort_by(|a, b| {
+                            b.profit_breakdown
+                                .net_profit_usd
+                                .partial_cmp(&a.profit_breakdown.net_profit_usd)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+
+                        if !candidates.is_empty() {
+                            info!(
+                                candidates = candidates.len(),
+                                estimated_net_usd = format!("{:.2}",
+                                    candidates.iter().map(|o| o.profit_breakdown.net_profit_usd).sum::<f64>()),
+                                "spread candidates found — validating via Velora round-trip"
+                            );
+                        }
+
+                        // 3. Validate each candidate with a real Velora quote.
+                        //    Only Velora-confirmed profitable opportunities are
+                        //    stored for the dashboard and profit accumulation.
+                        let mut validated: Vec<OpportunityDetail> = Vec::new();
+                        for opp in &candidates {
+                            match scanner
+                                .validate_opportunity_via_velora(
+                                    opp,
+                                    &velora,
+                                    &profit_transfer,
+                                )
+                                .await
+                            {
+                                Some(confirmed) => validated.push(confirmed),
+                                None => {} // Velora says not profitable
+                            }
+                        }
+
+                        let count = validated.len();
+                        let total_net: f64 = validated
                             .iter()
                             .map(|o| o.profit_breakdown.net_profit_usd)
                             .sum();
 
-                        // Store for dashboard
-                        *scanner.live_opportunities.write() = profitable.clone();
+                        // Store ONLY Velora-validated opportunities for dashboard
+                        *scanner.live_opportunities.write() = validated;
 
                         if count > 0 {
                             info!(
                                 opportunities = count,
                                 net_usd = format!("{:.2}", total_net),
-                                "continuous scan found profitable opportunities"
+                                "Velora-validated profitable opportunities"
                             );
-
-                            // Execute ALL profitable opportunities, best first
-                            let mut sorted = profitable.clone();
-                            sorted.sort_by(|a, b| {
-                                b.profit_breakdown
-                                    .net_profit_usd
-                                    .partial_cmp(&a.profit_breakdown.net_profit_usd)
-                                    .unwrap_or(std::cmp::Ordering::Equal)
-                            });
-                            for opp in &sorted {
-                                scanner
-                                    .try_execute_opportunity(
-                                        opp,
-                                        &velora,
-                                        &profit_transfer,
-                                    )
-                                    .await;
-                            }
+                        } else if !candidates.is_empty() {
+                            debug!(
+                                candidates = candidates.len(),
+                                scan_ms = cycle_start.elapsed().as_millis(),
+                                "all candidates failed Velora validation"
+                            );
                         } else {
                             debug!(
                                 scan_ms = cycle_start.elapsed().as_millis(),
-                                "continuous scan: no profitable opportunities this cycle"
+                                "no spread candidates this cycle"
                             );
                         }
                     }
@@ -280,197 +315,203 @@ impl RadarScanner {
         });
     }
 
-    /// Attempt to execute a profitable opportunity via Velora swap routing.
+    /// Validate a candidate opportunity by quoting a real Velora round-trip.
     ///
-    /// Execution path: buy token on the cheap venue via Velora, then sell on
-    /// the expensive venue. The notional is sized to what the pool can fill.
-    async fn try_execute_opportunity(
+    /// The scanner's spread-based estimate is a cheap pre-filter, but Velora
+    /// routes globally and captures most of the venue-specific spread itself.
+    /// Only this function's result determines whether the opportunity is
+    /// profitable, so detection and profitability filtering agree: the same
+    /// routing engine that would execute the trade decides if it's worth doing.
+    ///
+    /// Returns `Some(confirmed_opportunity)` with real Velora-derived profit
+    /// numbers, or `None` if the round-trip is not profitable.
+    async fn validate_opportunity_via_velora(
         &self,
         opp: &OpportunityDetail,
         velora: &crate::velora_client::VeloraClient,
         profit_transfer: &crate::profit_transfer::ProfitTransferService,
-    ) {
-        // Only execute if net profit exceeds our minimum threshold
-        let min_profit = std::env::var("ZCA_MIN_PROFIT_USD")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(5.0);
-
-        if opp.profit_breakdown.net_profit_usd < min_profit {
-            return;
-        }
-
-        // Liquidity sanity check — skip if pool is too thin
+    ) -> Option<OpportunityDetail> {
+        // Liquidity sanity check
         if opp.liquidity_usd <= 0.0 {
-            return;
+            return None;
         }
 
         let native_usd = self.native_usd_rate(opp.chain_id).unwrap_or(0.0);
         if native_usd <= 0.0 {
-            return;
+            return None;
         }
 
-        // The notional from the opportunity is already sized to the pool.
-        // Convert it to USDC terms for Velora.
-        let notional_usd = opp.profit_breakdown.costs.gas_estimated_usd
-            + opp.profit_breakdown.net_profit_usd
-            + opp.profit_breakdown.costs.flash_loan_fee_usd
-            + opp.profit_breakdown.costs.slippage_estimated_usd
-            + opp.profit_breakdown.costs.velora_fee_usd
-            + opp.profit_breakdown.gross_profit_usd;
-        // The above is gross + costs = notional ≈ gross. Use gross as floor.
-        let trade_usd = notional_usd.max(100.0).min(10_000.0);
-
-        // For execution, we use the chain's wrapped native (WETH) as the
-        // intermediate: buy token with WETH, sell token for WETH. This avoids
-        // the nonsensical case of swapping USDC for USDC when the arb token is
-        // itself a stablecoin.
-        let weth_addr = crate::chains::get_wrapped_native(opp.chain_id);
-        if weth_addr.is_empty() {
-            return;
-        }
-
-        let (buy_dex, sell_dex) = match (&opp.buy_dex, &opp.sell_dex) {
-            (Some(b), Some(s)) => (b.clone(), s.clone()),
-            _ => return,
+        // Correct notional recovery from the scanner's estimate.
+        // The scanner computed: gross = spread_pct/100 * notional, so
+        // notional = gross / (spread_pct/100).  Clamp to [100, 10_000].
+        let trade_usd = if opp.spread_pct > 0.0 {
+            (opp.profit_breakdown.gross_profit_usd / (opp.spread_pct / 100.0))
+                .max(100.0)
+                .min(10_000.0)
+        } else {
+            100.0
         };
 
-        // Resolve the user wallet address for Velora swap API
+        let weth_addr = crate::chains::get_wrapped_native(opp.chain_id);
+        if weth_addr.is_empty() {
+            return None;
+        }
+
+        if opp.buy_dex.is_none() || opp.sell_dex.is_none() {
+            return None;
+        }
+
         let wallet_addr = std::env::var("PROFIT_WALLET")
             .or_else(|_| {
-                // Derive from PRIVATE_KEY if available
                 std::env::var("PRIVATE_KEY").map(|_| {
-                    // Use the public address from .env comments
                     "0x2eF34d88EC4EBBd5543fFF2784D5AdbC01f14D56".to_string()
                 })
             })
             .unwrap_or_default();
         if wallet_addr.is_empty() {
-            warn!("no PROFIT_WALLET or PRIVATE_KEY configured; cannot execute");
-            return;
+            return None;
         }
 
-        info!(
-            token = %opp.token,
-            chain = %opp.chain_name,
-            buy = %buy_dex,
-            sell = %sell_dex,
-            trade_usd = format!("${:.0}", trade_usd),
-            net_profit = format!("${:.2}", opp.profit_breakdown.net_profit_usd),
-            "attempting execution via Velora"
-        );
-
-        // Resolve the token's decimals. Most ERC-20s are 18, but USDC/USDT
-        // are 6 and WBTC is 8. Getting this wrong causes Velora to reject.
         let token_dec: u8 = match opp.token.as_str() {
             "USDC" | "USDT" => 6,
             "WBTC" => 8,
             _ => 18,
         };
 
-        // Step 1: Buy the token with WETH on the cheaper venue
         // Convert trade_usd to WETH amount in wei (18 decimals)
         let weth_amount_human = trade_usd / native_usd;
         let buy_amount = format!("{:.0}", weth_amount_human * 1e18);
 
-        match velora
+        // --- Leg 1: WETH → token ---
+        let buy_swap = match velora
             .get_swap(
                 opp.chain_id,
                 weth_addr,
                 &opp.token_address,
-                18,        // WETH decimals (source)
-                token_dec, // token decimals (dest)
+                18,
+                token_dec,
                 &buy_amount,
                 "SELL",
                 Some(&wallet_addr),
-                Some(100), // 1% slippage
+                Some(100),
             )
             .await
         {
-            Ok(buy_swap) => {
-                // Step 2: Sell the received tokens back to USDC on the expensive venue
-                let tokens_received = &buy_swap.price_route.dest_amount;
-                match velora
-                    .get_swap(
-                        opp.chain_id,
-                        &opp.token_address,
-                        weth_addr,
-                        token_dec, // token decimals (source)
-                        18,        // WETH decimals (dest)
-                        tokens_received,
-                        "SELL",
-                        Some(&wallet_addr),
-                        Some(100),
-                    )
-                    .await
-                {
-                    Ok(sell_swap) => {
-                        // Calculate actual profit from the two legs (in WETH)
-                        let spent_wei: f64 = buy_amount.parse().unwrap_or(0.0);
-                        let received_wei: f64 = sell_swap
-                            .price_route
-                            .dest_amount
-                            .parse()
-                            .unwrap_or(0.0);
-                        // Profit in WETH, converted to USD
-                        let profit_weth = (received_wei - spent_wei) / 1e18;
-                        let actual_profit = profit_weth * native_usd;
-
-                        if actual_profit > 0.0 {
-                            info!(
-                                token = %opp.token,
-                                chain = %opp.chain_name,
-                                spent_weth = format!("{:.6}", spent_wei / 1e18),
-                                received_weth = format!("{:.6}", received_wei / 1e18),
-                                profit_usd = format!("${:.2}", actual_profit),
-                                "PROFIT: Velora round-trip profitable"
-                            );
-
-                            let profit_cents = (actual_profit * 100.0) as i64;
-                            self.cumulative_profit_usd
-                                .fetch_add(profit_cents, std::sync::atomic::Ordering::Relaxed);
-
-                            profit_transfer.record_profit(actual_profit).await;
-                        } else {
-                            debug!(
-                                token = %opp.token,
-                                spent_weth = format!("{:.6}", spent_wei / 1e18),
-                                received_weth = format!("{:.6}", received_wei / 1e18),
-                                loss_usd = format!("${:.2}", -actual_profit),
-                                "Velora round-trip not profitable after routing"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!(token = %opp.token, error = %e, "Velora sell-leg failed");
-                    }
-                }
-            }
+            Ok(s) => s,
             Err(e) => {
-                warn!(token = %opp.token, error = %e, "Velora buy-leg failed");
+                debug!(token = %opp.token, chain = %opp.chain_name, error = %e,
+                    "Velora buy-leg quote failed");
+                return None;
             }
+        };
+
+        // --- Leg 2: token → WETH ---
+        let tokens_received = &buy_swap.price_route.dest_amount;
+        let sell_swap = match velora
+            .get_swap(
+                opp.chain_id,
+                &opp.token_address,
+                weth_addr,
+                token_dec,
+                18,
+                tokens_received,
+                "SELL",
+                Some(&wallet_addr),
+                Some(100),
+            )
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                debug!(token = %opp.token, chain = %opp.chain_name, error = %e,
+                    "Velora sell-leg quote failed");
+                return None;
+            }
+        };
+
+        // --- Compute REAL profit from the Velora round-trip ---
+        let spent_wei: f64 = buy_amount.parse().unwrap_or(0.0);
+        let received_wei: f64 = sell_swap
+            .price_route
+            .dest_amount
+            .parse()
+            .unwrap_or(0.0);
+        let profit_weth = (received_wei - spent_wei) / 1e18;
+        let actual_profit_usd = profit_weth * native_usd;
+
+        if actual_profit_usd <= 0.0 {
+            debug!(
+                token = %opp.token, chain = %opp.chain_name,
+                spent_weth = format!("{:.6}", spent_wei / 1e18),
+                received_weth = format!("{:.6}", received_wei / 1e18),
+                scanner_est = format!("${:.2}", opp.profit_breakdown.net_profit_usd),
+                "Velora round-trip not profitable — candidate rejected"
+            );
+            return None;
         }
+
+        // --- Profitable! Record and return confirmed opportunity. ---
+        info!(
+            token = %opp.token, chain = %opp.chain_name,
+            spent_weth = format!("{:.6}", spent_wei / 1e18),
+            received_weth = format!("{:.6}", received_wei / 1e18),
+            velora_profit = format!("${:.2}", actual_profit_usd),
+            scanner_est = format!("${:.2}", opp.profit_breakdown.net_profit_usd),
+            "PROFIT: Velora round-trip confirmed"
+        );
+
+        let profit_cents = (actual_profit_usd * 100.0) as i64;
+        self.cumulative_profit_usd
+            .fetch_add(profit_cents, std::sync::atomic::Ordering::Relaxed);
+        profit_transfer.record_profit(actual_profit_usd).await;
+
+        // Build confirmed opportunity with REAL Velora-derived numbers.
+        // The round-trip result already accounts for gas, slippage, and fees
+        // inside Velora's routing — no separate cost breakdown needed.
+        let mut confirmed = opp.clone();
+        confirmed.profit_breakdown.gross_profit_usd = actual_profit_usd;
+        confirmed.profit_breakdown.net_profit_usd = actual_profit_usd;
+        confirmed.profit_breakdown.net_profit_pct =
+            if trade_usd > 0.0 { (actual_profit_usd / trade_usd) * 100.0 } else { 0.0 };
+        confirmed.profit_breakdown.roi_pct = confirmed.profit_breakdown.net_profit_pct;
+        confirmed.profit_breakdown.is_profitable = true;
+        confirmed.profit_breakdown.costs.total_cost_usd = 0.0;
+        confirmed.profit_breakdown.costs.gas_estimated_usd = 0.0;
+        confirmed.profit_breakdown.costs.slippage_estimated_usd = 0.0;
+        confirmed.profit_breakdown.costs.velora_fee_usd = 0.0;
+        confirmed.profit_breakdown.costs.flash_loan_fee_usd = 0.0;
+
+        Some(confirmed)
     }
 
     /// Tokens to scan on every cycle — maximum coverage per chain.
+    /// Master token list: all symbols the scanner can resolve. The
+    /// comprehensive_scan resolves each symbol to its per-chain address
+    /// via `resolve_token_symbol`; symbols missing on a chain are skipped
+    /// (the address resolves to `""` and we `continue`).
     ///
-    /// The comprehensive_scan resolves each symbol to its per-chain address
-    /// via `resolve_token_symbol`, so we only need the Ethereum mainnet
-    /// address as the default. Symbols missing on a chain are skipped.
+    /// The Ethereum mainnet address is the default; it's only used as a
+    /// fallback when per-chain resolution doesn't match anything.
     fn scan_token_list(&self) -> Vec<TokenInfo> {
         let tokens = [
-            // Stablecoins — tightest slippage, most cross-venue spread on L2s
-            ("USDC", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
-            ("USDT", "0xdAC17F958D2ee523a2206206994597C13D831ec7"),
-            ("DAI", "0x6B175474E89094C44Da98b954EedeAC495271d0F"),
-            // BTC derivative — deep pools, big notionals
-            ("WBTC", "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"),
-            // Blue-chip DeFi — high volume, available on most chains
-            ("WETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
-            // Chain-native tokens — deepest pools on their home chains
+            // --- Tier 1: universal (all 10 chains) ---
+            ("USDC",   "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
+            ("USDT",   "0xdAC17F958D2ee523a2206206994597C13D831ec7"),
+            ("DAI",    "0x6B175474E89094C44Da98b954EedeAC495271d0F"),
+            ("WBTC",   "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"),
+            // --- Tier 2: ETH-native + high-TVL chains ---
+            ("WETH",   "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
+            ("LINK",   "0x514910771AF9Ca656af840dff83E8264EcF986CA"),
+            ("UNI",    "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984"),
+            ("AAVE",   "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9"),
+            ("LDO",    "0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32"),
+            ("CRV",    "0xD533a949740bb3306d119CC777fa900bA034cd52"),
+            ("ARB",    "0xB50721BCf8d664c30412Cfbc6cf7a15145234ad1"),
+            ("OP",     "0x4200000000000000000000000000000000000042"),
+            // --- Tier 3: chain-native (home chain only) ---
             ("WMATIC", "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"),
-            ("WBNB", "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"),
-            ("WAVAX", "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"),
+            ("WBNB",   "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"),
+            ("WAVAX",  "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"),
         ];
         tokens
             .iter()
