@@ -268,6 +268,83 @@ pub fn get_chain_name(chain_id: u64) -> &'static str {
         _ => "Unknown",
     }
 }
+
+/// Resolve a token *symbol* to its contract address on `chain_id`.
+///
+/// The scanner needs an address per chain: the same symbol is a different
+/// contract on every network, and passing one chain's address to another
+/// resolves no pool at all. Resolution therefore went through
+/// `RadarScanner::resolve_token_address`, which was a stub returning `Err`,
+/// so every symbol-only scan failed outright.
+///
+/// This table is the fix: the canonical, widely-replicated assets per chain.
+/// A symbol that is genuinely absent resolves to `""` and the caller skips
+/// that chain rather than quoting a wrong address.
+///
+/// Provenance is the important caveat. These are the published canonical
+/// addresses, but they are *not* verified on-chain by this build. A wrong
+/// entry does not error - it reads some other contract and produces a
+/// plausible-looking price, which is worse than reporting nothing.
+pub fn resolve_token_symbol(symbol: &str, chain_id: u64) -> &'static str {
+    let s = symbol.trim().to_ascii_uppercase();
+    match (s.as_str(), chain_id) {
+        // ---- native / wrapped native -------------------------------------
+        ("ETH" | "WETH", 1) => "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        ("ETH" | "WETH", 42161) => "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+        ("ETH" | "WETH", 10) => "0x4200000000000000000000000000000000000006",
+        ("ETH" | "WETH", 8453) => "0x4200000000000000000000000000000000000006",
+        ("ETH" | "WETH", 100) => "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d",
+        ("ETH" | "WETH", 59144) => "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f",
+        ("WMATIC" | "MATIC", 137) => "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+        ("WBNB" | "BNB", 56) => "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+        ("WAVAX" | "AVAX", 43114) => "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+        ("CELO", 42220) => "0x471EcE3750Da237f93B8e339c536989b8978a438",
+        ("WXDAI", 100) => "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d",
+
+        // ---- stablecoins --------------------------------------------------
+        ("USDC", 1) => "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        ("USDC", 42161) => "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+        ("USDC", 10) => "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
+        ("USDC", 137) => "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+        ("USDC", 56) => "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+        ("USDC", 43114) => "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+        ("USDC", 8453) => "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        ("USDC", 42220) => "0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e", // USDCe
+        ("USDC", 100) => "0xddafbb505ad214d7b80b1f830fccc89b60fb7a83",   // bridged
+        ("USDC", 59144) => "0x176211869cA2b568f2A7D4EE941E073a821EE1ff",
+        ("USDT", 1) => "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+        ("USDT", 42161) => "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+        ("USDT", 10) => "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58",
+        ("USDT", 137) => "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+        ("USDT", 56) => "0x55d398326f99059fF775485246999027B3197955",
+        ("USDT", 43114) => "0x9702230A8Ea53601f5cd2dc00fDBc13d4dF4A8c7",
+        ("USDT", 8453) => "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
+
+        // Gnosis and Linea entries for USDT/DAI/WBTC are deliberately absent.
+        // Those bridged addresses could not be confirmed from a source I trust,
+        // and a wrong entry is worse than none: it silently reads some other
+        // contract and returns a plausible price for a token the caller never
+        // asked about. An empty resolution makes the scanner skip the chain.
+        // Add them only after an on-chain check.
+        ("DAI", 1) => "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        ("DAI", 42161) => "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
+        ("DAI", 10) => "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
+        ("DAI", 137) => "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+        ("DAI", 56) => "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3",
+        ("DAI", 8453) => "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",
+
+        // ---- wrapped BTC ---------------------------------------------------
+        ("WBTC", 1) => "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+        ("WBTC", 42161) => "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
+        ("WBTC", 10) => "0x68f180fcCe6836688e9084f035309E29Bf0A2095",
+        ("WBTC", 137) => "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6",
+        ("WBTC", 56) => "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",
+        ("WBTC", 43114) => "0x50b7545627a5162F82A992c33b87aDc75187B218",
+        ("WBTC", 8453) => "0x0555E30Da8f98308eB51565D3f9DeA4765DcE1D6",
+
+        _ => "",
+    }
+}
 /// The protocol that determines how a pool is resolved and priced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
@@ -556,6 +633,88 @@ mod tests {
             );
         }
         assert_eq!(configured.len(), 10, "expected exactly 10 chains");
+    }
+
+    /// Every resolved token must be a syntactically valid EVM address.
+    ///
+    /// A malformed entry would be silently skipped at parse time inside the
+    /// scanner, so the token would just never quote. Catching it here turns a
+    /// silent "no liquidity" into a build failure.
+    #[test]
+    fn resolved_tokens_are_well_formed_addresses() {
+        for id in CHAINS {
+            for sym in [
+                "USDC", "USDT", "DAI", "WETH", "ETH", "WBTC", "WMATIC", "WBNB", "WAVAX", "CELO",
+                "WXDAI",
+            ] {
+                let a = resolve_token_symbol(sym, id);
+                if a.is_empty() {
+                    continue; // not carried on this chain: allowed
+                }
+                assert_eq!(
+                    a.len(),
+                    42,
+                    "chain {id} {sym}: address is not 0x + 40 hex chars: {a}"
+                );
+                assert!(a.starts_with("0x"), "chain {id} {sym}: missing 0x");
+                assert!(
+                    a[2..].chars().all(|c| c.is_ascii_hexdigit()),
+                    "chain {id} {sym}: non-hex characters in {a}"
+                );
+            }
+        }
+    }
+
+    /// The same symbol must not resolve to one address on two different chains.
+    ///
+    /// That mistake is invisible downstream - the scanner would quote a
+    /// different chain's token under the requested name - so it is asserted
+    /// directly.
+    #[test]
+    fn same_symbol_differs_across_chains() {
+        let usdc_eth = resolve_token_symbol("USDC", 1);
+        let usdc_base = resolve_token_symbol("USDC", 8453);
+        let usdc_arb = resolve_token_symbol("USDC", 42161);
+        assert!(!usdc_eth.is_empty() && !usdc_base.is_empty() && !usdc_arb.is_empty());
+        assert_ne!(usdc_eth, usdc_base, "USDC must differ: Ethereum vs Base");
+        assert_ne!(usdc_eth, usdc_arb, "USDC must differ: Ethereum vs Arbitrum");
+    }
+
+    /// Symbols are case-insensitive, and an unknown symbol resolves to empty
+    /// (the caller then skips the chain) rather than to a plausible address.
+    #[test]
+    fn symbol_lookup_is_case_insensitive_and_fails_closed() {
+        assert_eq!(
+            resolve_token_symbol("usdc", 1),
+            resolve_token_symbol("USDC", 1)
+        );
+        assert_eq!(
+            resolve_token_symbol("  weth  ", 1),
+            resolve_token_symbol("WETH", 1)
+        );
+        assert_eq!(resolve_token_symbol("NOT_A_REAL_TOKEN", 1), "");
+        assert_eq!(resolve_token_symbol("USDC", 999_999), "");
+    }
+
+    /// Wrapped-native resolution must agree with `get_wrapped_native`, because
+    /// the scanner prices a token *against* the wrapped native and a mismatch
+    /// would make it look for pools that cannot exist.
+    #[test]
+    fn wrapped_native_symbols_match_the_quote_leg() {
+        for id in CHAINS {
+            let w = get_wrapped_native(id);
+            if w.is_empty() {
+                continue;
+            }
+            let resolved = resolve_token_symbol("WETH", id);
+            if !resolved.is_empty() {
+                assert_eq!(
+                    resolved.to_lowercase(),
+                    w.to_lowercase(),
+                    "chain {id}: WETH symbol and quote leg disagree"
+                );
+            }
+        }
     }
 
     #[test]

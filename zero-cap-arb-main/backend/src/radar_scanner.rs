@@ -58,10 +58,18 @@ impl RadarScanner {
                 continue;
             }
 
-            // Resolve token address if not provided
+            // Resolve the token's address *for this chain*. A symbol is a
+            // different contract on every network, so one chain's address is
+            // meaningless on another. A token the registry does not carry here
+            // is skipped, not fatal: one chain missing a token must not abort
+            // the other nine. The `?` here previously made every symbol-only
+            // scan fail on its first chain.
             let addr = match token_address {
                 Some(a) => a.to_string(),
-                None => self.resolve_token_address(token_symbol, chain.id).await?,
+                None => match self.resolve_token_address(token_symbol, chain.id).await {
+                    Ok(a) => a,
+                    Err(_) => continue,
+                },
             };
 
             // Query every registry-listed venue on this chain
@@ -432,21 +440,28 @@ async fn quote_venues_on_chain(
 }
 
 impl RadarScanner {
-    /// Resolve a token symbol to its address on a given chain
+    /// Resolve a token symbol to its address on a given chain.
+    ///
+    /// Backed by the per-chain table in [`crate::chains::resolve_token_symbol`].
+    /// An unknown symbol resolves to `None`, which callers treat as "this chain
+    /// does not carry that token" and skip - not as a fatal error. The previous
+    /// body was an unconditional `Err`, which aborted the entire multi-chain
+    /// scan on the first chain for any symbol-only request.
     async fn resolve_token_address(
         &self,
         symbol: &str,
         chain_id: u64,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // Production: use tokenlists, on-chain lookup, or CoinGecko API
-        let chain_name = crate::chains::get_chain_name(chain_id);
-        // This would be an API call to a token registry
-        // For now, return a placeholder - real impl uses multiple sources
-        Err(format!(
-            "Token {} not resolved on {}. Provide address directly.",
-            symbol, chain_name
-        )
-        .into())
+        let addr = crate::chains::resolve_token_symbol(symbol, chain_id);
+        if addr.is_empty() {
+            return Err(format!(
+                "Token {} is not in the registry for {}",
+                symbol,
+                crate::chains::get_chain_name(chain_id)
+            )
+            .into());
+        }
+        Ok(addr.to_string())
     }
 
     /// Find arbitrage opportunities from price vector
@@ -508,11 +523,15 @@ impl RadarScanner {
                 continue;
             }
 
-            // A token address is required: symbol resolution is not implemented,
-            // so a symbol alone cannot be quoted.
+            // Resolve per chain, for the same reason as `scan_token`: one
+            // address cannot be correct on ten networks, and an absent token
+            // skips this chain instead of failing the whole response.
             let addr = match token_address {
                 Some(a) => a.to_string(),
-                None => continue,
+                None => match self.resolve_token_address(token_symbol, chain.id).await {
+                    Ok(a) => a,
+                    Err(_) => continue,
+                },
             };
 
             let prices = self.query_chain_prices(chain, token_symbol, &addr).await;
@@ -580,77 +599,25 @@ impl RadarScanner {
         // 1. Simple arbitrages (buy/sell across DEXes)
         let scan = self.scan_token(token_symbol, token_address).await?;
 
-        // 2. Simulated triangular opportunities
-        let triangular = vec![TriangularOpportunity {
-            id: Uuid::new_v4().to_string(),
-            chain_id: 1,
-            chain_name: "Ethereum".into(),
-            legs: vec![
-                TriangularLeg {
-                    from_token: "DAI".into(),
-                    to_token: "ETH".into(),
-                    dex: "Uniswap V3".into(),
-                    rate: 0.00041,
-                    expected_output: "0.41 ETH".into(),
-                },
-                TriangularLeg {
-                    from_token: "ETH".into(),
-                    to_token: "USDC".into(),
-                    dex: "Curve".into(),
-                    rate: 3450.0,
-                    expected_output: "1414.5 USDC".into(),
-                },
-                TriangularLeg {
-                    from_token: "USDC".into(),
-                    to_token: "DAI".into(),
-                    dex: "Balancer".into(),
-                    rate: 1.001,
-                    expected_output: "1415.9 DAI".into(),
-                },
-            ],
-            start_token: "DAI".into(),
-            end_token: "DAI".into(),
-            net_profit_pct: 1.59,
-            estimated_profit_usd: 15.90,
-        }];
-
-        // 3. Simulated cross-chain opportunities
-        let cross_chain = vec![CrossChainOpportunity {
-            id: Uuid::new_v4().to_string(),
-            token: token_symbol.to_string(),
-            buy_chain_id: 137,
-            buy_chain_name: "Polygon".into(),
-            buy_price: 0.98,
-            sell_chain_id: 1,
-            sell_chain_name: "Ethereum".into(),
-            sell_price: 1.02,
-            bridge_fee_usd: 0.50,
-            net_profit_pct: 3.57,
-            estimated_profit_usd: 35.70,
-        }];
-
-        // 4. Simulated mint opportunities
-        let mint = vec![MintOpportunity {
-            id: Uuid::new_v4().to_string(),
-            token: "DAI".into(),
-            mint_platform: "Spark Protocol".into(),
-            mint_cost_usd: 0.995,
-            market_price_usd: 1.005,
-            spread_pct: 1.01,
-            estimated_profit_usd: 10.05,
-        }];
-
-        // 5. Simulated JIT liquidity
-        let jit = vec![JitLiquidityOpportunity {
-            id: Uuid::new_v4().to_string(),
-            token: token_symbol.to_string(),
-            pool: format!("{}/USDC 0.3%", token_symbol),
-            dex: "Uniswap V3".into(),
-            chain_id: 1,
-            chain_name: "Ethereum".into(),
-            expected_fee_usd: 125.0,
-            capital_required_usd: 50_000.0,
-        }];
+        // 2-5. Triangular, cross-chain, mint and JIT strategies.
+        //
+        // These four previously returned hard-coded rows: a fixed DAI->ETH->USDC
+        // cycle at 1.59% / $15.90, a Polygon $0.98 -> Ethereum $1.02 USDC spread
+        // worth $35.70, a Spark mint at 0.995 vs 1.005 worth $10.05, and a JIT
+        // pool promising $125 on $50,000 of capital. None of it was read from a
+        // chain, and it was returned for *any* token, including ones with no
+        // liquidity at all. Because `/api/all-opportunities` is what the
+        // dashboard renders as profit, the platform reported ~$86 of profit
+        // while the real scanner had resolved zero pools.
+        //
+        // None of these strategies is detected on-chain by this build, so they
+        // report nothing. Returning an empty list is the honest answer until a
+        // detector exists; a fabricated one is indistinguishable from a loss in
+        // a production ledger.
+        let triangular: Vec<TriangularOpportunity> = Vec::new();
+        let cross_chain: Vec<CrossChainOpportunity> = Vec::new();
+        let mint: Vec<MintOpportunity> = Vec::new();
+        let jit: Vec<JitLiquidityOpportunity> = Vec::new();
 
         let elapsed = start.elapsed().as_millis() as u64;
         Ok(AllOpportunitiesResponse {
@@ -662,6 +629,27 @@ impl RadarScanner {
             jit_opportunities: jit,
             scan_time_ms: elapsed,
         })
+    }
+
+    /// USD value of one unit of the chain's wrapped native token.
+    ///
+    /// `TokenPrice.price_usd` is a token priced in wrapped native, so any
+    /// comparison against a USD cost needs this conversion. It is read from the
+    /// environment (`ZCA_NATIVE_USD_<chain_id>`, or `ZCA_NATIVE_USD` as a
+    /// default) rather than hard-coded: a stale constant silently scales every
+    /// profit figure, and a fabricated one is exactly the class of bug this
+    /// cost model previously had.
+    ///
+    /// Returning `None` makes the caller skip the opportunity. A missing rate
+    /// means the profit is unknowable, and an unknowable profit must not be
+    /// reported as a number.
+    fn native_usd_rate(&self, chain_id: u64) -> Option<f64> {
+        let key = format!("ZCA_NATIVE_USD_{}", chain_id);
+        std::env::var(&key)
+            .ok()
+            .or_else(|| std::env::var("ZCA_NATIVE_USD").ok())
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
     }
 
     /// Set minimum spread percentage
@@ -733,22 +721,63 @@ impl RadarScanner {
                     };
 
                     if spread_pct >= self.min_spread_pct {
-                        let gross_profit = (priciest.price_usd - cheapest.price_usd) * 1000.0; // assume 1000 tokens
+                        // Sizing and unit handling.
+                        //
+                        // `price_usd` is the token priced in the chain's
+                        // wrapped native, not in dollars (see the note in
+                        // `query_chain_prices`). So the per-token spread
+                        // `(sell - buy)` is denominated in the native token and
+                        // has to be converted before it can be compared with
+                        // USD-denominated costs like gas.
+                        //
+                        // `sell_price > buy_price` means one token buys more
+                        // native on the sell venue, so the spread is positive in
+                        // native units. Multiplying by the notional gives gross
+                        // profit *in native*, and the notional in USD is
+                        // `notional_tokens * buy_price` only when the token
+                        // costs one unit of native; the correct USD notional
+                        // needs a native/USD rate this build does not have.
+                        //
+                        // Rather than invent that rate - the earlier revision
+                        // compared a native-denominated gross against
+                        // USD-denominated gas and called the difference "profit
+                        // in USD", which is dimensionally meaningless - the
+                        // opportunity is only reported when a native/USD rate
+                        // is supplied. See `net_profit_usd` construction below.
+                        let native_usd = self.native_usd_rate(chain.id);
+                        let Some(native_usd) = native_usd else {
+                            debug!(
+                                chain = chain.id,
+                                symbol,
+                                "no native/USD rate configured; skipping opportunity \
+                                 because profit cannot be denominated honestly"
+                            );
+                            continue;
+                        };
+
+                        let notional_tokens = SCAN_NOTIONAL_TOKENS;
+                        // Cost of acquiring `notional_tokens` at the buy venue,
+                        // converted to USD with the chain's native price.
+                        let notional_usd = notional_tokens * cheapest.price_usd * native_usd;
+
+                        let gross_profit = (priciest.price_usd - cheapest.price_usd)
+                            * notional_tokens
+                            * native_usd;
                         let gas_est = estimate_gas_cost(chain.id);
-                        let fl_fee = estimate_flash_loan_fee(&chain_prices, symbol);
-                        let slippage = gross_profit * 0.005; // 0.5% slippage
-                        let total_cost = gas_est + fl_fee.fee_usd + slippage;
+                        let fl_fee = estimate_flash_loan_fee(&chain_prices, symbol, notional_usd);
+                        let slippage = notional_usd * SLIPPAGE_RATE;
+                        let velora_fee = notional_usd * VELORA_FEE_RATE;
+                        let total_cost = gas_est + fl_fee.fee_usd + slippage + velora_fee;
                         let net_profit = gross_profit - total_cost;
-                        let net_pct = if total_cost > 0.0 {
-                            (net_profit / total_cost) * 100.0
+                        // Return on the capital at risk (the notional), not on
+                        // the cost. The previous `net / total_cost` was a
+                        // markup multiple, not a rate of return.
+                        let net_pct = if notional_usd > 0.0 {
+                            (net_profit / notional_usd) * 100.0
                         } else {
                             0.0
                         };
-                        let roi = if cheapest.price_usd > 0.0 {
-                            (net_profit / (cheapest.price_usd * 1000.0)) * 100.0
-                        } else {
-                            0.0
-                        };
+                        let roi = net_pct;
 
                         if net_profit > 0.0 {
                             let mut recommendations = vec![fl_fee.clone()];
@@ -763,7 +792,12 @@ impl RadarScanner {
                                     recommendations.push(FlashLoanRecommendation {
                                         source: alt_source.clone(),
                                         fee_pct: alt_fee,
-                                        fee_usd: gross_profit * (alt_fee / 100.0),
+                                        // Charged on the borrowed principal, not
+                                        // on the profit: the fee is a function of
+                                        // the loan size. Using `gross_profit`
+                                        // here (as before) under-reported it by
+                                        // orders of magnitude.
+                                        fee_usd: notional_usd * (alt_fee / 100.0),
                                         reason: format!(
                                             "{} - {} fee",
                                             alt_source.as_str(),
@@ -802,13 +836,20 @@ impl RadarScanner {
                                         } else {
                                             None
                                         },
-                                        velora_fee_usd: gross_profit * 0.001,
+                                        velora_fee_usd: velora_fee,
                                         total_cost_usd: total_cost,
                                     },
                                     net_profit_usd: net_profit,
                                     net_profit_pct: net_pct,
                                     roi_pct: roi,
-                                    is_profitable: true,
+                                    // Derived, not asserted. The previous
+                                    // literal `true` meant any opportunity that
+                                    // reached this point was labelled profitable
+                                    // regardless of its own numbers, so
+                                    // `profitable_count` and every downstream
+                                    // "verified profit" figure counted rows that
+                                    // lost money.
+                                    is_profitable: net_profit > 0.0,
                                 },
                                 flash_loan_recommendation: Some(RecommendedFlashLoan {
                                     primary: fl_fee,
@@ -885,12 +926,36 @@ fn estimate_gas_cost(chain_id: u64) -> f64 {
     }
 }
 
+/// Notional used to size an opportunity, in whole tokens.
+///
+/// This is a *sizing assumption*, not a measurement: the scanner does not model
+/// AMM depth, so profit is linear in size and a number has to be chosen. It is
+/// named here so the figure is visible instead of buried in an expression, and
+/// so callers can see that every profit number scales with it.
+const SCAN_NOTIONAL_TOKENS: f64 = 1_000.0;
+
+/// Velora split-routing fee, as a fraction of the routed amount.
+const VELORA_FEE_RATE: f64 = 0.001;
+
+/// Slippage allowance applied to the notional, as a fraction.
+const SLIPPAGE_RATE: f64 = 0.005;
+
 /// Pick the cheapest flash-loan source for a token.
 ///
+/// `notional_usd` is the borrowed principal in USD. The fee is that principal
+/// times the lender's rate, and it is a *real* cost that was previously hard
+/// coded to `0.0` with the comment "calculated in context" - nothing ever
+/// calculated it, so every opportunity was scored with a free loan and looked
+/// better than it was. On a 1,000 USD trade that silently added 0.03-0.05% of
+/// headroom back to the spread, which is larger than most real arbitrage.
+///
 /// The `prices` slice is deliberately unused: the fee that matters is the
-/// lender's fee rate, which depends on the token, not on observed venue prices.
-/// It is kept in the signature so the call site does not have to change.
-fn estimate_flash_loan_fee(_prices: &[TokenPrice], token: &str) -> FlashLoanRecommendation {
+/// lender's rate, which depends on the token, not on observed venue prices.
+fn estimate_flash_loan_fee(
+    _prices: &[TokenPrice],
+    token: &str,
+    notional_usd: f64,
+) -> FlashLoanRecommendation {
     let spark_fee = FlashLoanSource::Spark.fee_pct(token);
     let aave_fee = FlashLoanSource::AaveV3.fee_pct(token);
     let radiant_fee = FlashLoanSource::RadiantV2.fee_pct(token);
@@ -917,7 +982,7 @@ fn estimate_flash_loan_fee(_prices: &[TokenPrice], token: &str) -> FlashLoanReco
     FlashLoanRecommendation {
         source: sources[0].0.clone(),
         fee_pct: sources[0].1,
-        fee_usd: 0.0, // calculated in context
+        fee_usd: notional_usd * (sources[0].1 / 100.0),
         reason: sources[0].2.to_string(),
     }
 }
@@ -927,6 +992,101 @@ fn calculate_confidence(spread_pct: f64, net_profit_usd: f64, liquidity_usd: f64
     let profit_score = (net_profit_usd / 500.0).min(1.0);
     let liq_score = (liquidity_usd / 1_000_000.0).min(1.0);
     (spread_score * 0.4 + profit_score * 0.3 + liq_score * 0.3).min(1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token_price(symbol: &str) -> TokenPrice {
+        TokenPrice {
+            token: symbol.to_string(),
+            token_address: "0x0000000000000000000000000000000000000001".into(),
+            chain_id: 1,
+            chain_name: "Ethereum".into(),
+            dex_name: "Uniswap V2".into(),
+            price_usd: 0.0004,
+            liquidity_usd: 1_000_000.0,
+            timestamp: 0,
+        }
+    }
+
+    /// The regression this pins: the fee used to be hard-coded to 0.0, so every
+    /// opportunity was costed as if the loan were free.
+    #[test]
+    fn flash_loan_fee_is_charged_on_the_notional() {
+        let prices = vec![token_price("USDC")];
+        let r = estimate_flash_loan_fee(&prices, "USDC", 10_000.0);
+        assert!(
+            r.fee_usd > 0.0,
+            "fee must be non-zero: a free loan inflates every spread"
+        );
+        // Cheapest standard lender is Radiant at 0.03%.
+        assert_eq!(r.fee_pct, 0.03, "expected Radiant to win at 0.03%");
+        assert!(
+            (r.fee_usd - 3.0).abs() < 1e-9,
+            "0.03% of 10,000 is 3.00, got {}",
+            r.fee_usd
+        );
+    }
+
+    /// Spark charges nothing on DAI, so a DAI loan really is free - the fix must
+    /// not invent a fee where the protocol has none.
+    #[test]
+    fn dai_flash_loan_is_free_on_spark() {
+        let prices = vec![token_price("DAI")];
+        let r = estimate_flash_loan_fee(&prices, "DAI", 10_000.0);
+        assert_eq!(r.fee_pct, 0.0);
+        assert_eq!(r.fee_usd, 0.0);
+    }
+
+    /// The fee must scale with the loan: a fixed absolute fee would make large
+    /// trades look free and small ones look ruinous.
+    #[test]
+    fn flash_loan_fee_scales_linearly() {
+        let prices = vec![token_price("USDC")];
+        let small = estimate_flash_loan_fee(&prices, "USDC", 1_000.0);
+        let large = estimate_flash_loan_fee(&prices, "USDC", 10_000.0);
+        assert!((large.fee_usd / small.fee_usd - 10.0).abs() < 1e-9);
+    }
+
+    /// A missing or malformed native/USD rate must suppress the opportunity,
+    /// never default to a number. This is what stops an unpriced spread from
+    /// being reported as dollar profit.
+    #[test]
+    fn missing_native_usd_rate_yields_none() {
+        let s = RadarScanner::new();
+        let key = "ZCA_NATIVE_USD_31337";
+        std::env::remove_var(key);
+        // Only assert `None` when no default is set in the ambient environment.
+        if std::env::var("ZCA_NATIVE_USD").is_err() {
+            assert_eq!(s.native_usd_rate(31337), None);
+        }
+
+        std::env::set_var(key, "2674.87");
+        assert_eq!(s.native_usd_rate(31337), Some(2674.87));
+
+        // A non-positive or non-numeric rate is not a rate.
+        std::env::set_var(key, "0");
+        assert_eq!(s.native_usd_rate(31337), None);
+        std::env::set_var(key, "-5");
+        assert_eq!(s.native_usd_rate(31337), None);
+        std::env::set_var(key, "not-a-number");
+        assert_eq!(s.native_usd_rate(31337), None);
+        std::env::remove_var(key);
+    }
+
+    /// `net_profit_pct` is a return on capital. The previous code divided by
+    /// total cost, which is a markup multiple and can exceed 100% on a thin
+    /// spread, not a rate of return.
+    #[test]
+    fn net_pct_is_a_return_on_capital_not_on_cost() {
+        let notional: f64 = 10_000.0;
+        let net: f64 = 50.0;
+        let pct: f64 = (net / notional) * 100.0;
+        assert!((pct - 0.5).abs() < 1e-9);
+        assert!(pct < 100.0, "a 0.5% return must not read as a huge number");
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
