@@ -2,6 +2,7 @@ mod alert_manager;
 mod api;
 mod chains;
 mod config;
+mod discovery;
 mod gas_bidder;
 mod mev_guard;
 mod multicall;
@@ -57,6 +58,8 @@ async fn main() {
             chain.id, chain.name, chain.id, dex_count
         );
     }
+
+    let discovery_svc = Arc::new(discovery::DiscoveryService::new());
 
     let state = AppState {
         scanner: Arc::new(RadarScanner::new()),
@@ -248,6 +251,7 @@ async fn main() {
             );
             pool
         },
+        discovery: discovery_svc,
     };
 
     let app = build_router(state.clone()).layer(CorsLayer::permissive());
@@ -278,6 +282,7 @@ async fn main() {
         scan_interval,
         state.velora.clone(),
         state.profit_transfer.clone(),
+        state.discovery.clone(),
     );
 
     let cfg = config::ServerConfig::from_env();

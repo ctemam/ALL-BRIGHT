@@ -65,6 +65,11 @@ pub struct RadarScanner {
     trade_history: Arc<parking_lot::RwLock<Vec<TradeRecord>>>,
     /// Per-chain cumulative profit.
     chain_profits: Arc<DashMap<u64, ChainProfit>>,
+    /// Dynamic min-depth per chain, populated from DeFiLlama TVL data.
+    /// When empty, hard-coded defaults are used.
+    dynamic_min_depth: Arc<DashMap<u64, f64>>,
+    /// Binance CEX benchmark prices for CEX-deviation detection.
+    cex_benchmarks: Arc<parking_lot::RwLock<std::collections::HashMap<String, f64>>>,
 }
 
 impl RadarScanner {
@@ -78,7 +83,45 @@ impl RadarScanner {
             cumulative_profit_usd: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             trade_history: Arc::new(parking_lot::RwLock::new(Vec::new())),
             chain_profits: Arc::new(DashMap::new()),
+            dynamic_min_depth: Arc::new(DashMap::new()),
+            cex_benchmarks: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Update the dynamic min-depth thresholds from DeFiLlama TVL data.
+    pub fn set_dynamic_min_depth(&self, chain_id: u64, min_depth_usd: f64) {
+        self.dynamic_min_depth.insert(chain_id, min_depth_usd);
+    }
+
+    /// Get the effective min-depth for a chain: dynamic if available, else hard-coded.
+    fn effective_min_depth_usd(&self, chain_id: u64) -> f64 {
+        self.dynamic_min_depth
+            .get(&chain_id)
+            .map(|v| *v)
+            .unwrap_or_else(|| match chain_id {
+                42161 | 10 | 8453 | 59144 | 100 => 100.0,
+                137 | 42220 => 200.0,
+                _ => 500.0,
+            })
+    }
+
+    /// Update CEX benchmark prices from Binance.
+    pub fn update_cex_benchmarks(&self, prices: std::collections::HashMap<String, f64>) {
+        *self.cex_benchmarks.write() = prices;
+    }
+
+    /// Get CEX benchmark price for a symbol.
+    pub fn cex_price(&self, symbol: &str) -> Option<f64> {
+        let s = symbol.trim().to_ascii_uppercase();
+        let key = match s.as_str() {
+            "WETH" => "ETH".to_string(),
+            "WBTC" => "BTC".to_string(),
+            "WMATIC" | "MATIC" => "MATIC".to_string(),
+            "WBNB" => "BNB".to_string(),
+            "WAVAX" => "AVAX".to_string(),
+            other => other.to_string(),
+        };
+        self.cex_benchmarks.read().get(&key).copied()
     }
 
     /// Read the latest opportunities found by the continuous scanner.
@@ -312,6 +355,7 @@ impl RadarScanner {
         interval_secs: u64,
         velora: Arc<crate::velora_client::VeloraClient>,
         profit_transfer: Arc<crate::profit_transfer::ProfitTransferService>,
+        discovery: Arc<crate::discovery::DiscoveryService>,
     ) {
         let scanner = Arc::clone(self);
         let interval = std::time::Duration::from_secs(interval_secs);
@@ -319,17 +363,74 @@ impl RadarScanner {
         tokio::spawn(async move {
             info!(
                 interval_secs,
-                "continuous scanner started — scanning every {}s", interval_secs
+                "continuous scanner started — scanning every {}s (with DEX Screener + DeFiLlama + Binance feeds)",
+                interval_secs
             );
+
+            // Chain IDs for discovery refresh
+            let chain_ids: Vec<u64> = crate::chains::get_chains()
+                .iter()
+                .map(|c| c.id)
+                .collect();
 
             loop {
                 let cycle_start = Instant::now();
 
+                // 0. Refresh external discovery feeds (rate-limited internally)
+                discovery.refresh_all(&chain_ids).await;
+
                 // 1. Refresh native/USD rates from live pools
                 scanner.refresh_all_native_usd_rates().await;
 
-                // 2. Scan all tokens on all chains → candidates
-                let tokens = scanner.scan_token_list();
+                // 2. Build merged token list: base list + discovered tokens
+                let mut tokens = scanner.scan_token_list();
+                let discovered = discovery.get_discovered_tokens().await;
+                let base_count = tokens.len();
+                for dt in &discovered {
+                    // Only add if not already in the list for this chain
+                    let already = tokens.iter().any(|t| {
+                        t.address.eq_ignore_ascii_case(&dt.address)
+                    });
+                    if !already {
+                        tokens.push(crate::radar_scanner::TokenInfo {
+                            symbol: dt.symbol.clone(),
+                            address: dt.address.clone(),
+                        });
+                    }
+                }
+                if tokens.len() > base_count {
+                    info!(
+                        base = base_count,
+                        discovered = tokens.len() - base_count,
+                        total = tokens.len(),
+                        "merged discovery tokens into scan list"
+                    );
+                }
+
+                // Push CEX benchmark prices into the scanner for deviation
+                // detection during comprehensive_scan.
+                let cex_prices = discovery.cex_prices.read().await.clone();
+                if !cex_prices.is_empty() {
+                    scanner.update_cex_benchmarks(cex_prices);
+                }
+
+                // Push DeFiLlama TVL-based dynamic depth thresholds.
+                for &cid in &chain_ids {
+                    let depth = discovery.dynamic_min_depth_usd(cid).await;
+                    scanner.set_dynamic_min_depth(cid, depth);
+                }
+
+                // Log discovery stats periodically
+                let (cex_count, tvl_count, disc_count) = discovery.stats().await;
+                if cex_count > 0 {
+                    debug!(
+                        cex_prices = cex_count,
+                        tvl_chains = tvl_count,
+                        discovered = disc_count,
+                        "discovery feeds active"
+                    );
+                }
+
                 match scanner.comprehensive_scan(&tokens).await {
                     Ok(result) => {
                         // Pre-filter: scanner's spread-based estimate says net > 0.
@@ -1336,33 +1437,72 @@ impl RadarScanner {
                         0.0
                     };
 
+                    // CEX deviation detection: if Binance has a price
+                    // for this token, check if any DEX quote deviates
+                    // significantly. A deviation adds confidence that
+                    // the spread is exploitable (the DEX is mispriced
+                    // relative to the global market).
+                    let cex_dev_pct = if let Some(cex_price) = self.cex_price(symbol) {
+                        let native_usd = self.native_usd_rate(chain.id).unwrap_or(0.0);
+                        if native_usd > 0.0 {
+                            let dex_usd = cheapest.price_usd * native_usd;
+                            crate::discovery::DiscoveryService::compute_cex_deviation(
+                                cex_price, dex_usd, 0.1,
+                            )
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
                     if spread_pct > 0.1 {
-                        info!(
-                            chain = %chain.name,
-                            symbol = %symbol,
-                            spread = format!("{:.3}%", spread_pct),
-                            buy = %cheapest.dex_name,
-                            sell = %priciest.dex_name,
-                            depth = format!("{:.2}", cheapest.liquidity_usd.min(priciest.liquidity_usd)),
-                            "spread detected"
-                        );
+                        if let Some(dev) = cex_dev_pct {
+                            info!(
+                                chain = %chain.name,
+                                symbol = %symbol,
+                                spread = format!("{:.3}%", spread_pct),
+                                cex_dev = format!("{:.2}%", dev),
+                                buy = %cheapest.dex_name,
+                                sell = %priciest.dex_name,
+                                depth = format!("{:.2}", cheapest.liquidity_usd.min(priciest.liquidity_usd)),
+                                "spread detected (CEX-confirmed)"
+                            );
+                        } else {
+                            info!(
+                                chain = %chain.name,
+                                symbol = %symbol,
+                                spread = format!("{:.3}%", spread_pct),
+                                buy = %cheapest.dex_name,
+                                sell = %priciest.dex_name,
+                                depth = format!("{:.2}", cheapest.liquidity_usd.min(priciest.liquidity_usd)),
+                                "spread detected"
+                            );
+                        }
                     }
 
-                    // Minimum USD depth a pool must have for us to consider it
-                    // tradeable. Scale by chain gas cost: L2s can profit on
-                    // thinner pools because gas is nearly free.
-                    let min_depth_usd = match chain.id {
-                        42161 | 10 | 8453 | 59144 | 100 => 100.0,  // L2s: $100
-                        137 | 42220 => 200.0,                        // Polygon/Celo: $200
-                        _ => 500.0,                                   // Mainnet/BSC/Avax: $500
-                    };
+                    // Minimum USD depth — dynamic from DeFiLlama TVL when
+                    // available, else hard-coded per-chain defaults.
+                    let min_depth_usd = self.effective_min_depth_usd(chain.id);
 
                     // Chain-aware minimum spread: L2s with cheap gas can
                     // profit on tighter spreads than mainnet.
-                    let chain_min_spread = match chain.id {
-                        42161 | 10 | 8453 | 59144 | 100 => 0.10, // L2s: 0.10%
-                        137 | 42220 => 0.15,                       // Polygon/Celo: 0.15%
-                        _ => self.min_spread_pct,                   // Mainnet/BSC/Avax: 0.30%
+                    // CEX-confirmed deviations use a lower threshold (0.05%
+                    // vs 0.10-0.30%) because the CEX price gives high
+                    // confidence the DEX pool is genuinely mispriced.
+                    let chain_min_spread = if cex_dev_pct.is_some() {
+                        // CEX-confirmed: lower threshold
+                        match chain.id {
+                            42161 | 10 | 8453 | 59144 | 100 => 0.05,
+                            137 | 42220 => 0.08,
+                            _ => 0.15,
+                        }
+                    } else {
+                        match chain.id {
+                            42161 | 10 | 8453 | 59144 | 100 => 0.10,
+                            137 | 42220 => 0.15,
+                            _ => self.min_spread_pct,
+                        }
                     };
 
                     if spread_pct >= chain_min_spread {

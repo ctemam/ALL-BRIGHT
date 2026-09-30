@@ -1,4 +1,5 @@
 use crate::alert_manager::{AlertConfig, AlertEvent, AlertManager};
+use crate::discovery::DiscoveryService;
 use crate::gas_bidder::{GasBidConfig, GasBidStrategy, GasBidder};
 use crate::mev_guard::{MevGuard, MevGuardConfig, MevRiskLevel};
 use crate::paper_trader::{BacktestConfig, BacktestResult, PaperTradeMode, PaperTrader};
@@ -52,6 +53,8 @@ pub struct AppState {
     pub profit_transfer: Arc<ProfitTransferService>,
     /// Multi-endpoint RPC pool with health tracking and failover.
     pub rpc_pool: Arc<RpcPool>,
+    /// External discovery feeds (DEX Screener, DeFiLlama, Binance).
+    pub discovery: Arc<DiscoveryService>,
 }
 
 pub fn build_router(state: AppState) -> Router {
