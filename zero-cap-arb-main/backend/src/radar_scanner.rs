@@ -15,10 +15,17 @@ use serde::{Deserialize, Serialize};
 pub type HttpProvider = RootProvider<Http<reqwest::Client>>;
 use chrono::Utc;
 use dashmap::DashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+/// Global round-robin counter for RPC endpoint rotation.
+/// Each call to `try_build_provider` advances this counter so successive
+/// calls distribute load across all available endpoints for a chain,
+/// rather than always hitting the first one.
+static RPC_ROUND_ROBIN: AtomicUsize = AtomicUsize::new(0);
 
 /// A single confirmed trade logged by the Velora round-trip validator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2397,14 +2404,28 @@ fn rlp_encode_signed_legacy_tx(
     ])
 }
 
-/// Try each RPC URL until one works
+/// Build an HTTP provider using round-robin endpoint rotation.
+///
+/// Each call advances a global atomic counter so successive calls cycle
+/// through every endpoint in the list. This distributes RPC load across
+/// all 18-27 endpoints per chain rather than always hammering the first.
+///
+/// With 36 tokens x 2 phases = 72 calls/chain/cycle, rotating across
+/// ~25 endpoints means each endpoint sees ~3 calls per cycle — well
+/// within every free-tier rate limit.
 fn try_build_provider(urls: &[String]) -> Result<HttpProvider, String> {
-    for url in urls {
-        // NOTE: `ProviderBuilder::on_http` takes a parsed URL, not a transport, and `Http`
-        // does not implement FromStr (both surfaced on the first successful cargo check).
-        match url.parse::<reqwest::Url>() {
+    if urls.is_empty() {
+        return Err("No RPC URLs configured".to_string());
+    }
+    let n = urls.len();
+    let start = RPC_ROUND_ROBIN.fetch_add(1, Ordering::Relaxed) % n;
+
+    // Try from the rotated start position, wrapping around the full list
+    for i in 0..n {
+        let idx = (start + i) % n;
+        match urls[idx].parse::<reqwest::Url>() {
             Ok(parsed) => return Ok(ProviderBuilder::new().on_http(parsed)),
-            Err(e) => warn!("RPC {} failed to parse, trying next: {}", url, e),
+            Err(e) => warn!("RPC {} failed to parse, trying next: {}", urls[idx], e),
         }
     }
     Err(format!("No working RPC URL in {:?}", urls))
