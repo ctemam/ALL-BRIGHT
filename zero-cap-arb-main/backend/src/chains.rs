@@ -527,6 +527,20 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },
+            // Camelot V2 — major Arbitrum-native DEX
+            Venue {
+                name: "Camelot V2",
+                address: "0x6EcCab422D763aC031210895C81787E87B43A652",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            // SushiSwap V3 — separate V3 factory on Arbitrum
+            Venue {
+                name: "SushiSwap V3",
+                address: "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
         ],
         10 => &[
             Venue {
@@ -540,6 +554,13 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 address: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
                 protocol: Protocol::V3,
                 v3: V3_UNI,
+            },
+            // Velodrome Slipstream — largest DEX on Optimism by TVL
+            Venue {
+                name: "Velodrome Slipstream",
+                address: "0xCc0bDDB707055e04e497aB22a59c2aF4391cd12F",
+                protocol: Protocol::V3,
+                v3: V3_SLIPSTREAM,
             },
         ],
         137 => &[
@@ -555,6 +576,13 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },
+            // QuickSwap V3 (Algebra) — dominant Polygon DEX
+            Venue {
+                name: "QuickSwap V3",
+                address: "0x411b0fAcC3489691f28ad58c47006AF5E3Ab3A28",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
         ],
         56 => &[
             Venue {
@@ -566,6 +594,20 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
             Venue {
                 name: "Uniswap V3",
                 address: "0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            // PancakeSwap V2 — dominant DEX on BSC
+            Venue {
+                name: "PancakeSwap V2",
+                address: "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            // PancakeSwap V3
+            Venue {
+                name: "PancakeSwap V3",
+                address: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },
@@ -594,6 +636,20 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
             Venue {
                 name: "Uniswap V3",
                 address: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            // Aerodrome Slipstream — largest DEX on Base by TVL
+            Venue {
+                name: "Aerodrome Slipstream",
+                address: "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A",
+                protocol: Protocol::V3,
+                v3: V3_SLIPSTREAM,
+            },
+            // SushiSwap V3 on Base
+            Venue {
+                name: "SushiSwap V3",
+                address: "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },

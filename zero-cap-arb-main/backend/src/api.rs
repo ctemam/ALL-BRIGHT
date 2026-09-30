@@ -64,6 +64,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/health", get(health_check))
         .route("/api/live/opportunities", get(live_opportunities))
         .route("/api/live/status", get(live_status))
+        .route("/api/live/trades", get(live_trades))
+        .route("/api/live/chains", get(live_chains))
+        .route("/monitor", get(monitor_dashboard))
         .route("/api/scan", post(scan_token))
         .route("/api/scan/comprehensive", post(scan_comprehensive))
         .route("/api/all-prices", post(get_all_prices))
@@ -182,6 +185,204 @@ async fn live_status(State(state): State<AppState>) -> Json<serde_json::Value> {
         "by_chain": by_chain,
     }))
 }
+
+async fn live_trades(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let trades = state.scanner.trade_history();
+    Json(serde_json::json!({
+        "trades": trades,
+        "total": trades.len(),
+    }))
+}
+
+async fn live_chains(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let chains = state.scanner.chain_profit_breakdown();
+    let total: f64 = chains.iter().map(|c| c.total_profit_usd).sum();
+    Json(serde_json::json!({
+        "chains": chains,
+        "total_profit_usd": total,
+    }))
+}
+
+async fn monitor_dashboard() -> axum::response::Html<String> {
+    axum::response::Html(MONITOR_HTML.to_string())
+}
+
+/// Inline HTML dashboard — auto-refreshing monitor showing profit per chain,
+/// per trade, and cumulative progress toward the $100 auto-transfer threshold.
+const MONITOR_HTML: &str = r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZeroCap Arbitrage Monitor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0a0e17; color: #e0e0e0; }
+  .header { background: linear-gradient(135deg, #1a1f2e 0%, #0d1117 100%); padding: 20px 30px; border-bottom: 1px solid #2d333b; display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 22px; font-weight: 600; color: #58a6ff; }
+  .header .status { display: flex; align-items: center; gap: 8px; }
+  .header .dot { width: 10px; height: 10px; border-radius: 50%; background: #3fb950; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .header .mode { color: #3fb950; font-weight: 600; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; padding: 20px 30px; }
+  .card { background: #161b22; border: 1px solid #2d333b; border-radius: 10px; padding: 20px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: #8b949e; margin-bottom: 12px; }
+  .card .value { font-size: 32px; font-weight: 700; }
+  .card .sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
+  .green { color: #3fb950; }
+  .yellow { color: #d29922; }
+  .blue { color: #58a6ff; }
+  .section { padding: 0 30px 20px; }
+  .section h2 { font-size: 16px; color: #58a6ff; margin-bottom: 12px; padding-top: 10px; border-top: 1px solid #2d333b; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: #8b949e; font-weight: 500; padding: 8px 12px; border-bottom: 1px solid #2d333b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 8px 12px; border-bottom: 1px solid #1c2128; }
+  tr:hover { background: #1c2128; }
+  .profit { color: #3fb950; font-weight: 600; }
+  .progress-bar { width: 100%; height: 20px; background: #1c2128; border-radius: 10px; overflow: hidden; margin-top: 8px; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, #238636, #3fb950); border-radius: 10px; transition: width 0.5s ease; }
+  .progress-text { font-size: 11px; color: #8b949e; margin-top: 4px; text-align: right; }
+  .refresh-note { font-size: 11px; color: #484f58; text-align: center; padding: 10px; }
+  .no-data { color: #484f58; text-align: center; padding: 20px; font-style: italic; }
+  .chain-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .chain-card { background: #1c2128; border-radius: 8px; padding: 14px; border-left: 3px solid #58a6ff; }
+  .chain-card .name { font-weight: 600; color: #c9d1d9; font-size: 14px; }
+  .chain-card .profit { font-size: 20px; font-weight: 700; color: #3fb950; margin-top: 4px; }
+  .chain-card .trades { font-size: 11px; color: #8b949e; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>ZeroCap Arbitrage Monitor</h1>
+  <div class="status"><div class="dot"></div><span class="mode" id="scanner-status">SCANNING</span></div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Cumulative Profit</h2>
+    <div class="value green" id="cumulative">$0.00</div>
+    <div class="sub" id="trade-count">0 trades</div>
+  </div>
+  <div class="card">
+    <h2>Accrued for Transfer</h2>
+    <div class="value yellow" id="accrued">$0.00</div>
+    <div class="progress-bar"><div class="progress-fill" id="progress" style="width:0%"></div></div>
+    <div class="progress-text" id="progress-text">$0.00 / $100.00 threshold</div>
+  </div>
+  <div class="card">
+    <h2>Live Opportunities</h2>
+    <div class="value blue" id="live-opps">0</div>
+    <div class="sub" id="current-net">Current cycle: $0.00</div>
+  </div>
+  <div class="card">
+    <h2>Uptime</h2>
+    <div class="value" id="uptime" style="color:#c9d1d9">0s</div>
+    <div class="sub" id="wallet">Wallet: loading...</div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Profit per Chain</h2>
+  <div class="chain-grid" id="chain-grid">
+    <div class="no-data">Waiting for first trade...</div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Trade History</h2>
+  <table>
+    <thead><tr>
+      <th>Time</th><th>Chain</th><th>Token</th><th>Buy Venue</th><th>Sell Venue</th>
+      <th>Spent (WETH)</th><th>Received (WETH)</th><th>Profit</th><th>ROI</th>
+    </tr></thead>
+    <tbody id="trades-body">
+      <tr><td colspan="9" class="no-data">Waiting for first trade...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="refresh-note">Auto-refreshes every 10 seconds</div>
+
+<script>
+const BASE = window.location.origin;
+
+function fmt(n) { return '$' + n.toFixed(2); }
+function fmtDuration(s) {
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+  return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+}
+
+async function refresh() {
+  try {
+    const [statusRes, tradesRes, chainsRes, transferRes] = await Promise.all([
+      fetch(BASE + '/api/live/status'),
+      fetch(BASE + '/api/live/trades'),
+      fetch(BASE + '/api/live/chains'),
+      fetch(BASE + '/api/profit/transfer/status'),
+    ]);
+    const status = await statusRes.json();
+    const trades = await tradesRes.json();
+    const chains = await chainsRes.json();
+    let transfer = {};
+    try { transfer = await transferRes.json(); } catch(e) {}
+
+    // Summary cards
+    document.getElementById('cumulative').textContent = fmt(status.cumulative_profit_usd || 0);
+    document.getElementById('accrued').textContent = fmt(status.accrued_for_transfer_usd || 0);
+    document.getElementById('live-opps').textContent = status.live_opportunities || 0;
+    document.getElementById('current-net').textContent = 'Current cycle: ' + fmt(status.current_cycle_net_usd || 0);
+    document.getElementById('uptime').textContent = fmtDuration(status.uptime_secs || 0);
+    document.getElementById('trade-count').textContent = (trades.total || 0) + ' trades';
+
+    const threshold = (transfer.min_usd || 100);
+    const accrued = status.accrued_for_transfer_usd || 0;
+    const pct = Math.min((accrued / threshold) * 100, 100);
+    document.getElementById('progress').style.width = pct + '%';
+    document.getElementById('progress-text').textContent = fmt(accrued) + ' / ' + fmt(threshold) + ' threshold';
+
+    if (transfer.destinations && transfer.destinations.length > 0) {
+      document.getElementById('wallet').textContent = 'Wallet: ' + transfer.destinations[0].address.slice(0,6) + '...' + transfer.destinations[0].address.slice(-4);
+    }
+
+    // Chain grid
+    const cg = document.getElementById('chain-grid');
+    if (chains.chains && chains.chains.length > 0) {
+      cg.innerHTML = chains.chains
+        .sort((a,b) => b.total_profit_usd - a.total_profit_usd)
+        .map(c => `<div class="chain-card">
+          <div class="name">${c.chain}</div>
+          <div class="profit">${fmt(c.total_profit_usd)}</div>
+          <div class="trades">${c.trade_count} trades${c.last_trade ? ' &middot; last: ' + c.last_trade : ''}</div>
+        </div>`).join('');
+    }
+
+    // Trade history table
+    const tb = document.getElementById('trades-body');
+    if (trades.trades && trades.trades.length > 0) {
+      tb.innerHTML = trades.trades.slice(0, 50).map(t => `<tr>
+        <td>${t.timestamp}</td>
+        <td>${t.chain}</td>
+        <td><b>${t.token}</b></td>
+        <td>${t.buy_venue}</td>
+        <td>${t.sell_venue}</td>
+        <td>${t.spent_weth.toFixed(6)}</td>
+        <td>${t.received_weth.toFixed(6)}</td>
+        <td class="profit">${fmt(t.profit_usd)}</td>
+        <td>${t.roi_pct.toFixed(4)}%</td>
+      </tr>`).join('');
+    }
+  } catch(e) {
+    console.error('refresh error:', e);
+  }
+}
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
+"##;
 
 async fn scan_token(
     State(state): State<AppState>,

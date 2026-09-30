@@ -20,6 +20,33 @@ use std::time::Instant;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+/// A single confirmed trade logged by the Velora round-trip validator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeRecord {
+    pub id: String,
+    pub timestamp: String,
+    pub chain: String,
+    pub chain_id: u64,
+    pub token: String,
+    pub buy_venue: String,
+    pub sell_venue: String,
+    pub spent_weth: f64,
+    pub received_weth: f64,
+    pub profit_usd: f64,
+    pub trade_size_usd: f64,
+    pub roi_pct: f64,
+}
+
+/// Per-chain cumulative profit tracker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainProfit {
+    pub chain: String,
+    pub chain_id: u64,
+    pub total_profit_usd: f64,
+    pub trade_count: u64,
+    pub last_trade: Option<String>,
+}
+
 /// Core radar scanner that finds arbitrage opportunities across every
 /// configured chain and every registry-listed venue on it.
 pub struct RadarScanner {
@@ -34,6 +61,10 @@ pub struct RadarScanner {
     live_opportunities: Arc<parking_lot::RwLock<Vec<OpportunityDetail>>>,
     /// Cumulative profit from executed trades (USD).
     cumulative_profit_usd: Arc<std::sync::atomic::AtomicI64>,
+    /// Trade history — last N confirmed profitable trades.
+    trade_history: Arc<parking_lot::RwLock<Vec<TradeRecord>>>,
+    /// Per-chain cumulative profit.
+    chain_profits: Arc<DashMap<u64, ChainProfit>>,
 }
 
 impl RadarScanner {
@@ -45,6 +76,8 @@ impl RadarScanner {
             native_usd_cache: Arc::new(DashMap::new()),
             live_opportunities: Arc::new(parking_lot::RwLock::new(Vec::new())),
             cumulative_profit_usd: Arc::new(std::sync::atomic::AtomicI64::new(0)),
+            trade_history: Arc::new(parking_lot::RwLock::new(Vec::new())),
+            chain_profits: Arc::new(DashMap::new()),
         }
     }
 
@@ -56,6 +89,72 @@ impl RadarScanner {
     /// Read cumulative profit in USD (integer cents for atomicity).
     pub fn cumulative_profit_usd(&self) -> f64 {
         self.cumulative_profit_usd.load(std::sync::atomic::Ordering::Relaxed) as f64 / 100.0
+    }
+
+    /// Read trade history (most recent first, capped at 200).
+    pub fn trade_history(&self) -> Vec<TradeRecord> {
+        self.trade_history.read().clone()
+    }
+
+    /// Read per-chain profit breakdown.
+    pub fn chain_profit_breakdown(&self) -> Vec<ChainProfit> {
+        self.chain_profits.iter().map(|r| r.value().clone()).collect()
+    }
+
+    /// Record a confirmed trade in history and per-chain tracker.
+    fn record_trade(
+        &self,
+        chain: &str,
+        chain_id: u64,
+        token: &str,
+        buy_venue: &str,
+        sell_venue: &str,
+        spent_weth: f64,
+        received_weth: f64,
+        profit_usd: f64,
+        trade_size_usd: f64,
+    ) {
+        let roi_pct = if trade_size_usd > 0.0 {
+            (profit_usd / trade_size_usd) * 100.0
+        } else {
+            0.0
+        };
+        let now = Utc::now();
+        let trade = TradeRecord {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            chain: chain.to_string(),
+            chain_id,
+            token: token.to_string(),
+            buy_venue: buy_venue.to_string(),
+            sell_venue: sell_venue.to_string(),
+            spent_weth,
+            received_weth,
+            profit_usd,
+            trade_size_usd,
+            roi_pct,
+        };
+
+        // Append to history, cap at 200
+        {
+            let mut history = self.trade_history.write();
+            history.insert(0, trade);
+            if history.len() > 200 {
+                history.truncate(200);
+            }
+        }
+
+        // Update per-chain totals
+        let mut entry = self.chain_profits.entry(chain_id).or_insert_with(|| ChainProfit {
+            chain: chain.to_string(),
+            chain_id,
+            total_profit_usd: 0.0,
+            trade_count: 0,
+            last_trade: None,
+        });
+        entry.total_profit_usd += profit_usd;
+        entry.trade_count += 1;
+        entry.last_trade = Some(now.format("%H:%M:%S UTC").to_string());
     }
 
     /// Fetch the live native/USD price for a chain by reading the WETH/USDC
@@ -464,6 +563,19 @@ impl RadarScanner {
         self.cumulative_profit_usd
             .fetch_add(profit_cents, std::sync::atomic::Ordering::Relaxed);
         profit_transfer.record_profit(actual_profit_usd).await;
+
+        // Record in trade history and per-chain tracker
+        self.record_trade(
+            &opp.chain_name,
+            opp.chain_id,
+            &opp.token,
+            opp.buy_dex.as_deref().unwrap_or("?"),
+            opp.sell_dex.as_deref().unwrap_or("?"),
+            spent_wei / 1e18,
+            received_wei / 1e18,
+            actual_profit_usd,
+            trade_usd,
+        );
 
         // Build confirmed opportunity with REAL Velora-derived numbers.
         // The round-trip result already accounts for gas, slippage, and fees
