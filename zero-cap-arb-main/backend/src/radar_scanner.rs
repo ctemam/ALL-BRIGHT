@@ -1,7 +1,7 @@
 use crate::chains::{get_chains, Protocol};
 use crate::multicall;
 use crate::types::*;
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U256};
 use alloy::providers::{ProviderBuilder, RootProvider};
 use alloy::transports::http::Http;
 use serde::{Deserialize, Serialize};
@@ -105,6 +105,14 @@ pub struct RadarScanner {
     dynamic_min_depth: Arc<DashMap<u64, f64>>,
     /// Binance CEX benchmark prices for CEX-deviation detection.
     cex_benchmarks: Arc<parking_lot::RwLock<std::collections::HashMap<String, f64>>>,
+    /// Shared RPC endpoint pool with health scoring, cooldown and
+    /// quarantine. Without it the scanner round-robins raw URLs and keeps
+    /// hammering rate-limited endpoints.
+    rpc_pool: Option<Arc<crate::rpc_pool::RpcPool>>,
+    /// Venue-level quotes with raw pool state, keyed `chainid_address`.
+    /// Written alongside `price_cache` on every fresh fetch — this is the
+    /// substrate the on-chain round-trip simulator scores candidates with.
+    venue_cache: Arc<DashMap<String, (u64, Vec<(String, VenueQuote)>)>>,
 }
 
 impl RadarScanner {
@@ -120,7 +128,15 @@ impl RadarScanner {
             chain_profits: Arc::new(DashMap::new()),
             dynamic_min_depth: Arc::new(DashMap::new()),
             cex_benchmarks: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+            rpc_pool: None,
+            venue_cache: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Attach the shared endpoint pool. Called once at startup before the
+    /// scanner is wrapped in `Arc`.
+    pub fn set_rpc_pool(&mut self, pool: Arc<crate::rpc_pool::RpcPool>) {
+        self.rpc_pool = Some(pool);
     }
 
     /// Update the dynamic min-depth thresholds from DeFiLlama TVL data.
@@ -134,9 +150,12 @@ impl RadarScanner {
             .get(&chain_id)
             .map(|v| *v)
             .unwrap_or_else(|| match chain_id {
-                42161 | 10 | 8453 | 59144 | 100 => 100.0,
-                137 | 42220 => 200.0,
-                _ => 500.0,
+                // Floors raised from $100–500: sub-$1.5k pools cannot fill
+                // even a minimal arb leg without moving the price past the
+                // spread, so quoting them only produced phantom candidates.
+                42161 | 10 | 8453 | 59144 | 100 | 146 | 130 | 534352 | 324 | 5000 => 1_500.0,
+                137 | 42220 => 2_500.0,
+                _ => 5_000.0,
             })
     }
 
@@ -258,8 +277,23 @@ impl RadarScanner {
         let native_addr = crate::chains::get_wrapped_native(chain_id);
 
         let chain = get_chains().iter().find(|c| c.id == chain_id)?;
-        let provider = try_build_provider(&chain.rpc_urls).ok()?;
 
+        // Up to 3 endpoint attempts — a single parseable-but-dead peer must
+        // not burn the whole budget. Pool health scoring picks live
+        // endpoints; per-attempt timeout bounds a hung peer.
+        for _attempt in 0..3u8 {
+            let provider = match &self.rpc_pool {
+                Some(pool) => match pool.select(chain_id) {
+                    Some((_idx, url)) => try_build_provider(&[url]).ok(),
+                    None => try_build_provider(&chain.rpc_urls).ok(),
+                },
+                None => try_build_provider(&chain.rpc_urls).ok(),
+            };
+            let Some(provider) = provider else { continue };
+
+        // No timeout on alloy's default HTTP client — bound the whole fetch
+        // so a hung peer can't stall the per-cycle rate refresh.
+        let inner = async {
         let stable: Address = stable_addr.parse().ok()?;
         let native: Address = native_addr.parse().ok()?;
 
@@ -332,7 +366,17 @@ impl RadarScanner {
             }
         }
 
-        // Fallback: try the env var
+        // No env fallback here — only real on-chain rates.
+        None::<f64>
+        };
+        if let Ok(Some(rate)) =
+            tokio::time::timeout(std::time::Duration::from_secs(40), inner).await
+        {
+            return Some(rate);
+        }
+        }
+
+        // Fallback: try the env var once all endpoint attempts are exhausted
         self.native_usd_rate_env(chain_id)
     }
 
@@ -340,7 +384,10 @@ impl RadarScanner {
     pub async fn refresh_all_native_usd_rates(&self) {
         let mut rates_found = 0u32;
 
-        // Fetch all unique native tokens concurrently (ETH, MATIC, BNB, AVAX, CELO)
+        // Fetch all unique native tokens concurrently (ETH, MATIC, BNB, AVAX, CELO, S).
+        // Sonic's quote leg is wS — its own token, NOT ETH — so it needs its
+        // own on-chain rate (wS/USDC.e pool), or every Sonic spread is
+        // mispriced by ~ETH/S (~7700x).
         let (eth_rate, matic_rate, bnb_rate, avax_rate, celo_rate) = futures_util::future::join5(
             self.fetch_native_usd_rate(1),       // ETH
             self.fetch_native_usd_rate(137),     // MATIC
@@ -349,14 +396,17 @@ impl RadarScanner {
             self.fetch_native_usd_rate(42220),   // CELO
         )
         .await;
+        let sonic_rate = self.fetch_native_usd_rate(146).await; // S
 
-        // ETH chains: 1, 42161, 10, 8453, 59144 all share the ETH rate
+        // ETH-quoted chains share the ETH rate. Mantle pays gas in MNT but
+        // its pool liquidity is denominated in bridged WETH, so the ETH rate
+        // is the right quote-leg conversion there too.
         if let Some(eth_rate) = eth_rate {
-            for chain_id in &[1u64, 42161, 10, 8453, 59144] {
+            for chain_id in &[1u64, 42161, 10, 8453, 59144, 130, 534352, 324, 5000] {
                 self.native_usd_cache.insert(*chain_id, eth_rate);
             }
-            rates_found += 5;
-            info!(rate = format!("${:.2}", eth_rate), "ETH/USD rate (5 chains)");
+            rates_found += 9;
+            info!(rate = format!("${:.2}", eth_rate), "ETH/USD rate (9 chains)");
         }
         if let Some(rate) = matic_rate {
             self.native_usd_cache.insert(137, rate);
@@ -377,6 +427,11 @@ impl RadarScanner {
             self.native_usd_cache.insert(42220, rate);
             rates_found += 1;
             info!(rate = format!("${:.4}", rate), "CELO/USD rate");
+        }
+        if let Some(rate) = sonic_rate {
+            self.native_usd_cache.insert(146, rate);
+            rates_found += 1;
+            info!(rate = format!("${:.4}", rate), "S/USD rate (Sonic)");
         }
         // Gnosis (xDAI ≈ $1)
         self.native_usd_cache.insert(100, 1.0);
@@ -507,7 +562,7 @@ impl RadarScanner {
                                 candidates = candidates.len(),
                                 estimated_net_usd = format!("{:.2}",
                                     candidates.iter().map(|o| o.profit_breakdown.net_profit_usd).sum::<f64>()),
-                                "spread candidates found — validating via Velora round-trip"
+                                "spread candidates found — validating via on-chain simulation"
                             );
                         }
 
@@ -543,13 +598,13 @@ impl RadarScanner {
                             info!(
                                 opportunities = count,
                                 net_usd = format!("{:.2}", total_net),
-                                "Velora-validated profitable opportunities"
+                                "on-chain-simulated profitable opportunities"
                             );
                         } else if !candidates.is_empty() {
                             debug!(
                                 candidates = candidates.len(),
                                 scan_ms = cycle_start.elapsed().as_millis(),
-                                "all candidates failed Velora validation"
+                                "all candidates failed on-chain simulation"
                             );
                         } else {
                             debug!(
@@ -569,15 +624,16 @@ impl RadarScanner {
     }
 
     /// Validate a candidate opportunity by quoting a real Velora round-trip,
-    /// then execute the trade on-chain and verify via Etherscan.
+    /// then execute gaslessly via ERC-4337 (Pimlico bundler + paymaster).
     ///
     /// Pipeline:
     ///   1. Quote the Velora round-trip (WETH → token → WETH).
     ///   2. If the quote is not profitable, reject immediately.
-    ///   3. Sign and broadcast the swap tx using the PRIVATE_KEY.
-    ///   4. Wait for the tx receipt via RPC.
-    ///   5. Cross-check via Etherscan API for independent confirmation.
-    ///   6. Only record profit after on-chain receipt confirms success.
+    ///   3. Build a UserOperation calling ZeroRiskArb.execute() via flash loan.
+    ///   4. Pimlico paymaster sponsors gas (zero native balance required).
+    ///   5. Sign UserOp with EOA owner key, submit to Pimlico bundler.
+    ///   6. Poll for on-chain receipt, cross-check via Etherscan.
+    ///   7. Only record profit after on-chain receipt confirms success.
     ///
     /// Returns `Some(confirmed_opportunity)` with real on-chain-verified
     /// profit, or `None` if the trade is not profitable or fails on-chain.
@@ -588,6 +644,17 @@ impl RadarScanner {
         profit_transfer: &crate::profit_transfer::ProfitTransferService,
         verifier: &crate::etherscan::EtherscanVerifier,
     ) -> Option<OpportunityDetail> {
+        // Primary validator: exact on-chain simulation of the actual two-leg
+        // route the contract executes (buy on the cheap pool, sell on the
+        // expensive one, repay the flash loan). It covers all 15 chains,
+        // needs no external API, and can't be fooled by an aggregator
+        // rerouting into a different trade than we intend to execute.
+        // The Velora round-trip path below remains as an opt-in second
+        // opinion for supported chains via ZCA_VELORA_VALIDATION=1.
+        if std::env::var("ZCA_VELORA_VALIDATION").ok().as_deref() != Some("1") {
+            return self.validate_opportunity_onchain(opp, profit_transfer).await;
+        }
+
         // Liquidity sanity check
         if opp.liquidity_usd <= 0.0 {
             return None;
@@ -616,10 +683,24 @@ impl RadarScanner {
             return None;
         }
 
+        // Velora's API does not serve every chain we scan — its network list
+        // omits Celo, Linea, Scroll, zkSync and Mantle, so their candidates
+        // can never get a round-trip quote and would hard-reject here forever.
+        // Those chains get a direct on-chain simulation against real pool
+        // state. Sonic (146) and Unichain (130) ARE Velora-supported.
+        const VELORA_UNSUPPORTED: &[u64] = &[42220, 59144, 534352, 324, 5000];
+        if VELORA_UNSUPPORTED.contains(&opp.chain_id) {
+            return self.validate_opportunity_onchain(opp, profit_transfer).await;
+        }
+
+        // Derive the EOA owner address from PRIVATE_KEY (used to identify the
+        // smart account owner and as the Velora userAddress). No native balance
+        // is required — gas is sponsored by Pimlico's paymaster.
         let wallet_addr = std::env::var("PROFIT_WALLET")
-            .or_else(|_| {
-                std::env::var("PRIVATE_KEY").map(|_| {
-                    "0x2eF34d88EC4EBBd5543fFF2784D5AdbC01f14D56".to_string()
+            .ok()
+            .or_else(|| {
+                std::env::var("PRIVATE_KEY").ok().and_then(|pk| {
+                    crate::gasless::owner_address_from_key(&pk).ok()
                 })
             })
             .unwrap_or_default();
@@ -654,6 +735,12 @@ impl RadarScanner {
         {
             Ok(s) => s,
             Err(e) => {
+                // "Invalid network" means Velora cannot serve this chain at
+                // all — fall back to on-chain simulation rather than dropping
+                // the candidate.
+                if e.to_string().contains("Invalid network") {
+                    return self.validate_opportunity_onchain(opp, profit_transfer).await;
+                }
                 info!(token = %opp.token, chain = %opp.chain_name, error = %e,
                     "Velora buy-leg quote failed");
                 return None;
@@ -715,11 +802,15 @@ impl RadarScanner {
             "Velora quote profitable — executing on-chain for verification"
         );
 
-        // ---- ON-CHAIN EXECUTION AND ETHERSCAN VERIFICATION ----
+        // ---- GASLESS EXECUTION VIA ERC-4337 (PIMLICO) ----
         //
-        // Attempt to sign and broadcast the buy-leg tx. If execution
-        // succeeds, verify the receipt and only then record profit.
-        // If execution fails, record the trade as failed with no profit.
+        // Build a UserOperation that calls ZeroRiskArb.execute() through
+        // the smart account. Pimlico's paymaster sponsors gas — no native
+        // balance is required. If the contract is not deployed yet, the
+        // Velora swap calldata is used directly as the UserOp's callData.
+        //
+        // Flow: UserOp → Pimlico paymaster sponsors → bundler submits →
+        //       on-chain flash loan → swap → profit → receipt verification.
 
         let rpc_url = crate::chains::get_chains()
             .iter()
@@ -728,16 +819,53 @@ impl RadarScanner {
             .unwrap_or_default();
 
         let private_key = std::env::var("PRIVATE_KEY").unwrap_or_default();
-        let tx_params = &buy_swap.tx_params;
+        let arb_contract = std::env::var("ZERO_RISK_ARB_ADDRESS").unwrap_or_default();
 
-        // Attempt on-chain execution
-        let exec_result = execute_tx_onchain(
-            &rpc_url,
-            &private_key,
-            tx_params,
-            opp.chain_id,
-        )
-        .await;
+        let pimlico = crate::pimlico_client::PimlicoClient::new(
+            std::env::var("PIMLICO_API_KEY").ok(),
+        );
+
+        // Build the execution calldata. If ZeroRiskArb is deployed, use
+        // flash-loan execution. Otherwise fall back to the Velora swap
+        // calldata routed through the smart account.
+        let exec_result = if !pimlico.is_configured() {
+            Err("gasless execution unavailable: PIMLICO_API_KEY not set".to_string())
+        } else if arb_contract.is_empty() {
+            // No ZeroRiskArb deployed yet — use Velora swap calldata
+            // through the smart account. This still requires WETH in the
+            // smart account for the swap, but gas is sponsored.
+            let tx_params = &buy_swap.tx_params;
+            crate::gasless::build_and_send_userop(
+                &pimlico,
+                opp.chain_id,
+                &private_key,
+                &tx_params.to,
+                &tx_params.data,
+            )
+            .await
+            .map(|r| r.tx_hash)
+        } else {
+            // ZeroRiskArb is deployed — build flash-loan calldata
+            let weth_addr = crate::chains::resolve_token_symbol("WETH", opp.chain_id);
+            let arb_calldata = crate::gasless::encode_arb_execute(
+                3,  // source=3 → Balancer V2 (0% fee)
+                &weth_addr,
+                &buy_swap.price_route.src_amount,
+                "0",  // minProfit = 0 (contract enforces atomicity)
+                &buy_swap.tx_params.data,
+                false,
+                "0x0000000000000000000000000000000000000000",
+            );
+            crate::gasless::build_and_send_userop(
+                &pimlico,
+                opp.chain_id,
+                &private_key,
+                &arb_contract,
+                &arb_calldata,
+            )
+            .await
+            .map(|r| r.tx_hash)
+        };
 
         let (tx_hash, verified, explorer_url, gas_cost_usd, actual_profit_usd) = match exec_result
         {
@@ -890,6 +1018,463 @@ impl RadarScanner {
         Some(confirmed)
     }
 
+    /// On-chain round-trip validation for chains the Velora API does not
+    /// serve (Linea 59144, Celo 42220). Re-quotes every venue live, then
+    /// simulates both swap legs against the pools' real state — constant-
+    /// product `getAmountOut` math for V2/volatile pools, single-tick
+    /// concentrated-liquidity math for V3 — rather than trusting a
+    /// spot-price spread.
+    ///
+    /// Execution still requires the ZeroRiskArb contract's router path:
+    /// its swap call is bound to Velora's Augustus contract today, which
+    /// does not exist on these chains. A validated candidate is therefore
+    /// recorded as `QuoteOnly` — a real, state-verified opportunity whose
+    /// execution awaits the direct-pool route. No profit is recorded.
+    async fn validate_opportunity_onchain(
+        &self,
+        opp: &OpportunityDetail,
+        profit_transfer: &crate::profit_transfer::ProfitTransferService,
+    ) -> Option<OpportunityDetail> {
+        let native_usd = self.native_usd_rate(opp.chain_id).unwrap_or(0.0);
+        if native_usd <= 0.0 {
+            return None;
+        }
+
+        let chains = crate::chains::get_chains();
+        let chain = chains.iter().find(|c| c.id == opp.chain_id)?;
+
+        // Fresh venue quotes — same retry/endpoint-rotation as the scan path,
+        // with the same hard timeout so a hung peer cannot park validation.
+        let mut quotes: Vec<(String, VenueQuote)> = Vec::new();
+        for _ in 0..3u8 {
+            let Ok(provider) = try_build_provider(&chain.rpc_urls) else {
+                continue;
+            };
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(45),
+                quote_venues_on_chain(&provider, chain, &opp.token_address),
+            )
+            .await
+            {
+                Ok(Ok(q)) if !q.is_empty() => {
+                    quotes = q;
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        if quotes.len() < 2 {
+            return None;
+        }
+
+        // Prefer the venues the scanner named; fall back to fresh extremes.
+        let cheapest = quotes
+            .iter()
+            .min_by(|a, b| a.1.price.total_cmp(&b.1.price))?;
+        let priciest = quotes
+            .iter()
+            .max_by(|a, b| a.1.price.total_cmp(&b.1.price))?;
+        let buy = opp
+            .buy_dex
+            .as_ref()
+            .and_then(|l| quotes.iter().find(|(n, _)| n == l))
+            .unwrap_or(cheapest);
+        let sell = opp
+            .sell_dex
+            .as_ref()
+            .and_then(|l| quotes.iter().find(|(n, _)| n == l))
+            .unwrap_or(priciest);
+        if buy.0 == sell.0 || buy.1.price >= sell.1.price {
+            return None;
+        }
+
+        // Size-optimized round-trip: P(x) = sell(buy(x)) − x·(1+flash_fee),
+        // maximized over x against the two venues' decoded curves. A single
+        // fixed notional either undersizes real edges or oversizes past
+        // the liquidity cliff — searching finds the true optimum.
+        let flash_rate = quotes
+            .iter()
+            .filter(|(_, q)| matches!(q.state, PoolState::Concentrated { .. }))
+            .map(|(_, q)| q.fee_bps_hundredths as f64 / 1e6)
+            .fold(f64::MAX, f64::min);
+        let flash_rate = if flash_rate.is_finite() { flash_rate } else { 0.0005 };
+
+        let sim = optimize_round_trip(&buy.1, &sell.1, flash_rate);
+        let Some(sim) = sim else {
+            info!(
+                token = %opp.token, chain = %opp.chain_name,
+                buy = %buy.0, sell = %sell.0,
+                scanner_est = format!("${:.2}", opp.profit_breakdown.net_profit_usd),
+                "on-chain round-trip unprofitable at every size — candidate rejected"
+            );
+            return None;
+        };
+        let weth_in = sim.amount_in;
+        let tokens_mid = sim.mid_out;
+        let weth_out = sim.final_out;
+        // net_quote already subtracts the flash-loan fee.
+        let quote_profit_usd = sim.net_quote / 1e18 * native_usd;
+        let gas_est = estimate_gas_cost(opp.chain_id);
+
+        if quote_profit_usd - gas_est <= 0.0 {
+            info!(
+                token = %opp.token, chain = %opp.chain_name,
+                buy = %buy.0, sell = %sell.0,
+                spent_weth = format!("{:.6}", weth_in / 1e18),
+                received_weth = format!("{:.6}", weth_out / 1e18),
+                sim_profit = format!("${:.4}", quote_profit_usd),
+                gas_est = format!("${:.4}", gas_est),
+                scanner_est = format!("${:.2}", opp.profit_breakdown.net_profit_usd),
+                "on-chain round-trip not profitable — candidate rejected"
+            );
+            return None;
+        }
+
+        info!(
+            token = %opp.token, chain = %opp.chain_name,
+            buy = %buy.0, sell = %sell.0,
+            spent_weth = format!("{:.6}", weth_in / 1e18),
+            received_weth = format!("{:.6}", weth_out / 1e18),
+            sim_profit = format!("${:.2}", quote_profit_usd),
+            scanner_est = format!("${:.2}", opp.profit_breakdown.net_profit_usd),
+            "on-chain round-trip validated — attempting direct-pool execution"
+        );
+
+        // ---- Direct-route execution via executeDirect + UniV3 flash ----
+        //
+        // Legs push the borrowed quote token into each pair and call
+        // `swap()` with precomputed outputs (1% haircut vs the simulation —
+        // the pair's K check reverts if we overshoot). The flash loan comes
+        // from source 6: a Uniswap-V3-style pool holding the quote token,
+        // taken from this pair's own venue set.
+        let arb_contract = std::env::var("ZERO_RISK_ARB_ADDRESS").unwrap_or_default();
+        let private_key = std::env::var("PRIVATE_KEY").unwrap_or_default();
+        let pimlico = crate::pimlico_client::PimlicoClient::new(
+            std::env::var("PIMLICO_API_KEY").ok(),
+        );
+
+        let (tx_hash, verified, explorer_url, gas_cost_usd, actual_profit_usd) = 'exec: {
+            // Execution prerequisites: deployed contract + gasless infra.
+            // Without them the candidate stays QuoteOnly.
+            if arb_contract.is_empty()
+                || private_key.is_empty()
+                || !pimlico.is_configured()
+            {
+                break 'exec (
+                    String::new(),
+                    VerificationStatus::QuoteOnly,
+                    String::new(),
+                    gas_est,
+                    0.0,
+                );
+            }
+
+            // Flash pool: the deepest V3 venue for this pair that can cover
+            // the borrow (its quote-side depth ≥ 3× the flash amount).
+            let flash_pool = quotes
+                .iter()
+                .filter(|(_, q)| matches!(q.state, PoolState::Concentrated { .. }))
+                .filter(|(_, q)| q.depth * 1e18 >= weth_in * 3.0)
+                .max_by(|a, b| a.1.depth.total_cmp(&b.1.depth))
+                .map(|(_, q)| q.pool);
+
+            // Pool legs work for V2 pairs (transfer + pair.swap) AND V3
+            // pools (pool.swap — input paid through uniswapV3SwapCallback).
+            // Solidly-stable SpotOnly quotes can't be leg-encoded.
+            let Some(flash_pool) = flash_pool else {
+                break 'exec (
+                    String::new(),
+                    VerificationStatus::QuoteOnly,
+                    String::new(),
+                    gas_est,
+                    0.0,
+                );
+            };
+
+            let (Ok(token_addr), Ok(quote_addr)) = (
+                opp.token_address.parse::<Address>(),
+                crate::chains::get_wrapped_native(opp.chain_id).parse::<Address>(),
+            ) else {
+                break 'exec (
+                    String::new(),
+                    VerificationStatus::QuoteOnly,
+                    String::new(),
+                    gas_est,
+                    0.0,
+                );
+            };
+
+            let token_is_token0 = token_addr < quote_addr;
+            let quote_str = format!("{:?}", quote_addr);
+            let token_str = format!("{:?}", token_addr);
+
+            // Leg 1: quote → token on the buy pool.
+            let leg1 = match buy.1.state {
+                PoolState::Reserves { .. } => {
+                    let mid_out = (tokens_mid * 0.995) as u128;
+                    let (b0, b1) = if token_is_token0 {
+                        (mid_out, 0)
+                    } else {
+                        (0, mid_out)
+                    };
+                    crate::gasless::SwapLegInput {
+                        target: format!("{:?}", buy.1.pool),
+                        token_in: quote_str.clone(),
+                        to_pool: true,
+                        amount_in: format!("{:.0}", weth_in),
+                        data: crate::gasless::encode_v2_pair_swap(b0, b1, &arb_contract),
+                    }
+                }
+                PoolState::Concentrated {
+                    sqrt_price_x96,
+                    liquidity,
+                    token_is_token0,
+                } => {
+                    // Input is the quote token → zeroForOne iff quote is
+                    // token0, i.e. the token is NOT token0.
+                    let zfo = !token_is_token0;
+                    let limit = v3_sqrt_limit_x96(
+                        to_f64(&sqrt_price_x96),
+                        to_f64(&liquidity),
+                        buy.1.fee_bps_hundredths,
+                        weth_in,
+                        zfo,
+                    );
+                    crate::gasless::SwapLegInput {
+                        target: format!("{:?}", buy.1.pool),
+                        token_in: quote_str.clone(),
+                        to_pool: true,
+                        amount_in: "0".to_string(),
+                        data: crate::gasless::encode_v3_pool_swap(
+                            &arb_contract,
+                            zfo,
+                            weth_in as i128,
+                            &limit,
+                            &crate::gasless::encode_address_word(&quote_str),
+                        ),
+                    }
+                }
+                PoolState::SpotOnly => {
+                    break 'exec (
+                        String::new(),
+                        VerificationStatus::QuoteOnly,
+                        String::new(),
+                        gas_est,
+                        0.0,
+                    )
+                }
+            };
+
+            // Leg 2: token → quote on the sell pool.
+            let leg2 = match sell.1.state {
+                PoolState::Reserves { .. } => {
+                    // amountIn=0 spends the contract's whole mid balance
+                    // (handles sim/reality drift); output is exact-out.
+                    let final_out = (weth_out * 0.990) as u128;
+                    let (s0, s1) = if token_is_token0 {
+                        (0, final_out)
+                    } else {
+                        (final_out, 0)
+                    };
+                    crate::gasless::SwapLegInput {
+                        target: format!("{:?}", sell.1.pool),
+                        token_in: token_str.clone(),
+                        to_pool: true,
+                        amount_in: "0".to_string(),
+                        data: crate::gasless::encode_v2_pair_swap(s0, s1, &arb_contract),
+                    }
+                }
+                PoolState::Concentrated {
+                    sqrt_price_x96,
+                    liquidity,
+                    token_is_token0,
+                } => {
+                    // Exact-in with a 1% haircut on the simulated mid amount —
+                    // if leg 1 under-delivers the callback transfer fails and
+                    // the whole tx reverts atomically (no partial loss).
+                    let mid_in = (tokens_mid * 0.99) as i128;
+                    let zfo = token_is_token0;
+                    let limit = v3_sqrt_limit_x96(
+                        to_f64(&sqrt_price_x96),
+                        to_f64(&liquidity),
+                        sell.1.fee_bps_hundredths,
+                        mid_in as f64,
+                        zfo,
+                    );
+                    crate::gasless::SwapLegInput {
+                        target: format!("{:?}", sell.1.pool),
+                        token_in: token_str.clone(),
+                        to_pool: true,
+                        amount_in: "0".to_string(),
+                        data: crate::gasless::encode_v3_pool_swap(
+                            &arb_contract,
+                            zfo,
+                            mid_in,
+                            &limit,
+                            &crate::gasless::encode_address_word(&token_str),
+                        ),
+                    }
+                }
+                PoolState::SpotOnly => {
+                    break 'exec (
+                        String::new(),
+                        VerificationStatus::QuoteOnly,
+                        String::new(),
+                        gas_est,
+                        0.0,
+                    )
+                }
+            };
+
+            let legs_data = crate::gasless::encode_swap_legs(&[leg1, leg2]);
+
+            // minProfit = half the simulated net surplus (post flash fee) —
+            // the contract reverts atomically if the real fill lands below it.
+            let min_profit = format!("{:.0}", sim.net_quote.max(0.0) * 0.5);
+            let calldata = crate::gasless::encode_arb_execute_direct(
+                6, // Uniswap-V3 pool flash — works on every chain with a V3 pool
+                &quote_str,
+                &format!("{:.0}", weth_in),
+                &min_profit,
+                &legs_data,
+                &format!("{:?}", flash_pool),
+            );
+
+            match crate::gasless::build_and_send_userop(
+                &pimlico,
+                opp.chain_id,
+                &private_key,
+                &arb_contract,
+                &calldata,
+            )
+            .await
+            {
+                Ok(r) => {
+                    info!(
+                        token = %opp.token, chain = %opp.chain_name,
+                        tx_hash = %r.tx_hash,
+                        "direct-route tx broadcast — waiting for confirmation"
+                    );
+                    let wallet_addr = std::env::var("PROFIT_WALLET")
+                        .ok()
+                        .or_else(|| {
+                            crate::gasless::owner_address_from_key(&private_key).ok()
+                        })
+                        .unwrap_or_default();
+                    let v = crate::etherscan::EtherscanVerifier::new()
+                        .verify_tx(
+                            &chain.rpc_url,
+                            &r.tx_hash,
+                            opp.chain_id,
+                            &wallet_addr,
+                            std::time::Duration::from_secs(120),
+                        )
+                        .await;
+                    if v.confirmed {
+                        let gas_cost = v.gas_cost_native.unwrap_or(0.0) * native_usd;
+                        let net = quote_profit_usd - gas_cost;
+                        info!(
+                            token = %opp.token, chain = %opp.chain_name,
+                            tx_hash = %r.tx_hash,
+                            gas_cost_usd = format!("${:.4}", gas_cost),
+                            net_profit_usd = format!("${:.2}", net),
+                            explorer = %v.explorer_url,
+                            "direct-route profit verified on-chain"
+                        );
+                        (
+                            r.tx_hash,
+                            VerificationStatus::Confirmed,
+                            v.explorer_url,
+                            gas_cost,
+                            if net > 0.0 { net } else { 0.0 },
+                        )
+                    } else if v.reverted {
+                        (
+                            r.tx_hash,
+                            VerificationStatus::Reverted,
+                            v.explorer_url,
+                            0.0,
+                            0.0,
+                        )
+                    } else {
+                        (
+                            r.tx_hash.clone(),
+                            VerificationStatus::Pending,
+                            crate::etherscan::tx_explorer_url(opp.chain_id, &r.tx_hash),
+                            0.0,
+                            0.0,
+                        )
+                    }
+                }
+                Err(e) => {
+                    info!(
+                        token = %opp.token, chain = %opp.chain_name,
+                        error = %e,
+                        "direct-route execution failed — quote-only"
+                    );
+                    (
+                        String::new(),
+                        VerificationStatus::ExecutionFailed,
+                        String::new(),
+                        gas_est,
+                        0.0,
+                    )
+                }
+            }
+        };
+
+        // Only a confirmed on-chain trade counts toward realized profit —
+        // and only realized profit feeds the $100 auto-transfer threshold.
+        if actual_profit_usd > 0.0 && matches!(verified, VerificationStatus::Confirmed) {
+            let cents = (actual_profit_usd * 100.0) as i64;
+            self.cumulative_profit_usd
+                .fetch_add(cents, std::sync::atomic::Ordering::Relaxed);
+            profit_transfer.record_profit(actual_profit_usd).await;
+        }
+
+        self.record_trade(
+            &opp.chain_name,
+            opp.chain_id,
+            &opp.token,
+            &buy.0,
+            &sell.0,
+            weth_in / 1e18,
+            weth_out / 1e18,
+            actual_profit_usd,
+            weth_in / 1e18 * native_usd,
+            &tx_hash,
+            verified.clone(),
+            &explorer_url,
+            gas_cost_usd,
+        );
+
+        let mut confirmed = opp.clone();
+        confirmed.buy_dex = Some(buy.0.clone());
+        confirmed.sell_dex = Some(sell.0.clone());
+        confirmed.profit_breakdown.gross_profit_usd = quote_profit_usd;
+        confirmed.profit_breakdown.net_profit_usd = actual_profit_usd;
+        confirmed.profit_breakdown.net_profit_pct = {
+            let trade_usd = weth_in / 1e18 * native_usd;
+            if trade_usd > 0.0 { (actual_profit_usd / trade_usd) * 100.0 } else { 0.0 }
+        };
+        confirmed.profit_breakdown.roi_pct = confirmed.profit_breakdown.net_profit_pct;
+        confirmed.profit_breakdown.is_profitable =
+            actual_profit_usd > 0.0 && matches!(verified, VerificationStatus::Confirmed);
+        confirmed.profit_breakdown.costs.total_cost_usd = gas_cost_usd;
+        confirmed.profit_breakdown.costs.gas_estimated_usd = gas_cost_usd;
+        confirmed.profit_breakdown.costs.slippage_estimated_usd = 0.0;
+        confirmed.profit_breakdown.costs.velora_fee_usd = 0.0;
+        confirmed.profit_breakdown.costs.flash_loan_fee_usd = 0.0;
+        confirmed.execution_steps.push(format!(
+            "Direct on-chain route ({:?}): sim net ${:.2} after ${:.2} gas",
+            verified,
+            quote_profit_usd - gas_est,
+            gas_est,
+        ));
+
+        Some(confirmed)
+    }
+
     /// Tokens to scan on every cycle — maximum coverage per chain.
     /// Master token list: all symbols the scanner can resolve. The
     /// comprehensive_scan resolves each symbol to its per-chain address
@@ -942,6 +1527,145 @@ impl RadarScanner {
             ("WMATIC", "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"),
             ("WBNB",   "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"),
             ("WAVAX",  "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"),
+            // === Tier 7: liquid staking / restaking — peg spreads ==========
+            ("STETH",  "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"),
+            ("RETH",   "0xae78736Cd615f374D3085123A210448E74Fc6393"),
+            ("CBETH",  "0xBe9895146f7AF43049ca1c1AE358B0541E497776"),
+            ("EZETH",  "0x2416092f143378750bb29b79eD961ab195CcEea5"),
+            ("WEETH",  "0x1Bf74C010E6320bab11e2e5A532b5AC15e0b8aA6"),
+            ("WRSETH", "0xD2671165570f41BBB3B0097893300b6EB6102E6C"),
+            ("SAVAX",  "0x2b2C81e08f1Af8835a78Bb2A90AE924ACE0eA4bE"),
+            ("GGAVAX", "0xA25EaF2906FA1a3a13EdAc9B9657108Af7B703e3"),
+            ("STMATIC","0x3A58a54C066FdC0f2D55FC9C89F0415C92eBf3C4"),
+            ("MATICX", "0xfa68FB4628DFF1028CFEc22b4162FCcd0d45efb6"),
+            ("STCELO", "0xC668583dcbDc9ae6FA3CE46462758188adfdfC24"),
+            ("SDAI",   "0xaf204776c7245bF4147c2612BF6e5972Ee483701"),
+            // === Tier 8: stablecoin variants — depeg spreads = core arb ====
+            ("USDC_E", "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8"),
+            ("USDT_E", "0xc7198437980c041c805A1EDcbA50c1Ce5db95118"),
+            ("DAI_E",  "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70"),
+            // WETH.e on Avalanche — bridged ETH, arbs against WAVAX pools.
+            ("WETH_E", "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB"),
+            ("BUSD",   "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56"),
+            ("FDUSD",  "0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409"),
+            ("USDE",   "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3"),
+            ("SUSDE",  "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497"),
+            ("FRAX",   "0x853d955aCEf822Db058EB8451b48d3d24B4f9819"),
+            ("LUSD",   "0x5f98805A4E8be255a32880FDeC7F6728C6568bA0"),
+            ("DOLA",   "0x6A7661795C374c0bFC635934efAddFf3A7Ee23b6"),
+            ("MIM",    "0xFEa7a6a0B346362BF88A9e4A67916B6a73D0d597"),
+            ("SUSD",   "0x8c6f28f2F1a3C87F0f938b96d27520d9751ec8d9"),
+            ("MAI",    "0xdFA46478F9e5EA86d57387849598dbFB2e964b02"),
+            ("HAI",    "0x10398AbC267496E49106B07dd6BE13364D10dC71"),
+            ("EURE",   "0xcB444e90D8198415266c6a2724b7900fb12FC56E"),
+            ("CUSD",   "0x765DE816845861e75A25fCA122bb6898B8B1282a"),
+            ("CEUR",   "0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73"),
+            ("CREAL",  "0xe8537a3d056DA446677B9E9d6c21dB704EaAb927"),
+            ("USDS",   "0xdC035D45d973E3EC169d2276DDab16f1e407384F"),
+            // === Tier 9: DeFi governance / DEX tokens ======================
+            ("COMP",   "0xc00e94Cb662C3520282E6f5717214004A7f26888"),
+            ("SNX",    "0xC011a73ee8576Fb46F5E1c5751cA3B9Fe0af2a6F"),
+            ("BAL",    "0xba100000625a3754423978a60c9317c58a424e3D"),
+            ("SUSHI",  "0x6B3595068778DD592e39A122f4f5a5cF09C90fE2"),
+            ("DYDX",   "0x92D6C1e31e14520e676a687F0a93788B716Beff5"),
+            ("QNT",    "0x4a220E6096B25EADb88358cb44068A3248254675"),
+            ("MANA",   "0x0F5D2fB29fb7d3CFeE444a200298f468908cC942"),
+            ("SAND",   "0x3845badAde8e6dFF049820680d1F14bD3903a5d0"),
+            ("SAFE",   "0x5aFE3855358E112B5647B952709E6165e1c1eAAe"),
+            ("SKY",    "0x56072C95FAA701256059aa122697B133aDEd9279"),
+            ("TRB",    "0x88dF592F8eb5D7Bd38bFeF7dEb0fBc02cf3778a0"),
+            ("API3",   "0x0b38210ea11411557c13457D4dA7dC6ea731B88a"),
+            ("ONDO",   "0xfAbA6f8e4a5E8Ab82F62fe7C39859FA577269BE3"),
+            ("PAXG",   "0x45804880De22913dAFE09f4980848ECE6EcbAf78"),
+            ("TBTC",   "0x18084fbA666a33d37592fA2633fD49a74DD93a88"),
+            ("POL",    "0x455e53CBB86018Ac2B8092FdCd39d8444aFFC3F6"),
+            ("AXL",    "0x23ee2343B892b1BB63503a4FAbc840E0e2C6810f"),
+            ("TIA",    "0xD56734d7f9979dD94FAE3d67C7a9280e71dBBd31"),
+            // === Tier 10: Arbitrum ecosystem ===============================
+            ("GMX",    "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"),
+            ("MAGIC",  "0x539bdE0d7Dbd336b79148AA742883198BBF60342"),
+            ("RDNT",   "0x3082CC23568eA640225c2467653dB90e9250AaA0"),
+            ("STG",    "0x6694340fc020c5E6B96567843da2df01b2CE1eb6"),
+            ("GRAIL",  "0x3d9907F9a368ad0a51Be60f7Da3b97cf940982D8"),
+            ("DPX",    "0x6C2C06790b3E3E3c38e12Ee22F8183b37a13EE55"),
+            ("SPELL",  "0x3E6648C5a70A150A88bCE65F4aD4d506Fe15d2AF"),
+            ("SYN",    "0x080F6AEd32Fc474DD5717105bDB5eC5721C1d3Ef"),
+            ("GNS",    "0x18c11FD286C5EC11c3b683Caa813B77f5163A122"),
+            ("WOO",    "0xcAFcD85D8ca7Ad1e1C6F82F651fA15E33AEfD07b"),
+            ("PLS",    "0x51318B7D00db7ACc4026C88c3952B66278B6A67F"),
+            ("WINR",   "0xD77B108d4f6cefaa0Cae9506A934e824BEccA46B"),
+            ("DMT",    "0x8B0E6f19Ee57089F7649A455D89D7bC6314D04e8"),
+            // === Tier 11: Optimism ecosystem ===============================
+            ("VELO",   "0x9560e827aF36c94D2Ac33a39bCE1Fe78631088Db"),
+            ("PERP",   "0x9e1028F5F1D5eDE59748FFcee5532509976840E0"),
+            ("THALES", "0x217D47011b23BB961eB6D93cA9945B7501a5BB11"),
+            ("KWENTA", "0x920Cf626a271321C151D027030D5d08aF699456b"),
+            ("SONNE",  "0x1DB2466d9F5e10D7090E7152B68d62703a2245F0"),
+            ("DHT",    "0xAF9fE3B5cCDAe78188B1F8b9a49Da7ae9510F151"),
+            ("AELIN",  "0x61BAADcF22d2565B0F471b291C475db5555e0b76"),
+            // === Tier 12: Base ecosystem ==================================
+            ("AERO",   "0x940181a94A35A4569E4529A3CDfB74e38FD98731"),
+            ("DEGEN",  "0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed"),
+            ("BRETT",  "0x532f27101965dd16442E59d40670FaF5eBB142E4"),
+            ("TOSHI",  "0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4"),
+            ("VIRTUAL","0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b"),
+            ("AIXBT",  "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825"),
+            ("CLANKER","0x1bc0c42215582d5A085795f4baDbaC3ff36d1Bcb"),
+            ("MOG",    "0x2Da56AcB9Ea78330f947bD57C54119DebdaB4035"),
+            ("HIGHER", "0x0578d8A44db98B27BF358E9C8a6737fBf14198e4"),
+            ("MIGGLES","0xB1a03EdA10342529bBF8EB700a06C60441fEf25d"),
+            ("PRIME",  "0xFA980cEd6895AC314E7dE34Ef1bFAE90a5AdD21b"),
+            ("CBBTC",  "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"),
+            ("WELL",   "0xA88594D404727625A9437C3f886C7643872296AE"),
+            // === Tier 13: Polygon ecosystem ================================
+            ("QUICK",  "0x831753DD7087CaC61aB5644b308642cc1c33Dc13"),
+            ("GHST",   "0x385Eeac5cB85A38A9a07A70c73e0a3271CfB54A7"),
+            ("OCEAN",  "0x282d8efCe846A88B159800bd4130ad77443Fa1A1"),
+            ("DFYN",   "0xC168E40227E4ebD8C1caAE80F7a55a4F0e6D66C5"),
+            ("TEL",    "0xdF7837DE1F2Fa4631D716CF2502f8b230F1dcc32"),
+            // === Tier 14: BSC pegged majors + ecosystem ====================
+            ("CAKE",   "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82"),
+            ("TWT",    "0x4B0F1812e5Df2A09796481Ff14017e6005508003"),
+            ("XVS",    "0xcF6BB5389c92Bdda8a3747Ddb454cB7a64626C63"),
+            ("DOGE",   "0xbA2aE424d960c26247Dd6c32edC70B295c744C43"),
+            ("XRP",    "0x1D2F0da169ceB9fC7B3143178cCa156BD176A682"),
+            ("ADA",    "0x3EE2200Efb3400fAbB9AacF31297cBdD1d435D47"),
+            ("DOT",    "0x7083609fCE4d1d8Dc0C979AAb8c869Ea2C873402"),
+            ("ATOM",   "0x0Eb3a705fc54725037CC9e008bDede697f62F335"),
+            ("LTC",    "0x4338665CBB7B2485A8855A139b75D5e34AB0DB94"),
+            ("TRX",    "0x85EAC5Ac2F758618dFa09bDbe0cf174e7d574D5B"),
+            ("TON",    "0x76A797A59Ba2C17726896976B7B3747BfD1d220f"),
+            ("ANKR",   "0xf307910A4c7bbc79691fD374889b36d8531B08e3"),
+            ("BSW",    "0x965F527D9159dCe6288a2219DB51fc6Eef120dD1"),
+            ("ALPACA", "0x8F0528cE5eF7B51152A59745bEfDD91D97091d2F"),
+            ("DODO",   "0x67ee3Cb086F8a16f34beE3ca5FAD36F7DbEBeEe5"),
+            ("BANANA", "0x603c7f932ED1fc6575303D8Fb018fDCBb0f39a95"),
+            ("CHESS",  "0x20de22029ab63cf9A7Cf5fEB2b737Ca1eE4c62A6"),
+            ("C98",    "0xaec945e04baf28b135fa7c640f624f8d90f1c3a6"),
+            ("SFP",    "0xD41FDb03Ba84762dD66a0af1a6C8540FF1ba5dfb"),
+            ("CHR",    "0x9FDc6ae99d28F8A90559d48016fF6Cfa06A19f91"),
+            ("EDU",    "0xBdEAea03cA43a1c790FCFdA8fAe1c7f1772aE398"),
+            // === Tier 15: Avalanche ecosystem ==============================
+            ("JOE",    "0x6e84a6216eA6dACC71eE8E6b0a5B7322EEbC0fDd"),
+            ("PNG",    "0x60781C2586D68229fde47564546784ab3fACA982"),
+            ("QI",     "0x8729438EB15e2C8B576fCc6AeCdA6A148776C0F5"),
+            ("PTP",    "0x22d4002028f537599bE9f666d1c4Fa138522f9c8"),
+            ("YAK",    "0x59414b3089ce2AF0010e7523Dea7E2b35d776ec7"),
+            ("COQ",    "0x420FcA0121DC28039145009570975747295f2329"),
+            ("KIMBO",  "0x184ff13B3EBCB25Be44e860163A5D8391Dd568c1"),
+            ("SNOB",   "0xC38f41A296A4493Ff429F1238e030924A1542e50"),
+            ("XAVA",   "0xd1c3f94DE7e5B45fa4EDBA47222a7e50B5a469A4"),
+            // === Tier 16: Linea / Gnosis / Celo ecosystem ==================
+            ("FOXY",   "0x5FBDF89403270a1846F5ae7D113A989F850d1566"),
+            ("CROAK",  "0xaCb54d07cA167934F57F829BeE2cC665e1A5eFBF"),
+            ("LYNX",   "0x1a51b19CE03dbE0Cb44C1528E34a7EDD7771E9Af"),
+            ("MENDI",  "0x43E8809ea7486baA3E4be59a922A2e7D7cEa4A0E"),
+            ("GNO",    "0x9C58BAcC331c9aa871AFD802DB6379a98e80CEdb"),
+            ("COW",    "0x177127622c4A00F3d409B75571e12cB3c8973d3c"),
+            ("OLAS",   "0xcE11e14225575945b8E6Dc0D4F2dD4C570f79d9f"),
+            ("HNY",    "0x71850b7E9Ee3f13Ab46d67167341E4bDc905Eef9"),
+            ("FOX",    "0x21a42669643f45Bc0e086b8Fc2ed70c23D67509d"),
+            ("UBE",    "0x00Be915B9dCf56a3CBE739D9B9c202ca692409EC"),
         ];
         tokens
             .iter()
@@ -1031,29 +1755,86 @@ impl RadarScanner {
             }
         }
 
-        // Try up to 3 different RPC endpoints before giving up. Round-robin
-        // picks a different starting endpoint each time, so retries naturally
-        // try a different provider.
+        // Try up to 3 different RPC endpoints before giving up. When the
+        // shared pool is attached, endpoints are picked by health score
+        // (latency + consecutive failures) so rate-limited providers cool
+        // down instead of absorbing every retry. Without a pool we fall back
+        // to round-robin over the configured URLs.
         let mut quotes = Vec::new();
         let mut last_err = String::new();
         for _attempt in 0..3u8 {
-            let provider = match try_build_provider(&chain.rpc_urls) {
-                Ok(p) => p,
-                Err(e) => {
-                    last_err = e;
-                    continue;
-                }
+            let (provider, pool_idx) = match &self.rpc_pool {
+                Some(pool) => match pool.select(chain.id) {
+                    Some((idx, url)) => match try_build_provider(&[url]) {
+                        Ok(p) => (p, Some(idx)),
+                        Err(e) => {
+                            last_err = e;
+                            continue;
+                        }
+                    },
+                    None => match try_build_provider(&chain.rpc_urls) {
+                        Ok(p) => (p, None),
+                        Err(e) => {
+                            last_err = e;
+                            continue;
+                        }
+                    },
+                },
+                None => match try_build_provider(&chain.rpc_urls) {
+                    Ok(p) => (p, None),
+                    Err(e) => {
+                        last_err = e;
+                        continue;
+                    }
+                },
             };
 
-            match quote_venues_on_chain(&provider, chain, token_address).await {
-                Ok(q) => {
+            // Bound in-flight RPC calls through the pool's semaphore so a
+            // wide scan cannot open hundreds of sockets against rate-limited
+            // free endpoints.
+            let _permit = match &self.rpc_pool {
+                Some(pool) => Some(pool.acquire().await),
+                None => None,
+            };
+            let started = std::time::Instant::now();
+            // Hard cap per attempt: alloy's default HTTP client has no request
+            // timeout, so a peer that accepts TCP but never answers would park
+            // this task — and the whole join_all — forever. On timeout we count
+            // it as an endpoint failure so the pool scores it down.
+            const RPC_QUERY_TIMEOUT: std::time::Duration =
+                std::time::Duration::from_secs(45);
+            let venue_res = tokio::time::timeout(
+                RPC_QUERY_TIMEOUT,
+                quote_venues_on_chain(&provider, chain, token_address),
+            )
+            .await;
+            match venue_res {
+                Ok(Ok(q)) => {
+                    if let (Some(pool), Some(idx)) = (&self.rpc_pool, pool_idx) {
+                        pool.record_success(chain.id, idx, started.elapsed());
+                    }
                     quotes = q;
                     last_err.clear();
                     break;
                 }
-                Err(e) => {
-                    last_err = e.to_string();
+                Ok(Err(e)) => {
+                    let msg = e.to_string();
+                    if let (Some(pool), Some(idx)) = (&self.rpc_pool, pool_idx) {
+                        let rate_limited = msg.contains("429")
+                            || msg.contains("Too Many Requests")
+                            || msg.contains("-32029")
+                            || msg.contains("rate limit");
+                        pool.record_failure(chain.id, idx, msg.clone(), rate_limited);
+                    }
+                    last_err = msg;
                     // Will retry with the next endpoint
+                }
+                Err(_elapsed) => {
+                    let msg = format!("RPC query timed out after {:?}", RPC_QUERY_TIMEOUT);
+                    if let (Some(pool), Some(idx)) = (&self.rpc_pool, pool_idx) {
+                        pool.record_failure(chain.id, idx, msg.clone(), false);
+                    }
+                    last_err = msg;
                 }
             }
         }
@@ -1063,6 +1844,12 @@ impl RadarScanner {
         }
 
         let timestamp = Utc::now().timestamp() as u64;
+        // Keep the raw venue quotes (with pool state) — detection and
+        // validation simulate the real round-trip against these reserves.
+        self.venue_cache.insert(
+            format!("{}_{}", chain.id, token_address.to_lowercase()),
+            (timestamp, quotes.clone()),
+        );
         let prices: Vec<TokenPrice> = quotes
             .into_iter()
             .map(|(label, quote)| TokenPrice {
@@ -1085,6 +1872,21 @@ impl RadarScanner {
         self.price_cache.insert(cache_key, prices.clone());
         prices
     }
+
+    /// Venue quotes (label + pool state) for a token on a chain, sourced
+    /// from the same fetch that fills `price_cache` — identical TTL and
+    /// staleness contract.
+    fn cached_venue_quotes(
+        &self,
+        chain_id: u64,
+        token_address: &str,
+    ) -> Vec<(String, VenueQuote)> {
+        let key = format!("{}_{}", chain_id, token_address.to_lowercase());
+        self.venue_cache
+            .get(&key)
+            .map(|e| e.1.clone())
+            .unwrap_or_default()
+    }
 }
 
 /// One venue's quote for a token, denominated in the chain's wrapped native.
@@ -1097,6 +1899,28 @@ struct VenueQuote {
     /// V3 pool fee in hundredths of a basis point (e.g. 3000 = 0.30%).
     /// V2 uses 30 (0.30% constant swap fee).
     fee_bps_hundredths: u32,
+    /// Resolved pool address — needed to build direct-route swap legs.
+    pool: Address,
+    /// Raw pool state, kept so opportunities on chains the Velora API does
+    /// not serve can still be validated by simulating the round-trip swap
+    /// against real reserves/liquidity.
+    state: PoolState,
+}
+
+/// Raw pool state carried alongside a venue's spot quote.
+#[derive(Debug, Clone, Copy)]
+enum PoolState {
+    /// Constant-product pool: raw (reserve_token, reserve_quote) units.
+    Reserves { token: U256, quote: U256 },
+    /// Concentrated liquidity: sqrtPriceX96, in-range liquidity, orientation.
+    Concentrated {
+        sqrt_price_x96: U256,
+        liquidity: U256,
+        token_is_token0: bool,
+    },
+    /// A real spot price but no impact model we trust (Solidly stable pools
+    /// use x³y+y³x, which `getReserves` alone cannot price) — never simulated.
+    SpotOnly,
 }
 
 /// One venue/tier that can be resolved to a pool.
@@ -1168,9 +1992,26 @@ async fn quote_venues_on_chain(
                     });
                 }
             }
-            // A V3 venue with no resolution parameters cannot be resolved. The
-            // registry test forbids this, so skip rather than guess a selector.
-            (Protocol::V3, None) => continue,
+            (Protocol::Solidly, Some(params)) => {
+                // `fees` carries the stable flag: 0 = volatile, 1 = stable.
+                for flag in params.fees {
+                    candidates.push(Candidate {
+                        label: format!(
+                            "{} [{}]",
+                            venue.name,
+                            if *flag == 1 { "stable" } else { "volatile" }
+                        ),
+                        protocol: Protocol::Solidly,
+                        factory,
+                        fee: *flag,
+                        pool_sig: params.pool_sig,
+                    });
+                }
+            }
+            // A keyed-factory venue with no resolution parameters cannot be
+            // resolved. The registry test forbids this, so skip rather than
+            // guess a selector.
+            (Protocol::V3, None) | (Protocol::Solidly, None) => continue,
         }
     }
     if candidates.is_empty() {
@@ -1185,10 +2026,20 @@ async fn quote_venues_on_chain(
                 c.factory,
                 multicall::factory_get_pair_call_data(token, weth),
             ),
-            Protocol::V3 => multicall::SubCall::new(
-                c.factory,
-                multicall::factory_get_pool_call_data(token, weth, c.fee, c.pool_sig),
-            ),
+            // Solidly's `bool` stable flag and V3's `uint24`/`int24` all
+            // encode as one left-padded 32-byte word, so the same keyed
+            // factory call serves both. Both families key pools by SORTED
+            // token order — getPool(token, weth, …) returns the zero address
+            // whenever token > weth — so the arguments must be ordered first.
+            // This previously missed every V3 pool for tokens whose address
+            // sorts above the wrapped native (0x4200… on OP/Base).
+            Protocol::V3 | Protocol::Solidly => {
+                let (a, b) = if token < weth { (token, weth) } else { (weth, token) };
+                multicall::SubCall::new(
+                    c.factory,
+                    multicall::factory_get_pool_call_data(a, b, c.fee, c.pool_sig),
+                )
+            }
         })
         .collect();
     let resolved = multicall::execute(provider, &resolution).await?;
@@ -1263,7 +2114,8 @@ async fn quote_venues_on_chain(
     }
     for (candidate_idx, pool) in &pools {
         match candidates[*candidate_idx].protocol {
-            Protocol::V2 => {
+            // Solidly pools answer `getReserves()` the same way V2 pairs do.
+            Protocol::V2 | Protocol::Solidly => {
                 primary_idx.push(calls.len());
                 calls.push(multicall::SubCall::new(
                     *pool,
@@ -1297,7 +2149,7 @@ async fn quote_venues_on_chain(
         .unwrap_or(QUOTE_DECIMALS);
 
     let mut quotes = Vec::with_capacity(pools.len());
-    for (i, (candidate_idx, _)) in pools.iter().enumerate() {
+    for (i, (candidate_idx, pool_addr)) in pools.iter().enumerate() {
         let candidate = &candidates[*candidate_idx];
 
         let Some(token0) = ok_data(&state, orient_idx[i]).and_then(multicall::decode_address)
@@ -1315,7 +2167,7 @@ async fn quote_venues_on_chain(
         };
 
         let quote = match candidate.protocol {
-            Protocol::V2 => {
+            Protocol::V2 | Protocol::Solidly => {
                 let Some(reserves) = multicall::decode_reserves(primary) else {
                     continue;
                 };
@@ -1344,8 +2196,23 @@ async fn quote_venues_on_chain(
                 // Under the constant-product invariant the quote side is half
                 // the pool, so two-sided depth is twice that reserve.
                 let depth = multicall::scale_amount(reserve_weth, QUOTE_DECIMALS) * 2.0;
-                // Uniswap V2 has a fixed 0.30% swap fee
-                VenueQuote { price, depth, fee_bps_hundredths: 3000 }
+                // Uniswap V2 charges a fixed 0.30%. Solidly fees are set per
+                // pool: volatile pools are ~0.30% and stable pools ~0.05% —
+                // `candidate.fee` carries the stable flag (1 = stable).
+                let is_stable = candidate.protocol == Protocol::Solidly && candidate.fee == 1;
+                let fee_bps_hundredths = if is_stable { 500 } else { 3000 };
+                // Solidly stable pools run a different invariant (x³y+y³x);
+                // reserves alone can't simulate their slippage, so they carry
+                // a spot price only and are never round-trip simulated.
+                let state = if is_stable {
+                    PoolState::SpotOnly
+                } else {
+                    PoolState::Reserves {
+                        token: reserve_token,
+                        quote: reserve_weth,
+                    }
+                };
+                VenueQuote { price, depth, fee_bps_hundredths, pool: *pool_addr, state }
             }
             Protocol::V3 => {
                 let Some(slot0) = multicall::decode_slot0(primary) else {
@@ -1357,19 +2224,31 @@ async fn quote_venues_on_chain(
                     QUOTE_DECIMALS,
                     token_is_token0,
                 );
-                let depth = liquidity_idx[i]
+                let liquidity = liquidity_idx[i]
                     .and_then(|li| ok_data(&state, li))
                     .and_then(multicall::decode_liquidity)
-                    .map(|l| {
-                        multicall::v3_depth_in_quote(
-                            slot0.sqrt_price_x96,
-                            l,
-                            QUOTE_DECIMALS,
-                            token_is_token0,
-                        )
-                    })
-                    .unwrap_or(0.0);
-                VenueQuote { price, depth, fee_bps_hundredths: candidate.fee }
+                    .unwrap_or(U256::ZERO);
+                let depth = if liquidity.is_zero() {
+                    0.0
+                } else {
+                    multicall::v3_depth_in_quote(
+                        slot0.sqrt_price_x96,
+                        liquidity,
+                        QUOTE_DECIMALS,
+                        token_is_token0,
+                    )
+                };
+                VenueQuote {
+                    price,
+                    depth,
+                    fee_bps_hundredths: candidate.fee,
+                    pool: *pool_addr,
+                    state: PoolState::Concentrated {
+                        sqrt_price_x96: slot0.sqrt_price_x96,
+                        liquidity,
+                        token_is_token0,
+                    },
+                }
             }
         };
 
@@ -1623,8 +2502,12 @@ impl RadarScanner {
         if chain_specific.is_some() {
             return chain_specific;
         }
-        // Generic fallback only for ETH-native chains
-        let is_eth_chain = matches!(chain_id, 1 | 42161 | 10 | 8453 | 59144);
+        // Generic fallback for chains whose quote leg is WETH-denominated.
+        // Mantle (5000) pools quote in bridged WETH too — its native MNT is a
+        // separate asset, but pool liquidity is priced in WETH, so the ETH
+        // rate is the correct conversion for its quote leg. Sonic is NOT here:
+        // its quote leg is wS and needs ZCA_NATIVE_USD_146 or the live rate.
+        let is_eth_chain = matches!(chain_id, 1 | 42161 | 10 | 8453 | 59144 | 130 | 534352 | 324 | 5000);
         if is_eth_chain {
             std::env::var("ZCA_NATIVE_USD")
                 .ok()
@@ -1643,6 +2526,7 @@ impl RadarScanner {
     /// Clear price cache
     pub fn clear_cache(&self) {
         self.price_cache.clear();
+        self.venue_cache.clear();
     }
 
     // â”€â”€â”€ Comprehensive Scan (ALL tokens, ALL DEXes, ALL strategies) â”€â”€â”€â”€â”€
@@ -1684,14 +2568,32 @@ impl RadarScanner {
                     tokens_scanned.push(token.symbol.clone());
                 }
 
+                // Resolve the token's address on THIS chain. The scan list
+                // stores a canonical (usually mainnet) address that is wrong
+                // on every other network — passing it verbatim means querying
+                // pools for a contract that either doesn't exist there or is
+                // a different token entirely. `resolve_token_symbol` holds
+                // the per-chain address matrix; when it has no mapping we fall
+                // back to the listed address, which covers discovery-merged
+                // tokens whose address is already chain-specific.
+                let resolved = crate::chains::resolve_token_symbol(&token.symbol, chain.id);
+                let addr = if resolved.is_empty() {
+                    token.address.clone()
+                } else {
+                    resolved.to_string()
+                };
+
                 let chain_clone = chain.clone();
                 let symbol = token.symbol.clone();
-                let addr = token.address.clone();
 
                 let scanner_ref = &self;
                 chain_futures.push(async move {
                     let chain_prices = scanner_ref.query_chain_prices(&chain_clone, &symbol, &addr).await;
-                    (chain_clone, symbol, addr, chain_prices)
+                    // Pool state for simulation — written by the same fetch
+                    // (same TTL), so this is a cache hit, never a refetch.
+                    let venue_quotes =
+                        scanner_ref.cached_venue_quotes(chain_clone.id, &addr);
+                    (chain_clone, symbol, addr, chain_prices, venue_quotes)
                 });
             }
         }
@@ -1699,12 +2601,25 @@ impl RadarScanner {
         // Execute all chain+token queries concurrently
         let results = futures_util::future::join_all(chain_futures).await;
 
-        for (chain, symbol, addr, chain_prices) in results {
+        // Per-cycle funnel counters so each scan produces measurable output:
+        // how many venues answered, how many pairs were evaluated, how far
+        // each candidate progressed, and where it was dropped.
+        let mut pools_ok: usize = 0;
+        let mut pairs_evaluated: usize = 0;
+        let mut spreads_seen: usize = 0;
+        let mut above_threshold: usize = 0;
+        let mut depth_rejects: usize = 0;
+        let mut state_rejects: usize = 0;
+        let mut sim_drops: usize = 0;
+
+        for (chain, symbol, addr, chain_prices, venue_quotes) in results {
                 let chain_prices = chain_prices;
 
+                pools_ok += chain_prices.len();
                 if chain_prices.len() < 2 {
                     continue;
                 }
+                pairs_evaluated += 1;
 
                 // Find cheapest and most expensive on this chain
                 if let (Some(cheapest), Some(priciest)) = (
@@ -1736,6 +2651,43 @@ impl RadarScanner {
                     let sell_fee_pct = priciest.pool_fee_bps_hundredths as f64 / 10_000.0;
                     let spread_pct = (raw_spread_pct - buy_fee_pct - sell_fee_pct).max(0.0);
 
+                    // ── Phantom-spread filters ──────────────────────────
+                    // These fire BEFORE the spread is logged or queued, so
+                    // structurally-unprofitable pairs never reach the
+                    // candidate list or the dashboard.
+
+                    // (a) Non-USD-pegged stables. CEUR/CREAL/EURE trade
+                    // against EUR or BRL; pricing them in wrapped-native→USD
+                    // manufactures a permanent ~FX-rate spread that can never
+                    // be captured by a USD-denominated round-trip.
+                    const FX_PEG_SYMBOLS: &[&str] = &["CEUR", "CREAL", "EURE"];
+                    if FX_PEG_SYMBOLS.contains(&symbol.as_str()) {
+                        debug!(
+                            chain = chain.id,
+                            symbol,
+                            "non-USD-pegged token — USD-priced spread is an \
+                             FX artifact, not arbitrage; skipping"
+                        );
+                        continue;
+                    }
+
+                    // (b) Implausible spread cap. A raw spread this large on
+                    // an established token means one venue resolved a stale,
+                    // migrated, or dead pool (e.g. an old token contract that
+                    // no longer trades). No executable arb of this size
+                    // survives on a liquid token for a full scan cycle.
+                    if raw_spread_pct > 30.0 {
+                        debug!(
+                            chain = chain.id,
+                            symbol,
+                            spread = format!("{:.1}%", raw_spread_pct),
+                            buy = %cheapest.dex_name,
+                            sell = %priciest.dex_name,
+                            "spread above 30% — stale/dead pool signature; skipping"
+                        );
+                        continue;
+                    }
+
                     // CEX deviation detection: if Binance has a price
                     // for this token, check if any DEX quote deviates
                     // significantly. A deviation adds confidence that
@@ -1756,6 +2708,7 @@ impl RadarScanner {
                     };
 
                     if spread_pct > 0.1 {
+                        spreads_seen += 1;
                         if let Some(dev) = cex_dev_pct {
                             info!(
                                 chain = %chain.name,
@@ -1798,12 +2751,14 @@ impl RadarScanner {
                     // on-chain between DEX venues, so only the DEX-to-DEX
                     // spread determines profitability.
                     let chain_min_spread = match chain.id {
-                        42161 | 10 | 8453 | 59144 | 100 => 0.10, // L2: ~$0.01 gas
+                        // L2/high-throughput chains: ~$0.01 gas
+                        42161 | 10 | 8453 | 59144 | 100 | 146 | 130 | 534352 | 324 | 5000 => 0.10,
                         137 | 42220 => 0.15,                      // Polygon/Celo
                         _ => self.min_spread_pct,                  // Mainnet: higher gas
                     };
 
                     if spread_pct >= chain_min_spread {
+                        above_threshold += 1;
                         let native_usd = self.native_usd_rate(chain.id);
                         let Some(native_usd) = native_usd else {
                             debug!(
@@ -1820,6 +2775,7 @@ impl RadarScanner {
                         let min_depth = cheapest.liquidity_usd.min(priciest.liquidity_usd);
                         let depth_usd = min_depth * native_usd;
                         if depth_usd < min_depth_usd {
+                            depth_rejects += 1;
                             debug!(
                                 chain = chain.id,
                                 symbol,
@@ -1831,28 +2787,59 @@ impl RadarScanner {
                             continue;
                         }
 
-                        // Scale notional to what the pool can actually fill:
-                        // at most 2% of the shallower side, capped at $10,000.
-                        let max_notional_usd = (depth_usd * 0.02).min(10_000.0);
-                        let notional_tokens = if cheapest.price_usd > 0.0 && native_usd > 0.0 {
-                            max_notional_usd / (cheapest.price_usd * native_usd)
-                        } else {
-                            SCAN_NOTIONAL_TOKENS
+                        // ── Executable-profit simulation ─────────────────
+                        // Mid-price spread overstates the edge: the real
+                        // trade is borrow quote → swap on `cheapest` → swap
+                        // on `priciest` → repay. Simulate that round-trip
+                        // on decoded pool state across a size grid and keep
+                        // the profit-maximizing size. Candidates the sim
+                        // can't make profitable are phantoms — drop them
+                        // here instead of spamming validators.
+                        let buy_q = venue_quotes
+                            .iter()
+                            .find(|(l, _)| l == &cheapest.dex_name)
+                            .map(|(_, q)| *q);
+                        let sell_q = venue_quotes
+                            .iter()
+                            .find(|(l, _)| l == &priciest.dex_name)
+                            .map(|(_, q)| *q);
+                        let (Some(buy_q), Some(sell_q)) = (buy_q, sell_q) else {
+                            state_rejects += 1;
+                            continue;
                         };
-                        let notional_usd = notional_tokens * cheapest.price_usd * native_usd;
 
-                        let gross_profit = (priciest.price_usd - cheapest.price_usd)
-                            * notional_tokens
-                            * native_usd;
+                        // Flash fee for the borrowed quote asset: the cheapest
+                        // V3 pool on this pair can serve a source-6 flash at
+                        // its swap-fee tier; without any V3 venue we assume
+                        // Aave-style 0.05%.
+                        let flash_rate = venue_quotes
+                            .iter()
+                            .filter(|(_, q)| matches!(q.state, PoolState::Concentrated { .. }))
+                            .map(|(_, q)| q.fee_bps_hundredths as f64 / 1e6)
+                            .fold(f64::MAX, f64::min);
+                        let flash_rate = if flash_rate.is_finite() { flash_rate } else { 0.0005 };
+
+                        let Some(sim) = optimize_round_trip(&buy_q, &sell_q, flash_rate) else {
+                            sim_drops += 1;
+                            debug!(
+                                chain = chain.id,
+                                symbol,
+                                spot_spread = format!("{:.3}%", spread_pct),
+                                "round-trip simulation unprofitable at every size — phantom spread dropped"
+                            );
+                            continue;
+                        };
+
                         let gas_est = estimate_gas_cost(chain.id);
+                        let notional_usd = sim.amount_in / 1e18 * native_usd;
+                        // Gross capture before fixed costs, then net.
+                        let gross_profit = (sim.final_out - sim.amount_in) / 1e18 * native_usd;
+                        let fl_fee_usd = sim.amount_in * flash_rate / 1e18 * native_usd;
+                        let slippage = 0.0; // price impact is inside the simulation
+                        let velora_fee = 0.0; // direct route — no aggregator fee
+                        let total_cost = gas_est + fl_fee_usd;
+                        let net_profit = sim.net_quote / 1e18 * native_usd - gas_est;
                         let fl_fee = estimate_flash_loan_fee(&chain_prices, &symbol, notional_usd);
-                        let slippage = notional_usd * slippage_rate(&symbol);
-                        let velora_fee = notional_usd * VELORA_FEE_RATE;
-                        let total_cost = gas_est + fl_fee.fee_usd + slippage + velora_fee;
-                        let net_profit = gross_profit - total_cost;
-                        // Return on the capital at risk (the notional), not on
-                        // the cost. The previous `net / total_cost` was a
-                        // markup multiple, not a rate of return.
                         let net_pct = if notional_usd > 0.0 {
                             (net_profit / notional_usd) * 100.0
                         } else {
@@ -1910,7 +2897,7 @@ impl RadarScanner {
                                     gross_profit_usd: gross_profit,
                                     costs: CostBreakdown {
                                         gas_estimated_usd: gas_est,
-                                        flash_loan_fee_usd: fl_fee.fee_usd,
+                                        flash_loan_fee_usd: fl_fee_usd,
                                         slippage_estimated_usd: slippage,
                                         bridge_fee_usd: if cheapest.chain_id != priciest.chain_id {
                                             Some(0.50)
@@ -1978,6 +2965,23 @@ impl RadarScanner {
         // Take the count before the vector is moved into the response (E0382).
         let total_opportunities = all_opportunities.len();
 
+        info!(
+            scan_ms = elapsed,
+            chains = chains_scanned.len(),
+            tokens = tokens_scanned.len(),
+            pool_responses = pools_ok,
+            pairs_evaluated,
+            spreads_seen,
+            above_threshold,
+            depth_rejects,
+            state_rejects,
+            sim_drops,
+            candidates = total_opportunities,
+            profitable = profitable_count,
+            net_usd = format!("{:.2}", total_net),
+            "scan cycle complete"
+        );
+
         Ok(ComprehensiveScanResponse {
             opportunities: all_opportunities,
             total_opportunities,
@@ -2006,31 +3010,267 @@ fn estimate_gas_cost(chain_id: u64) -> f64 {
         100 => 0.01,    // Gnosis — near-free
         42220 => 0.01,  // Celo — near-free
         59144 => 0.15,  // Linea
+        146 => 0.02,    // Sonic — sub-second finality, cheap
+        130 => 0.03,    // Unichain
+        534352 => 0.05, // Scroll
+        324 => 0.05,    // zkSync Era
+        5000 => 0.05,   // Mantle
         _ => 1.0,
     }
 }
 
-/// Notional used to size an opportunity, in whole tokens.
+/// U256 → f64 via decimal string (precision loss is acceptable for the
+/// round-trip *simulation* — the real execution path re-quotes anyway).
+fn to_f64(v: &U256) -> f64 {
+    v.to_string().parse().unwrap_or(0.0)
+}
+
+/// Constant-product `getAmountOut` — the exact formula Uniswap V2 and
+/// Solidly-family *volatile* pools implement on-chain. All amounts are raw
+/// units; `fee_hbps` is hundredths of a bp (3000 = 0.30%).
+fn simulate_cp_out(amount_in: f64, reserve_in: f64, reserve_out: f64, fee_hbps: u32) -> f64 {
+    if amount_in <= 0.0 || reserve_in <= 0.0 || reserve_out <= 0.0 {
+        return 0.0;
+    }
+    let net = amount_in * (1.0 - fee_hbps as f64 / 1_000_000.0);
+    net * reserve_out / (reserve_in + net)
+}
+
+/// Concentrated-liquidity output for a swap that stays inside the current
+/// tick's liquidity. Uses the real invariant (L·Δ(1/√P), L·Δ√P) instead of a
+/// spot-price approximation, so price impact on thin pools is captured.
 ///
-/// This is a *sizing assumption*, not a measurement: the scanner does not model
-/// AMM depth, so profit is linear in size and a number has to be chosen. It is
-/// named here so the figure is visible instead of buried in an expression, and
-/// so callers can see that every profit number scales with it.
-const SCAN_NOTIONAL_TOKENS: f64 = 1_000.0;
-
-/// Velora split-routing fee, as a fraction of the routed amount.
-const VELORA_FEE_RATE: f64 = 0.001;
-
-/// Slippage estimate. Stablecoins get tighter slippage because their pools
-/// are deeper and price impact is lower. This makes stablecoin arb on L2s
-/// much more viable (the dominant strategy).
-fn slippage_rate(token_symbol: &str) -> f64 {
-    let upper = token_symbol.to_ascii_uppercase();
-    match upper.as_str() {
-        "USDC" | "USDT" | "DAI" | "BUSD" | "FRAX" | "LUSD" | "TUSD" | "USDP" | "PYUSD" => 0.001, // 0.1% for stables
-        _ => 0.005, // 0.5% for volatile
+/// `zero_for_one` = selling token0 for token1. If the trade consumes more
+/// than the current tick can supply, returns 0 — crossing into the next tick
+/// range can't be simulated without tick data, and refusing is honest.
+fn simulate_cl_out(
+    amount_in: f64,
+    sqrt_price_x96: f64,
+    liquidity: f64,
+    fee_hbps: u32,
+    zero_for_one: bool,
+) -> f64 {
+    const TWO_POW_96: f64 = 79_228_162_514_264_337_593_543_950_336.0;
+    if amount_in <= 0.0 || liquidity <= 0.0 || sqrt_price_x96 <= 0.0 {
+        return 0.0;
+    }
+    let net = amount_in * (1.0 - fee_hbps as f64 / 1_000_000.0);
+    let sqrt_p = sqrt_price_x96 / TWO_POW_96;
+    if zero_for_one {
+        // Sell token0 → price decreases → receive token1.
+        let sqrt_p_after = sqrt_p - net / liquidity;
+        if sqrt_p_after <= 0.0 {
+            return 0.0;
+        }
+        liquidity * (1.0 / sqrt_p_after - 1.0 / sqrt_p)
+    } else {
+        // Sell token1 → price increases → receive token0.
+        let sqrt_p_after = sqrt_p + net / liquidity;
+        liquidity * (1.0 / sqrt_p - 1.0 / sqrt_p_after)
     }
 }
+
+/// Simulate one swap leg on a venue's decoded pool state.
+///
+/// `input_is_quote` selects direction: true sells the wrapped-native quote
+/// token for the pair token (buy leg), false sells the pair token for
+/// quote (sell leg). Amounts are raw units (wei-style). Returns the output
+/// amount in raw units, or `None` when the state can't be simulated
+/// (SpotOnly — e.g. Solidly stable pools whose x³y+y³x invariant isn't
+/// modeled here; they contribute spot quotes but are never simulated).
+fn simulate_leg_out(
+    state: &PoolState,
+    fee_bps_hundredths: u32,
+    amount_in: f64,
+    input_is_quote: bool,
+) -> Option<f64> {
+    match state {
+        PoolState::Reserves { token, quote } => {
+            let (rin, rout) = if input_is_quote {
+                (to_f64(quote), to_f64(token))
+            } else {
+                (to_f64(token), to_f64(quote))
+            };
+            Some(simulate_cp_out(amount_in, rin, rout, fee_bps_hundredths))
+        }
+        PoolState::Concentrated {
+            sqrt_price_x96,
+            liquidity,
+            token_is_token0,
+        } => {
+            // zeroForOne means the INPUT is token0. Buying the token with
+            // quote: input is the quote token → token1 iff token is token0.
+            let zero_for_one = if input_is_quote {
+                !token_is_token0
+            } else {
+                *token_is_token0
+            };
+            // Constant-L validity bound: simulation assumes the current
+            // tick's liquidity persists, but real concentrated liquidity
+            // thins out across tick boundaries. Refuse fills that would
+            // move sqrt price more than ~5% — beyond that the output is an
+            // extrapolation, not a quote. This is what keeps stale/dead
+            // pools (e.g. an abandoned LST pair 30% off market) from
+            // reporting phantom profit at sizes their liquidity can't fill.
+            let sqrt_p = to_f64(sqrt_price_x96) / 79_228_162_514_264_337_593_543_950_336.0;
+            let l = to_f64(liquidity);
+            if l <= 0.0 || sqrt_p <= 0.0 {
+                return None;
+            }
+            let net_in = amount_in * (1.0 - fee_bps_hundredths as f64 / 1_000_000.0);
+            let excursion_pct = net_in / (l * sqrt_p);
+            if excursion_pct > 0.05 {
+                return None;
+            }
+            Some(simulate_cl_out(
+                amount_in,
+                to_f64(sqrt_price_x96),
+                to_f64(liquidity),
+                fee_bps_hundredths,
+                zero_for_one,
+            ))
+        }
+        PoolState::SpotOnly => None,
+    }
+}
+
+/// Result of a size-optimized round-trip simulation, in raw quote units.
+#[derive(Debug, Clone, Copy)]
+struct RoundTripSim {
+    /// Optimal input in raw quote units (wei-scale).
+    amount_in: f64,
+    /// Pair tokens out of the buy leg.
+    mid_out: f64,
+    /// Quote units returned by the sell leg.
+    final_out: f64,
+    /// `final_out - amount_in - flash_fee` in raw quote units.
+    net_quote: f64,
+}
+
+/// Find the profit-maximizing trade size for a two-venue round-trip.
+///
+/// This is the actual math of a flash-loan arb: borrow `x` of the quote
+/// token, swap through the cheap venue, then the expensive one, repay
+/// `x·(1+flash_fee_rate)`. Profit(x) is concave — both legs consume
+/// liquidity and shrink the spread — so we scan a geometric grid of
+/// fractions of the shallower venue's depth and keep the best point.
+///
+/// `flash_fee_rate` is a fraction (0.0005 = 0.05%) applied to the borrowed
+/// quote amount. Returns `None` when no tested size nets positive.
+fn optimize_round_trip(
+    buy: &VenueQuote,
+    sell: &VenueQuote,
+    flash_fee_rate: f64,
+) -> Option<RoundTripSim> {
+    // Depth is in human quote units; raw units are ×1e18. Cap the borrow
+    // at 25% of the shallower venue's quote-side depth — beyond that the
+    // impact dominates any residual spread.
+    let cap_human = buy.depth.min(sell.depth) * 0.25;
+    if cap_human <= 0.0 {
+        return None;
+    }
+    let cap_raw = cap_human * 1e18;
+
+    let eval = |x: f64| -> Option<RoundTripSim> {
+        let mid = simulate_leg_out(&buy.state, buy.fee_bps_hundredths, x, true)?;
+        // Fill can never beat the venue's own spot price — pool impact only
+        // ever makes a fill worse. If the modelled leg returns more tokens
+        // than spot implies, the decoded state is garbage (wrong token at
+        // this address, inverted orientation, dead pool) — drop it.
+        if buy.price > 0.0 && mid > (x / buy.price) * 1.05 {
+            return None;
+        }
+        let out = simulate_leg_out(&sell.state, sell.fee_bps_hundredths, mid, false)?;
+        if sell.price > 0.0 && out > (mid * sell.price) * 1.05 {
+            return None;
+        }
+        let net = out - x - x * flash_fee_rate;
+        Some(RoundTripSim {
+            amount_in: x,
+            mid_out: mid,
+            final_out: out,
+            net_quote: net,
+        })
+    };
+
+    const FRACS: &[f64] = &[0.005, 0.01, 0.03, 0.07, 0.15, 0.3, 0.55, 0.8, 1.0];
+    let mut best: Option<RoundTripSim> = None;
+    let mut best_idx = 0usize;
+    for (i, &f) in FRACS.iter().enumerate() {
+        if let Some(sim) = eval(cap_raw * f) {
+            if best.map_or(true, |b| sim.net_quote > b.net_quote) {
+                best_idx = i;
+                best = Some(sim);
+            }
+        }
+    }
+
+    // No size clears costs → the spread is a phantom, not an opportunity.
+    let best = best.filter(|b| b.net_quote > 0.0);
+
+    // One local refinement pass around the best grid point — halves the
+    // bracket three times, enough given pool-state granularity.
+    if let Some(b) = best {
+        let lo = cap_raw * if best_idx > 0 { FRACS[best_idx - 1] } else { 0.0 };
+        let hi = cap_raw * if best_idx + 1 < FRACS.len() {
+            FRACS[best_idx + 1]
+        } else {
+            FRACS[best_idx]
+        };
+        let (mut a, mut bnd) = (lo, hi);
+        for _ in 0..12 {
+            let m1 = a + (bnd - a) / 3.0;
+            let m2 = bnd - (bnd - a) / 3.0;
+            let n1 = eval(m1).map(|s| s.net_quote).unwrap_or(f64::MIN);
+            let n2 = eval(m2).map(|s| s.net_quote).unwrap_or(f64::MIN);
+            if n1 < n2 {
+                a = m1;
+            } else {
+                bnd = m2;
+            }
+        }
+        if let Some(sim) = eval((a + bnd) / 2.0) {
+            if sim.net_quote > b.net_quote {
+                return Some(sim);
+            }
+        }
+        return Some(b);
+    }
+    best
+}
+
+/// sqrtPriceLimitX96 for a V3 swap leg, derived from the simulated ending
+/// price with a 1% slack in the fill direction. Tighter than the absolute
+/// min/max constants — bounds the excursion to roughly what the simulation
+/// expects, so drift between scan and execution reverts earlier (atomic).
+fn v3_sqrt_limit_x96(
+    sqrt_price_x96_raw: f64,
+    liquidity_raw: f64,
+    fee_hbps: u32,
+    amount_in: f64,
+    zero_for_one: bool,
+) -> String {
+    const TWO_POW_96: f64 = 79_228_162_514_264_337_593_543_950_336.0;
+    let sqrt_p = sqrt_price_x96_raw / TWO_POW_96;
+    let net = amount_in * (1.0 - fee_hbps as f64 / 1_000_000.0);
+    let after = if zero_for_one {
+        sqrt_p - net / liquidity_raw.max(1.0)
+    } else {
+        sqrt_p + net / liquidity_raw.max(1.0)
+    };
+    let bounded = if zero_for_one {
+        (after * 0.99).max(4295128740.0 / TWO_POW_96)
+    } else {
+        after * 1.01
+    };
+    format!("{:.0}", bounded * TWO_POW_96)
+}
+
+/// Velora split-routing fee, as a fraction of the routed amount.
+/// Kept for the Velora-API validation path (opt-in via ZCA_VELORA_VALIDATION);
+/// the direct-route pipeline does not charge it.
+#[allow(dead_code)]
+const VELORA_FEE_RATE: f64 = 0.001;
 
 /// Pick the cheapest flash-loan source for a token.
 ///
@@ -2174,6 +3414,150 @@ mod tests {
         assert!((pct - 0.5).abs() < 1e-9);
         assert!(pct < 100.0, "a 0.5% return must not read as a huge number");
     }
+
+    /// Constant-product simulation must equal the textbook getAmountOut:
+    /// out = in*0.997*reserveOut / (reserveIn + in*0.997) for a 0.30% pool.
+    #[test]
+    fn simulate_cp_matches_uniswap_v2_formula() {
+        // in=1e18 wei into a 100/200 pool → out = 0.997e18*200e18/(100e18+0.997e18)
+        let out = simulate_cp_out(1e18, 100e18, 200e18, 3000);
+        let expect = 0.997e18 * 200e18 / (100e18 + 0.997e18);
+        assert!((out - expect).abs() / expect < 1e-12, "got {out}, want {expect}");
+        // Degenerate inputs return 0, never panic or go negative.
+        assert_eq!(simulate_cp_out(0.0, 1.0, 1.0, 3000), 0.0);
+        assert_eq!(simulate_cp_out(1.0, 0.0, 1.0, 3000), 0.0);
+        assert_eq!(simulate_cp_out(1.0, 1.0, 0.0, 3000), 0.0);
+    }
+
+    /// A symmetric round trip through the same pool always LOSES the fee —
+    /// the simulator must never manufacture profit from nothing.
+    #[test]
+    fn simulate_cp_round_trip_loses_fees() {
+        let mid = simulate_cp_out(1e18, 100e18, 200e18, 3000);
+        let back = simulate_cp_out(mid, 200e18, 100e18, 3000);
+        // ~0.6% loss (fee on both legs) plus symmetric impact.
+        assert!(back < 1e18, "round trip must lose money, got {back}");
+        assert!(back > 0.0);
+    }
+
+    /// Concentrated-liquidity simulation matches the tick-local invariant:
+    /// selling dx of token0 moves sqrtP down by dx/L; out = L·(1/√P'−1/√P).
+    #[test]
+    fn simulate_cl_matches_tick_invariant() {
+        let sqrt_p = 2.0_f64;
+        let sqrt_p_x96 = sqrt_p * 79_228_162_514_264_337_593_543_950_336.0;
+        let l = 1_000_000.0;
+        // Sell 1000 units of token0 → price drops, token1 comes out.
+        let out = simulate_cl_out(1000.0, sqrt_p_x96, l, 3000, true);
+        let net = 1000.0 * 0.997;
+        let sqrt_p2 = sqrt_p - net / l;
+        let expect = l * (1.0 / sqrt_p2 - 1.0 / sqrt_p);
+        assert!((out - expect).abs() / expect < 1e-9);
+        // Exceeding the tick's liquidity must refuse, not extrapolate.
+        assert_eq!(simulate_cl_out(10.0 * l * sqrt_p, sqrt_p_x96, l, 3000, true), 0.0);
+        // Selling token1 moves price up and yields token0.
+        let out0 = simulate_cl_out(1000.0, sqrt_p_x96, l, 0, false);
+        let sqrt_p3 = sqrt_p + 1000.0 / l;
+        let expect0 = l * (1.0 / sqrt_p - 1.0 / sqrt_p3);
+        assert!((out0 - expect0).abs() / expect0 < 1e-9);
+    }
+
+    /// V2 venue with coherent state: quote reserve = price × token reserve,
+    /// and `depth` is the real quote-side depth in human units so the
+    /// optimizer's size cap stays consistent with the reserves.
+    fn v2_quote(price: f64) -> VenueQuote {
+        let token_raw = 1_000e18;
+        let quote_raw = price * token_raw;
+        VenueQuote {
+            price,
+            depth: quote_raw / 1e18,
+            fee_bps_hundredths: 3000,
+            pool: Address::ZERO,
+            state: PoolState::Reserves {
+                token: U256::from(token_raw as u128),
+                quote: U256::from(quote_raw as u128),
+            },
+        }
+    }
+
+    /// A real cross-venue edge must survive simulation at SOME size — the
+    /// optimizer finds it and reports a positive net of the flash fee.
+    #[test]
+    fn optimizer_finds_profitable_size_on_real_edge() {
+        let buy = v2_quote(0.001);   // token cheap here
+        let sell = v2_quote(0.00105); // 5% richer
+        let sim = optimize_round_trip(&buy, &sell, 0.0005).expect("edge should validate");
+        assert!(sim.net_quote > 0.0);
+        assert!(sim.amount_in > 0.0);
+        // Never sizes beyond 25% of the shallower side (depth = 1.0 here).
+        assert!(sim.amount_in <= 0.25e18 * 1.001);
+    }
+
+    /// Equal prices on both venues → every size loses the two swap fees.
+    /// The optimizer must say None, not return the least-bad size.
+    #[test]
+    fn optimizer_rejects_phantom_spread() {
+        let a = v2_quote(0.001);
+        let b = v2_quote(0.001);
+        assert!(optimize_round_trip(&a, &b, 0.0).is_none());
+    }
+
+    /// A spread that exists only at mid-price but not past the fees must
+    /// also reject — 0.1% spot gap vs 0.6% total pool fees is not an edge.
+    #[test]
+    fn optimizer_rejects_sub_fee_spread() {
+        let buy = v2_quote(0.001);
+        let sell = v2_quote(0.001001); // 0.1% gap < 0.6% fees
+        assert!(optimize_round_trip(&buy, &sell, 0.0).is_none());
+    }
+
+    /// SpotOnly venues (Solidly-stable) can never be simulated.
+    #[test]
+    fn optimizer_skips_spot_only_state() {
+        let buy = VenueQuote {
+            price: 0.001,
+            depth: 50.0,
+            fee_bps_hundredths: 3000,
+            pool: Address::ZERO,
+            state: PoolState::SpotOnly,
+        };
+        let sell = v2_quote(0.00105);
+        assert!(optimize_round_trip(&buy, &sell, 0.0).is_none());
+    }
+
+    /// A CL leg whose input would push sqrt price beyond ~5% must refuse —
+    /// past that the constant-L output is an extrapolation across tick
+    /// boundaries we haven't read, i.e. a phantom-quote vector.
+    #[test]
+    fn cl_leg_refuses_fills_beyond_tick_confidence() {
+        const TWO96: f64 = 79_228_162_514_264_337_593_543_950_336.0;
+        let state = PoolState::Concentrated {
+            sqrt_price_x96: U256::from((2.0 * TWO96) as u128),
+            liquidity: U256::from(1_000_000u64),
+            token_is_token0: true,
+        };
+        // 10k in → ~0.5% excursion → simulated.
+        assert!(simulate_leg_out(&state, 3000, 10_000.0, false).is_some());
+        // 200k in → ~10% excursion → refused, not extrapolated.
+        assert!(simulate_leg_out(&state, 3000, 200_000.0, false).is_none());
+    }
+
+    /// sqrt-limit for a zeroForOne fill must sit BELOW the expected end
+    /// price (1% slack); for oneForZero, above it.
+    #[test]
+    fn v3_sqrt_limit_bounds_fill_direction() {
+        const TWO96: f64 = 79_228_162_514_264_337_593_543_950_336.0;
+        let sqrt_raw = 2.0 * TWO96;
+        let l = 1_000_000.0;
+        let lim_down: f64 = v3_sqrt_limit_x96(sqrt_raw, l, 3000, 1000.0, true)
+            .parse().unwrap();
+        let lim_up: f64 = v3_sqrt_limit_x96(sqrt_raw, l, 3000, 1000.0, false)
+            .parse().unwrap();
+        let expected_after_down = (2.0 - 1000.0 * 0.997 / l) * TWO96;
+        let expected_after_up = (2.0 + 1000.0 * 0.997 / l) * TWO96;
+        assert!(lim_down < expected_after_down && lim_down > expected_after_down * 0.95);
+        assert!(lim_up > expected_after_up && lim_up < expected_after_up * 1.05);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2182,13 +3566,14 @@ pub struct TokenInfo {
     pub address: String,
 }
 
-/// Sign and broadcast a Velora-generated tx on-chain.
+/// DEPRECATED: Legacy direct-wallet execution — replaced by gasless ERC-4337.
 ///
-/// Uses the PRIVATE_KEY to sign the calldata from Velora's `/swap` response.
-/// Returns the tx hash on successful broadcast, or an error.
+/// Previously used to sign and broadcast Velora swap txs from the EOA wallet.
+/// Now superseded by `gasless::build_and_send_userop()` which routes through
+/// Pimlico's bundler + paymaster for zero-gas execution.
 ///
-/// IMPORTANT: This function sends REAL transactions. The private key must
-/// have sufficient ETH/native balance to cover gas.
+/// Retained as dead code for testing/debugging only.
+#[allow(dead_code)]
 async fn execute_tx_onchain(
     rpc_url: &str,
     private_key: &str,

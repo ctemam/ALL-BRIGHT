@@ -585,11 +585,18 @@ pub async fn execute(
     // Use `raw_request` rather than the `Provider::call` trait method: the
     // latter requires the eth_call request/response traits, and we want the
     // raw returndata exactly as MultiCall3 emitted it.
-    let request = serde_json::json!({
-        "to": MULTICALL3_ADDRESS,
-        "data": format!("0x{}", hex::encode(&calldata)),
-    });
-    let raw: serde_json::Value = provider.client().request("eth_call", [request]).await?;
+    //
+    // IMPORTANT: eth_call takes [tx, blockTag]. Omitting the block tag makes
+    // strict nodes (Nethermind — most of Gnosis, some Polygon infra) reply
+    // -32602 "invalid params" while lenient nodes silently default to latest.
+    let params = serde_json::json!([
+        {
+            "to": MULTICALL3_ADDRESS,
+            "data": format!("0x{}", hex::encode(&calldata)),
+        },
+        "latest",
+    ]);
+    let raw: serde_json::Value = provider.client().request("eth_call", params).await?;
     let hex_str = raw
         .as_str()
         .ok_or("multicall3 returned a non-hex result")?

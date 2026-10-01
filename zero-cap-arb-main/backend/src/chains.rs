@@ -150,6 +150,52 @@ pub fn get_chains() -> &'static Vec<ChainConfig> {
                 native_currency: "ETH".to_string(),
                 explorer_url: "https://lineascan.build".to_string(),
             },
+            // ─── High-throughput EVM chains (added for latency-sensitive arb) ───
+            ChainConfig {
+                id: 146,
+                name: "Sonic".to_string(),
+                rpc_url: std::env::var("SONIC_RPC_URL")
+                    .unwrap_or_else(|_| "https://rpc.soniclabs.com".to_string()),
+                rpc_urls: read_rpc_urls_for_chain("SONIC_RPC_URL", "https://rpc.soniclabs.com", 146),
+                native_currency: "S".to_string(),
+                explorer_url: "https://sonicscan.org".to_string(),
+            },
+            ChainConfig {
+                id: 130,
+                name: "Unichain".to_string(),
+                rpc_url: std::env::var("UNICHAIN_RPC_URL")
+                    .unwrap_or_else(|_| "https://mainnet.unichain.org".to_string()),
+                rpc_urls: read_rpc_urls_for_chain("UNICHAIN_RPC_URL", "https://mainnet.unichain.org", 130),
+                native_currency: "ETH".to_string(),
+                explorer_url: "https://unichain.blockscout.com".to_string(),
+            },
+            ChainConfig {
+                id: 534352,
+                name: "Scroll".to_string(),
+                rpc_url: std::env::var("SCROLL_RPC_URL")
+                    .unwrap_or_else(|_| "https://rpc.scroll.io".to_string()),
+                rpc_urls: read_rpc_urls_for_chain("SCROLL_RPC_URL", "https://rpc.scroll.io", 534352),
+                native_currency: "ETH".to_string(),
+                explorer_url: "https://scrollscan.com".to_string(),
+            },
+            ChainConfig {
+                id: 324,
+                name: "zkSync Era".to_string(),
+                rpc_url: std::env::var("ZKSYNC_RPC_URL")
+                    .unwrap_or_else(|_| "https://mainnet.era.zksync.io".to_string()),
+                rpc_urls: read_rpc_urls_for_chain("ZKSYNC_RPC_URL", "https://mainnet.era.zksync.io", 324),
+                native_currency: "ETH".to_string(),
+                explorer_url: "https://explorer.zksync.io".to_string(),
+            },
+            ChainConfig {
+                id: 5000,
+                name: "Mantle".to_string(),
+                rpc_url: std::env::var("MANTLE_RPC_URL")
+                    .unwrap_or_else(|_| "https://rpc.mantle.xyz".to_string()),
+                rpc_urls: read_rpc_urls_for_chain("MANTLE_RPC_URL", "https://rpc.mantle.xyz", 5000),
+                native_currency: "MNT".to_string(),
+                explorer_url: "https://mantlescan.xyz".to_string(),
+            },
         ]
     })
 }
@@ -243,6 +289,17 @@ pub fn get_wrapped_native(chain_id: u64) -> &'static str {
         // Linea's WETH is NOT the 0x4200...0006 predeploy (that has no code
         // on Linea); this is the real WETH9 deployment.
         59144 => "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f",
+        // Sonic's wrapped S — verified on-chain (decimals 18).
+        146 => "0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38",
+        // Unichain and Scroll use the standard WETH9 deployments.
+        130 => "0x4200000000000000000000000000000000000006",
+        534352 => "0x5300000000000000000000000000000000000004",
+        // zkSync Era WETH9.
+        324 => "0x5AEa5775959fBC2557Cc8789bC1bf90A239D9a91",
+        // Mantle pools quote against bridged WETH (0xdEAd…1111, symbol "WETH",
+        // verified on-chain) — the documented WMNT address carries no code.
+        // NOTE: the USD rate env for chain 5000 must therefore be ETH's price.
+        5000 => "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111",
         _ => "",
     }
 }
@@ -270,6 +327,12 @@ pub fn get_stable_token(chain_id: u64) -> &'static str {
         42220 => "0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e", // USDCe (USD₮)
         100 => "0xddafbb505ad214d7b80b1f830fccc89b60fb7a83",   // bridged USDC
         59144 => "0x176211869cA2b568f2A7D4EE941E073a821EE1ff",
+        // Bridged USDC.e on Sonic; native USDC on Unichain/Scroll/zkSync.
+        146 => "0x29219dd400f2Bf60E5a23d13Be72B486D4038894",
+        130 => "0x078D782b760474a361bDA0F3bCf0c1b71dDbc20B",
+        534352 => "0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4",
+        324 => "0x1d17CBcF0D6D143135aE902365D2E5e2A16538D4",
+        5000 => "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
         _ => "",
     }
 }
@@ -286,6 +349,11 @@ pub fn get_chain_name(chain_id: u64) -> &'static str {
         42220 => "Celo",
         100 => "Gnosis",
         59144 => "Linea",
+        146 => "Sonic",
+        130 => "Unichain",
+        534352 => "Scroll",
+        324 => "zkSync Era",
+        5000 => "Mantle",
         _ => "Unknown",
     }
 }
@@ -504,6 +572,303 @@ pub fn resolve_token_symbol(symbol: &str, chain_id: u64) -> &'static str {
 
         // ---- WSTETH (Wrapped stETH) — liquid staking ----------------------
         ("WSTETH", 1) => "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+        ("WSTETH", 42161) => "0x5979D7b546E38E414F7E9822514be443A4800529",
+        ("WSTETH", 10) => "0x1F32b1c2345538c0c6f582fCB022739c4A194Ebb",
+        ("WSTETH", 8453) => "0xc1CBa3fCea344f92D9239c8C0558C6DAc2a3564e",
+        ("WSTETH", 137) => "0x03b54A6e9a984069379fae1a4fC4dBAE93B3bCCD",
+        ("WSTETH", 59144) => "0xB5bedd42000b71FddE22D3eE8a79Bd49A568fC8F",
+        ("WSTETH", 100) => "0x6C76971f98945AE98dD7d4DFcA8711ebea946eA6",
+
+        // ---- Liquid staking / restaking — rich peg-spread surface ---------
+        ("STETH", 1) => "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",
+        ("RETH", 1) => "0xae78736Cd615f374D3085123A210448E74Fc6393",
+        ("RETH", 42161) => "0xEC70Dcb4A1EFa114bFF03bD271272032021E39cd",
+        ("RETH", 10) => "0x9Bcef72be871e61ED4fBbc7630889bE7585CdD4B",
+        ("RETH", 8453) => "0xB6fe221Fe9Eef5aBa221c348bA20A1Bf5e73624c",
+        ("CBETH", 1) => "0xBe9895146f7AF43049ca1c1AE358B0541E497776",
+        ("CBETH", 42161) => "0x11cDb42B0EB46D95f990BeDD4695A80e7fA3C77b",
+        ("CBETH", 8453) => "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22",
+        ("EZETH", 59144) => "0x2416092f143378750bb29b79eD961ab195CcEea5",
+        ("WEETH", 59144) => "0x1Bf74C010E6320bab11e2e5A532b5AC15e0b8aA6",
+        ("WRSETH", 59144) => "0xD2671165570f41BBB3B0097893300b6EB6102E6C",
+        ("SAVAX", 43114) => "0x2b2C81e08f1Af8835a78Bb2A90AE924ACE0eA4bE",
+        ("GGAVAX", 43114) => "0xA25EaF2906FA1a3a13EdAc9B9657108Af7B703e3",
+        ("STMATIC", 137) => "0x3A58a54C066FdC0f2D55FC9C89F0415C92eBf3C4",
+        ("MATICX", 137) => "0xfa68FB4628DFF1028CFEc22b4162FCcd0d45efb6",
+        ("STCELO", 42220) => "0xC668583dcbDc9ae6FA3CE46462758188adfdfC24",
+        ("SDAI", 100) => "0xaf204776c7245bF4147c2612BF6e5972Ee483701",
+
+        // ---- Stablecoin variants — depeg spreads are the core arb ---------
+        ("USDC_E", 42161) => "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
+        ("USDC_E", 10) => "0x7F5c764cBc14f9669B88837ca1490cCa17c31607",
+        ("USDC_E", 137) => "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+        ("USDC_E", 43114) => "0xA7D7079b0FEaD91F3e65f86E8915Cb59c1a4C664",
+        ("USDT_E", 43114) => "0xc7198437980c041c805A1EDcbA50c1Ce5db95118",
+        ("DAI_E", 43114) => "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70",
+        ("BUSD", 56) => "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56",
+        ("FDUSD", 56) => "0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409",
+        ("USDE", 1) => "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3",
+        ("USDE", 42161) => "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+        ("USDE", 8453) => "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+        ("USDE", 59144) => "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+        ("SUSDE", 1) => "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497",
+        ("FRAX", 1) => "0x853d955aCEf822Db058EB8451b48d3d24B4f9819",
+        ("FRAX", 42161) => "0x17FC002b466eEc40DaE837Fc4bE5c67993ddBd6F",
+        ("FRAX", 10) => "0x2E3D870790dC77A83DD1d18184ACC7439A53f475",
+        ("FRAX", 43114) => "0xD24C2Ad096400B6FBcd2ad8B24E7acBc21A1da64",
+        ("LUSD", 1) => "0x5f98805A4E8be255a32880FDeC7F6728C6568bA0",
+        ("LUSD", 42161) => "0x93b346b6BC2548dA6A5E7a98d78E21E87e1e616D",
+        ("LUSD", 10) => "0xc40F949F8a4e094D1b49a23ea9241D289B7b2819",
+        ("LUSD", 8453) => "0x368181499736d0c0CC614DBB145E2EC1AC86b8c6",
+        ("DOLA", 42161) => "0x6A7661795C374c0bFC635934efAddFf3A7Ee23b6",
+        ("DOLA", 10) => "0x8aE125E679382fc703b0A50038dd707e0221e4a0",
+        ("DOLA", 8453) => "0x4621b7A9c75199271F773Ebd9A499dbd165c3191",
+        ("MIM", 42161) => "0xFEa7a6a0B346362BF88A9e4A67916B6a73D0d597",
+        ("MIM", 43114) => "0x130966628846BFd36ff31a822705796e8cb8C18D",
+        ("MIM", 137) => "0x49a0400587A7F65072c87c4910449fDcC5c47242",
+        ("SUSD", 10) => "0x8c6f28f2F1a3C87F0f938b96d27520d9751ec8d9",
+        ("MAI", 10) => "0xdFA46478F9e5EA86d57387849598dbFB2e964b02",
+        ("MAI", 137) => "0xa3Fa99A148fA48D14Ed51d610c367C61876997F1",
+        ("HAI", 10) => "0x10398AbC267496E49106B07dd6BE13364D10dC71",
+        ("EURE", 100) => "0xcB444e90D8198415266c6a2724b7900fb12FC56E",
+        ("CUSD", 42220) => "0x765DE816845861e75A25fCA122bb6898B8B1282a",
+        ("CEUR", 42220) => "0xD8763CBa276a3738E6DE85b4b3bF5FDed6D6cA73",
+        ("CREAL", 42220) => "0xe8537a3d056DA446677B9E9d6c21dB704EaAb927",
+        ("USDS", 1) => "0xdC035D45d973E3EC169d2276DDab16f1e407384F",
+        ("USDS", 8453) => "0x820C137fa70C8691f0e44Dc420a5e53c168921Dc",
+        ("USDT", 42220) => "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+
+        // ---- DeFi governance / DEX tokens ---------------------------------
+        ("COMP", 1) => "0xc00e94Cb662C3520282E6f5717214004A7f26888",
+        ("SNX", 1) => "0xC011a73ee8576Fb46F5E1c5751cA3B9Fe0af2a6F",
+        ("SNX", 10) => "0x8700dAec35aF8Ff88c16BdF0418774CB3D7599B4",
+        ("SNX", 137) => "0x50B728D8D964fd00C2d0AAD81718b71311feF68a",
+        ("BAL", 1) => "0xba100000625a3754423978a60c9317c58a424e3D",
+        ("BAL", 42161) => "0x040d1EdC9569d4Bab2D15287Dc5A4F10F56a56B8",
+        ("BAL", 10) => "0xFE8B128bA8C78aabC59d4c64cEE7fF28e9379921",
+        ("BAL", 137) => "0x9a71012B13CA4d3D0Cdc72A177DF3ef03b0E76A3",
+        ("BAL", 100) => "0x7eF541E2a22058048904fE5744f9c7E4C7AF6cCC",
+        ("SUSHI", 1) => "0x6B3595068778DD592e39A122f4f5a5cF09C90fE2",
+        ("SUSHI", 42161) => "0xd4d42F0b6DEF4CE0383636770eF773390d85c61A",
+        ("SUSHI", 137) => "0x0b3F868E0BE5597D5DB7fEB59E1CADBb0fdDa50a",
+        ("SUSHI", 43114) => "0x37B608519F91f70F2EeB0e5Ed9AF4061722e4F76",
+        ("DYDX", 1) => "0x92D6C1e31e14520e676a687F0a93788B716Beff5",
+        ("QNT", 1) => "0x4a220E6096B25EADb88358cb44068A3248254675",
+        ("MANA", 1) => "0x0F5D2fB29fb7d3CFeE444a200298f468908cC942",
+        ("MANA", 137) => "0xA1c57f48F0Deb89f569dFbE6E2B7f46D33606fD4",
+        ("SAND", 1) => "0x3845badAde8e6dFF049820680d1F14bD3903a5d0",
+        ("SAND", 137) => "0xBbba073C31bF03b8ACf7c28EF0738DeCF3695683",
+        ("SAFE", 1) => "0x5aFE3855358E112B5647B952709E6165e1c1eAAe",
+        ("SAFE", 100) => "0x4d18815D14fe5c3304e87B3FA18318baa5c23820",
+        ("SKY", 1) => "0x56072C95FAA701256059aa122697B133aDEd9279",
+        ("TRB", 1) => "0x88dF592F8eb5D7Bd38bFeF7dEb0fBc02cf3778a0",
+        ("API3", 1) => "0x0b38210ea11411557c13457D4dA7dC6ea731B88a",
+        ("ONDO", 1) => "0xfAbA6f8e4a5E8Ab82F62fe7C39859FA577269BE3",
+        ("PAXG", 1) => "0x45804880De22913dAFE09f4980848ECE6EcbAf78",
+        ("TBTC", 1) => "0x18084fbA666a33d37592fA2633fD49a74DD93a88",
+        ("TBTC", 42161) => "0x6c84a8f1c29108F47a79964b5Fe888D4f4D959dE",
+        ("POL", 1) => "0x455e53CBB86018Ac2B8092FdCd39d8444aFFC3F6",
+        ("POL", 137) => "0x455e53CBB86018Ac2B8092FdCd39d8444aFFC3F6",
+        ("AXL", 42161) => "0x23ee2343B892b1BB63503a4FAbc840E0e2C6810f",
+        ("AXL", 56) => "0x8b1f4432F943c465A973FeDC6d7aa50Fc96f1f65",
+        ("TIA", 42161) => "0xD56734d7f9979dD94FAE3d67C7a9280e71dBBd31",
+
+        // ---- Arbitrum ecosystem -------------------------------------------
+        ("GMX", 42161) => "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a",
+        ("GMX", 43114) => "0x62edc0692BD897d2295872a9FFCac5425011c661",
+        ("MAGIC", 42161) => "0x539bdE0d7Dbd336b79148AA742883198BBF60342",
+        ("RDNT", 42161) => "0x3082CC23568eA640225c2467653dB90e9250AaA0",
+        ("STG", 42161) => "0x6694340fc020c5E6B96567843da2df01b2CE1eb6",
+        ("STG", 10) => "0x296F55F8Fb28E498B858d0CdDA06D955B2Cb3f97",
+        ("STG", 137) => "0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590",
+        ("STG", 43114) => "0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590",
+        ("GRAIL", 42161) => "0x3d9907F9a368ad0a51Be60f7Da3b97cf940982D8",
+        ("DPX", 42161) => "0x6C2C06790b3E3E3c38e12Ee22F8183b37a13EE55",
+        ("SPELL", 42161) => "0x3E6648C5a70A150A88bCE65F4aD4d506Fe15d2AF",
+        ("SYN", 42161) => "0x080F6AEd32Fc474DD5717105bDB5eC5721C1d3Ef",
+        ("GNS", 42161) => "0x18c11FD286C5EC11c3b683Caa813B77f5163A122",
+        ("GNS", 137) => "0xE5417Af564e4bFDA1c483642db72007871397896",
+        ("WOO", 42161) => "0xcAFcD85D8ca7Ad1e1C6F82F651fA15E33AEfD07b",
+        ("WOO", 137) => "0x1B815d120B3eF02039Ee11dC2d33DE7aA4a8C603",
+        ("WOO", 10) => "0x871f2F2ff935FD1eD867842FF2a7bfD051A5E527",
+        ("WOO", 56) => "0x4691937a7508860F876c9c0a2a617E7d9E945D4B",
+        ("PLS", 42161) => "0x51318B7D00db7ACc4026C88c3952B66278B6A67F",
+        ("WINR", 42161) => "0xD77B108d4f6cefaa0Cae9506A934e824BEccA46B",
+        ("DMT", 42161) => "0x8B0E6f19Ee57089F7649A455D89D7bC6314D04e8",
+        ("UNI", 56) => "0xBf5140A22578168FD562DCcF235E5D43A02ce9b1",
+        ("AAVE", 56) => "0xfb6115445Bff7b52FeB98650C87f4493E107f802",
+        // Bridged WETH variants — real tokens, but NOT the wrapped-native
+        // quote leg (WAVAX / CELO), so they must not claim the "WETH" symbol.
+        ("WETH_E", 43114) => "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB",
+        ("WETH_E", 42220) => "0x122013fd7dF1C6F636a5bb8f03108E876548b455",
+        ("WBTC", 42220) => "0xD629eb00dEced2a080B7EC630eF6aC117e614f1b",
+        ("ETH", 56) => "0x2170Ed0880ac9A755fd29B2688956BD959F933F8",
+        ("DAI", 43114) => "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70",
+
+        // ---- Optimism ecosystem -------------------------------------------
+        ("VELO", 10) => "0x9560e827aF36c94D2Ac33a39bCE1Fe78631088Db",
+        ("PERP", 10) => "0x9e1028F5F1D5eDE59748FFcee5532509976840E0",
+        ("THALES", 10) => "0x217D47011b23BB961eB6D93cA9945B7501a5BB11",
+        ("KWENTA", 10) => "0x920Cf626a271321C151D027030D5d08aF699456b",
+        ("SONNE", 10) => "0x1DB2466d9F5e10D7090E7152B68d62703a2245F0",
+        ("DHT", 10) => "0xAF9fE3B5cCDAe78188B1F8b9a49Da7ae9510F151",
+        ("AELIN", 10) => "0x61BAADcF22d2565B0F471b291C475db5555e0b76",
+
+        // ---- Base ecosystem — meme/AI tokens drive real volume ------------
+        ("AERO", 8453) => "0x940181a94A35A4569E4529A3CDfB74e38FD98731",
+        ("DEGEN", 8453) => "0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed",
+        ("BRETT", 8453) => "0x532f27101965dd16442E59d40670FaF5eBB142E4",
+        ("TOSHI", 8453) => "0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4",
+        ("VIRTUAL", 8453) => "0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b",
+        ("AIXBT", 8453) => "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825",
+        ("CLANKER", 8453) => "0x1bc0c42215582d5A085795f4baDbaC3ff36d1Bcb",
+        ("MOG", 8453) => "0x2Da56AcB9Ea78330f947bD57C54119DebdaB4035",
+        ("HIGHER", 8453) => "0x0578d8A44db98B27BF358E9C8a6737fBf14198e4",
+        ("MIGGLES", 8453) => "0xB1a03EdA10342529bBF8EB700a06C60441fEf25d",
+        ("PRIME", 8453) => "0xFA980cEd6895AC314E7dE34Ef1bFAE90a5AdD21b",
+        ("CBBTC", 1) => "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+        ("CBBTC", 8453) => "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+        ("WELL", 8453) => "0xA88594D404727625A9437C3f886C7643872296AE",
+
+        // ---- Polygon ecosystem --------------------------------------------
+        ("QUICK", 137) => "0x831753DD7087CaC61aB5644b308642cc1c33Dc13",
+        ("GHST", 137) => "0x385Eeac5cB85A38A9a07A70c73e0a3271CfB54A7",
+        ("OCEAN", 137) => "0x282d8efCe846A88B159800bd4130ad77443Fa1A1",
+        ("DFYN", 137) => "0xC168E40227E4ebD8C1caAE80F7a55a4F0e6D66C5",
+        ("TEL", 137) => "0xdF7837DE1F2Fa4631D716CF2502f8b230F1dcc32",
+
+        // ---- BSC ecosystem — pegged majors are the deepest pools ----------
+        ("CAKE", 56) => "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82",
+        ("TWT", 56) => "0x4B0F1812e5Df2A09796481Ff14017e6005508003",
+        ("XVS", 56) => "0xcF6BB5389c92Bdda8a3747Ddb454cB7a64626C63",
+        ("DOGE", 56) => "0xbA2aE424d960c26247Dd6c32edC70B295c744C43",
+        ("XRP", 56) => "0x1D2F0da169ceB9fC7B3143178cCa156BD176A682",
+        ("ADA", 56) => "0x3EE2200Efb3400fAbB9AacF31297cBdD1d435D47",
+        ("DOT", 56) => "0x7083609fCE4d1d8Dc0C979AAb8c869Ea2C873402",
+        ("ATOM", 56) => "0x0Eb3a705fc54725037CC9e008bDede697f62F335",
+        ("LTC", 56) => "0x4338665CBB7B2485A8855A139b75D5e34AB0DB94",
+        ("TRX", 56) => "0x85EAC5Ac2F758618dFa09bDbe0cf174e7d574D5B",
+        ("TON", 56) => "0x76A797A59Ba2C17726896976B7B3747BfD1d220f",
+        ("MATIC", 56) => "0xCC42724C6683B7E57334c4E856f4c9965ED682bD",
+        ("ANKR", 56) => "0xf307910A4c7bbc79691fD374889b36d8531B08e3",
+        ("BSW", 56) => "0x965F527D9159dCe6288a2219DB51fc6Eef120dD1",
+        ("ALPACA", 56) => "0x8F0528cE5eF7B51152A59745bEfDD91D97091d2F",
+        ("DODO", 56) => "0x67ee3Cb086F8a16f34beE3ca5FAD36F7DbEBeEe5",
+        ("BANANA", 56) => "0x603c7f932ED1fc6575303D8Fb018fDCBb0f39a95",
+        ("CHESS", 56) => "0x20de22029ab63cf9A7Cf5fEB2b737Ca1eE4c62A6",
+        ("C98", 56) => "0xaec945e04baf28b135fa7c640f624f8d90f1c3a6",
+        ("SFP", 56) => "0xD41FDb03Ba84762dD66a0af1a6C8540FF1ba5dfb",
+        ("CHR", 56) => "0x9FDc6ae99d28F8A90559d48016fF6Cfa06A19f91",
+        ("EDU", 56) => "0xBdEAea03cA43a1c790FCFdA8fAe1c7f1772aE398",
+
+        // ---- Avalanche ecosystem ------------------------------------------
+        ("JOE", 43114) => "0x6e84a6216eA6dACC71eE8E6b0a5B7322EEbC0fDd",
+        ("PNG", 43114) => "0x60781C2586D68229fde47564546784ab3fACA982",
+        ("QI", 43114) => "0x8729438EB15e2C8B576fCc6AeCdA6A148776C0F5",
+        ("PTP", 43114) => "0x22d4002028f537599bE9f666d1c4Fa138522f9c8",
+        ("YAK", 43114) => "0x59414b3089ce2AF0010e7523Dea7E2b35d776ec7",
+        ("COQ", 43114) => "0x420FcA0121DC28039145009570975747295f2329",
+        ("KIMBO", 43114) => "0x184ff13B3EBCB25Be44e860163A5D8391Dd568c1",
+        ("SNOB", 43114) => "0xC38f41A296A4493Ff429F1238e030924A1542e50",
+        ("XAVA", 43114) => "0xd1c3f94DE7e5B45fa4EDBA47222a7e50B5a469A4",
+
+        // ---- Linea ecosystem ------------------------------------------------
+        ("FOXY", 59144) => "0x5FBDF89403270a1846F5ae7D113A989F850d1566",
+        ("CROAK", 59144) => "0xaCb54d07cA167934F57F829BeE2cC665e1A5eFBF",
+        ("LYNX", 59144) => "0x1a51b19CE03dbE0Cb44C1528E34a7EDD7771E9Af",
+        ("MENDI", 59144) => "0x43E8809ea7486baA3E4be59a922A2e7D7cEa4A0E",
+
+        // ---- Gnosis ecosystem ------------------------------------------------
+        ("GNO", 100) => "0x9C58BAcC331c9aa871AFD802DB6379a98e80CEdb",
+        ("COW", 100) => "0x177127622c4A00F3d409B75571e12cB3c8973d3c",
+        ("OLAS", 100) => "0xcE11e14225575945b8E6Dc0D4F2dD4C570f79d9f",
+        ("HNY", 100) => "0x71850b7E9Ee3f13Ab46d67167341E4bDc905Eef9",
+        ("FOX", 100) => "0x21a42669643f45Bc0e086b8Fc2ed70c23D67509d",
+
+        // ---- Celo ecosystem --------------------------------------------------
+        ("UBE", 42220) => "0x00Be915B9dCf56a3CBE739D9B9c202ca692409EC",
+
+        // ---- Sonic (146) — addresses verified on-chain ------------------------
+        // wS is the wrapped native; USDC.e/USDT.e are the canonical bridged
+        // stables; bridged WETH carries no code at the formerly documented
+        // address, so it is intentionally absent.
+        ("ETH" | "WETH" | "WS", 146) => "0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38",
+        ("USDC" | "USDC_E", 146) => "0x29219dd400f2Bf60E5a23d13Be72B486D4038894",
+        ("USDT" | "USDT_E", 146) => "0x6047828dc181963ba44974801FF68e538dA5eaF9",
+        // Sonic ecosystem majors (canonical bridged/native deployments).
+        ("WBTC" | "WBTC_E", 146) => "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
+        ("SCUSD", 146) => "0xd3DCe716f3eF535C5Ff8d041c1A41C3bd89b97aE",
+        ("STS", 146) => "0xE5DA20F15420aD15DE0fa650600aFc998bbE3955",
+        ("OS", 146) => "0xb1e25689D55734FD3ffFc939c4C3Eb52DFf8A794",
+        ("SHADOW", 146) => "0x3333b97138D4b086720b5aE8A7844b1345a33333",
+        ("BEETS", 146) => "0x2D0E0814E62D80056181f5cd932274405966e4F0",
+        ("GOGLZ", 146) => "0x9fDbC3f8Abc05Fa8f3Ad3C17D2F806c1230c4564",
+        ("SWPX", 146) => "0xA04BC7140c26fc9BB1F36B1A604C7A5a88fb5E70",
+        // Additional tokens with live on-chain bytecode (verified getCode).
+        ("WETH_B" | "BRIDGED_ETH", 146) => "0x50c42dEAcD8Fc9773493ED674b675bE577f2634b",
+        ("SCETH", 146) => "0x3bcE5CB273F0F148010BbEa2470e7b5df84C7812",
+        ("ANON", 146) => "0x79BBF4508B1391af3A0F4B30bb5FC4aa9ab0E07C",
+        ("BRUSH", 146) => "0xE51EE9868C1f0d6cd968A8B8C8376Dc2991Bfe44",
+
+        // ---- Unichain (130) ---------------------------------------------------
+        ("ETH" | "WETH", 130) => "0x4200000000000000000000000000000000000006",
+        ("USDC", 130) => "0x078D782b760474a361bDA0F3bCf0c1b71dDbc20B",
+        ("USDT", 130) => "0x9151434b16b9763660701914891fA906F660EcC5",
+        ("UNI", 130) => "0x8f187aA05619a017077f5308904739877ce9eA21",
+        ("WBTC", 130) => "0x927B51f251480a681271180DA4de28D44EC4AfB8",
+
+        // ---- Scroll (534352) --------------------------------------------------
+        ("ETH" | "WETH", 534352) => "0x5300000000000000000000000000000000000004",
+        ("USDC", 534352) => "0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4",
+        ("USDT", 534352) => "0xf55BEC9cafDbE8730f096Aa55dad6D22d44099Df",
+        ("WSTETH", 534352) => "0xf610A9dfB7C89644979b4A0f27063E9e7d7Cda32",
+        ("RETH", 534352) => "0x53878B874283351D26d206FA971aBaCE0f12E422",
+        ("WRSETH", 534352) => "0xa25b25548B4C98B0c7d3d27dcA5D5ca743d68b7F",
+        ("SCR", 534352) => "0xd29687c813D741E2F938F4aC377128810E217b1b",
+        ("WBTC", 534352) => "0x3C1BCa5a656e69edCD0D4E36BEbb3FcDAcA60Cf1",
+        ("SOLVBTC", 534352) => "0x3bA89d490AB1C0c9CCaB33821bBcF9640F71BFbA",
+        ("PENCIL", 534352) => "0x4Cf16d25a15c4f517B9B60EEc2eF308f8247cfee",
+        ("NURI", 534352) => "0xAAAE8378809BB8815c08D3A59bBe31613db57Fc6",
+        ("HOPI", 534352) => "0x5b577135c9De91cFC5247A28e92Eb4aBeDcB3aA8",
+        ("STONE", 534352) => "0x80137510979822322193FC997d400D08A6C747bf",
+        ("WEETH", 534352) => "0x01f0a31698C4d065659b9bdc21B3610292a1c506",
+
+        // ---- zkSync Era (324) -------------------------------------------------
+        ("ETH" | "WETH", 324) => "0x5AEa5775959fBC2557Cc8789bC1bf90A239D9a91",
+        ("USDC", 324) => "0x1d17CBcF0D6D143135aE902365D2E5e2A16538D4",
+        ("USDT", 324) => "0x493257fD37EDB34451f62EDf8D2a0C418852bA4C",
+        ("USDC_E", 324) => "0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4",
+        ("WBTC", 324) => "0xBBeB516fb02a01611cBBE0453Fe3c580D7281011",
+        ("ZK", 324) => "0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E",
+        ("WUSDM", 324) => "0xA900cbE7739c96D2B153a273953620A701d5442b",
+        ("ZZ", 324) => "0x1ab721f531Cab4c777d536AEC8f5a90b21E8ecCf",
+        ("SIS", 324) => "0xdd9f72afED3631a6C85b5369D84875e6c42f1827",
+        ("WSTETH", 324) => "0x703b52F2b28fEbcB60E1372858AF5b18849FE867",
+        ("RETH", 324) => "0x32Fd44bB869620C0BC993528c2a1Be3b1a50D6b8",
+        ("MAV", 324) => "0x787c09494Ec8Bcb24DcAf8659E7d5D69979eE508",
+        ("FIRE", 324) => "0x8f05f20D6Fa7ec33B0140D0e097DeCc97a801a42",
+        // Verified getCode on mainnet.era.zksync.io.
+        ("HOLD", 324) => "0xed4040fD47629e7c8FBB7DA76bb50B3e7695F0f2",
+        ("MUTE", 324) => "0x0e97C7a0F8B2C9885C8ac9fC6136e829CbC21d42",
+        ("DERI", 324) => "0x140D5bc5b62d6cB492B1A475127F50d531023803",
+
+        // ---- Mantle (5000) ----------------------------------------------------
+        // Pools quote in bridged WETH; MNT itself lives on the predeploy.
+        ("ETH" | "WETH", 5000) => "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111",
+        ("MNT", 5000) => "0xDeadDeAddeAddEAddeadDeaDdeAdDeaDDeAD0000",
+        ("USDT", 5000) => "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
+        ("USDC", 5000) => "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
+        ("USDE", 5000) => "0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34",
+        ("SUSDE", 5000) => "0x211Cc4DD073734dA055fbF44a2b4667d5E5FE5d2",
+        ("FBTC", 5000) => "0xC96dE26018A54D51c097160568752c4E3BD6C364",
+        ("METH", 5000) => "0xcDA86A272531e8640cD7F1a92c01839911B90bb0",
+        ("CMETH", 5000) => "0xE6829d9a7eE3040e1276Fa75293Bde931859e8fA",
+        ("USDT0", 5000) => "0x779Ded0c9e1022225f8E0630b35a9b54bE713736",
+        ("USDY", 5000) => "0x5bE26527e817998A7206475496fDE1E68957c5A6",
+        ("AXLUSDC", 5000) => "0xEB466342C4d449BC9f53A865D5Cb90586f405215",
+        // Canonical WMNT — getCode verified (6642 B). Earlier "no code" reads
+        // came from a rate-limited endpoint, not the chain.
+        ("WMNT", 5000) => "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
 
         _ => "",
     }
@@ -515,6 +880,10 @@ pub enum Protocol {
     V2,
     /// Concentrated liquidity: `getPool(a,b,fee)` then read `slot0`/`liquidity`.
     V3,
+    /// Solidly family (Velodrome V2, Aerodrome classic): the factory keys
+    /// pools by a `stable` flag — `getPool(a,b,bool)` — while the pool itself
+    /// still answers `getReserves()`, so state reads are V2-shaped.
+    Solidly,
 }
 
 impl Protocol {
@@ -522,6 +891,7 @@ impl Protocol {
         match self {
             Protocol::V2 => "v2",
             Protocol::V3 => "v3",
+            Protocol::Solidly => "solidly",
         }
     }
 }
@@ -540,6 +910,14 @@ pub const SIG_GET_POOL_UINT24: &str = "getPool(address,address,uint24)";
 /// `getPool(address,address,int24)` — Velodrome Slipstream. A *different*
 /// 4-byte selector from the uint24 form, so the two cannot share an encoding.
 pub const SIG_GET_POOL_INT24: &str = "getPool(address,address,int24)";
+
+/// `getPool(address,address,bool)` — Solidly family (Velodrome V2,
+/// Aerodrome). `bool` ABI-encodes as the same left-padded 32-byte 0/1 word
+/// the uint24 encoder produces, so `factory_get_pool_call_data` handles it.
+pub const SIG_GET_POOL_BOOL: &str = "getPool(address,address,bool)";
+
+/// Solidly `fees` carry the stable flag: 0 = volatile pool, 1 = stable pool.
+pub const SOLIDLY_STABLE_FLAGS: &[u32] = &[0, 1];
 
 /// How a V3 venue resolves the pool for a token pair.
 ///
@@ -568,7 +946,8 @@ pub struct Venue {
     /// The *factory*, not a router: the scanner resolves pools through it.
     pub address: &'static str,
     pub protocol: Protocol,
-    /// `Some` exactly when `protocol` is [`Protocol::V3`].
+    /// `Some` exactly when `protocol` is [`Protocol::V3`] or
+    /// [`Protocol::Solidly`] — both resolve pools through a keyed factory call.
     pub v3: Option<V3Params>,
 }
 
@@ -613,6 +992,11 @@ const V3_SLIPSTREAM: Option<V3Params> = Some(V3Params {
     fees: SLIPSTREAM_TICK_SPACINGS,
     pool_sig: SIG_GET_POOL_INT24,
 });
+/// Solidly family (Velodrome V2, Aerodrome classic): `bool` stable flag.
+const V3_SOLIDLY: Option<V3Params> = Some(V3Params {
+    fees: SOLIDLY_STABLE_FLAGS,
+    pool_sig: SIG_GET_POOL_BOOL,
+});
 
 pub fn get_venues(chain_id: u64) -> &'static [Venue] {
     match chain_id {
@@ -626,6 +1010,18 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
             Venue {
                 name: "Uniswap V3",
                 address: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            Venue {
+                name: "SushiSwap V2",
+                address: "0xC0AEe478e3658e2610c5F7A4A2E1777cE9e4f2Ac",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            Venue {
+                name: "PancakeSwap V3",
+                address: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },
@@ -657,6 +1053,13 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },
+            // PancakeSwap V3 — canonical CREATE2 deployment, same as BSC/ETH
+            Venue {
+                name: "PancakeSwap V3",
+                address: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
         ],
         10 => &[
             Venue {
@@ -678,6 +1081,14 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 protocol: Protocol::V3,
                 v3: V3_SLIPSTREAM,
             },
+            // Velodrome V2 (Solidly) — constant-product sibling of Slipstream;
+            // pools are keyed by a stable flag, not a fee tier.
+            Venue {
+                name: "Velodrome V2",
+                address: "0xF1046053aa5682b4F9a81b5481394DA16BE5FF5a",
+                protocol: Protocol::Solidly,
+                v3: V3_SOLIDLY,
+            },
         ],
         137 => &[
             Venue {
@@ -692,12 +1103,33 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },
-            // QuickSwap V3 (Algebra) — dominant Polygon DEX
+            // QuickSwap V2 — dominant Polygon DEX, standard getPair factory.
+            // (QuickSwap V3 is Algebra: it exposes poolByPair(a,b), not
+            // getPool(a,b,fee), so every resolution call reverted.)
             Venue {
-                name: "QuickSwap V3",
-                address: "0x411b0fAcC3489691f28ad58c47006AF5E3Ab3A28",
+                name: "QuickSwap V2",
+                address: "0x5757371414417b8C6CAad45bAeF941aBc7d3Ab32",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            // SushiSwap V2 on Polygon.
+            Venue {
+                name: "SushiSwap V2",
+                address: "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            Venue {
+                name: "SushiSwap V3",
+                address: "0x917933899c6a5F8E37F31E19f92CdBFF7e8FF0e2",
                 protocol: Protocol::V3,
                 v3: V3_UNI,
+            },
+            Venue {
+                name: "ApeSwap V2",
+                address: "0xCf083Be4164828f00cAE704EC15a36D711491284",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
             },
         ],
         56 => &[
@@ -727,6 +1159,26 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },
+            // On-chain verified: the BSC ApeSwap factory is 0x0841BD0B… — the
+            // 0xCf083Be… address is ApeSwap's *Polygon* deployment.
+            Venue {
+                name: "ApeSwap V2",
+                address: "0x0841BD0B734E4F5853f0dD8d7Ea041c241fb0Da6",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            Venue {
+                name: "BiSwap V2",
+                address: "0x858E3312ed3A876947EA49d572A7C42DE08af7EE",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            Venue {
+                name: "BakerySwap V2",
+                address: "0x01bF7C66c6BD861915CdaaE475042d3c4BaE16A7",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
         ],
         43114 => &[
             Venue {
@@ -740,6 +1192,25 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 address: "0x740b1c1de25031C31FF4fC9A62f554A55cdC1baD",
                 protocol: Protocol::V3,
                 v3: V3_UNI,
+            },
+            // TraderJoe V1 — the dominant Avalanche V2 factory
+            Venue {
+                name: "TraderJoe V1",
+                address: "0x9Ad6C38BE94206cA50bb0d90783181662f0CFC10",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            Venue {
+                name: "Pangolin V2",
+                address: "0xefa94DE7a4656D787667C749f7E1223D71E9FD88",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            Venue {
+                name: "SushiSwap V2",
+                address: "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
             },
         ],
         8453 => &[
@@ -769,10 +1240,31 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },
+            // Aerodrome classic (Solidly) — Base's largest AMM by volume;
+            // `getPool(a,b,stable)` keyed pools behind the same factory that
+            // also answers the Slipstream-style call for CL pools.
+            Venue {
+                name: "Aerodrome",
+                address: "0x420DD381b31aEf6683db6B902084cB0FFECe40Ab",
+                protocol: Protocol::Solidly,
+                v3: V3_SOLIDLY,
+            },
+            Venue {
+                name: "PancakeSwap V3",
+                address: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            Venue {
+                name: "BaseSwap V2",
+                address: "0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
         ],
         42220 => &[
-            // The Celo UniswapV2Factory is deployed but has no pairs, so the
-            // chain is covered by two independent V3-style venues instead.
+            // The Uniswap-deployed V2 factory on Celo holds no pairs, so the
+            // chain is covered by two V3-style venues plus Ubeswap's V2.
             Venue {
                 name: "Uniswap V3",
                 address: "0xAfE208a311B21f13EF87E33A90049fC17A7acDEc",
@@ -784,6 +1276,13 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 address: "0x04625b046c69577efc40e6c0bb83cdbafab5a55f",
                 protocol: Protocol::V3,
                 v3: V3_SLIPSTREAM,
+            },
+            // Ubeswap — Celo's native V2 fork, the chain's dominant classic AMM
+            Venue {
+                name: "Ubeswap V2",
+                address: "0x62d5b84bE28a183aBB507E125B384122D2C25fAE",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
             },
         ],
         100 => &[
@@ -805,6 +1304,18 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
                 protocol: Protocol::V2,
                 v3: V2_ONLY,
             },
+            Venue {
+                name: "SushiSwap V2",
+                address: "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+            Venue {
+                name: "Swapr V2",
+                address: "0x5D48C95AdfFD4B40c1AAADc4e08fc44117E02117",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
         ],
         59144 => &[
             Venue {
@@ -816,6 +1327,118 @@ pub fn get_venues(chain_id: u64) -> &'static [Venue] {
             Venue {
                 name: "Uniswap V3",
                 address: "0x31FAfd4889FA1269F7a13A66eE0fB458f27D72A9",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            // PancakeSwap on Linea — canonical V3 factory plus its V2 sibling
+            Venue {
+                name: "PancakeSwap V3",
+                address: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            Venue {
+                name: "PancakeSwap V2",
+                address: "0x02a84c1b3BBD7401a5f7fa98a384EBC70bB5749E",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+        ],
+        // Sonic — all three verified live by probing factory.getPool for
+        // wS/USDC.e (real pool addresses returned).
+        146 => &[
+            Venue {
+                name: "Uniswap V3",
+                address: "0xcb2436774C3e191c85056d248EF4260ce5f27A9D",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            // Wagmi — UniV3 fork, factory derived from a live pool's
+            // factory() and verified via getPool @3000/@10000.
+            Venue {
+                name: "Wagmi V3",
+                address: "0x56cfc796bc88c9c7e1b38c2b0af9b7120b079aef",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            // SpookySwap's Sonic deployment is V3-style: getPool(a,b,fee)
+            // returned real pools @500/@3000.
+            Venue {
+                name: "SpookySwap V3",
+                address: "0x3d91b700252e0e3ee7805d12e048a988ab69c8ad",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+        ],
+        // Unichain — canonical Uniswap deployments (Uniswap's own chain).
+        130 => &[
+            Venue {
+                name: "Uniswap V3",
+                address: "0x1F98400000000000000000000000000000000003",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            Venue {
+                name: "Uniswap V2",
+                address: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6",
+                protocol: Protocol::V2,
+                v3: V2_ONLY,
+            },
+        ],
+        // Scroll — all three verified live via factory.getPool on WETH/USDC
+        // (real pool addresses returned @ multiple fee tiers).
+        534352 => &[
+            Venue {
+                name: "Uniswap V3",
+                address: "0x70C62C8b8e801124A4Aa81ce07b637A3e83cb919",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            // KyberSwap Elastic — UniV3-fork signature, getPool/100 → live
+            // pool 0x8518d5d6….
+            Venue {
+                name: "KyberSwap Elastic",
+                address: "0xC7a590291e07B9fe9E64b86c58fD8fC764308C4A",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            // Nuri CL (Ramses-family) — getPool/100,500,10000 → live pools.
+            Venue {
+                name: "Nuri CL",
+                address: "0xAAA32926fcE6bE95ea2c51cB4Fcb60836D320C42",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+        ],
+        // zkSync Era — both verified live with real WETH/USDC pools.
+        324 => &[
+            Venue {
+                name: "PancakeSwap V3",
+                address: "0x1BB72E0CbbEA93c08f535fc7856E0338D7F7a8aB",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            Venue {
+                name: "Uniswap V3",
+                address: "0x8FdA5a7a8dCA67BBcDd10F02Fa0649A937215422",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+        ],
+        // Mantle — Agni Finance (UniV3 fork) verified live: USDC/USDT pools
+        // at fees 100/500/10000, WETH/USDT at 100/500/10000. Canonical
+        // Uniswap V3 deployment also verified: getPool(WETH,USDT,500) →
+        // live pool 0x076eb72e….
+        5000 => &[
+            Venue {
+                name: "Agni Finance V3",
+                address: "0x25780dc8Fc3cfBD75F33bFDAB65e969b603b2035",
+                protocol: Protocol::V3,
+                v3: V3_UNI,
+            },
+            Venue {
+                name: "Uniswap V3",
+                address: "0x0d922Fb1Bc191F64970ac40376643808b4B74Df9",
                 protocol: Protocol::V3,
                 v3: V3_UNI,
             },
@@ -840,10 +1463,12 @@ pub fn get_factories(chain_id: u64) -> Vec<Factory> {
 mod tests {
     use super::*;
 
-    const CHAINS: [u64; 10] = [1, 42161, 10, 137, 56, 43114, 8453, 42220, 100, 59144];
+    const CHAINS: [u64; 15] = [
+        1, 42161, 10, 137, 56, 43114, 8453, 42220, 100, 59144, 146, 130, 534352, 324, 5000,
+    ];
 
     #[test]
-    fn all_ten_chains_are_configured() {
+    fn all_fifteen_chains_are_configured() {
         let configured: Vec<u64> = get_chains().iter().map(|c| c.id).collect();
         for id in CHAINS {
             assert!(
@@ -851,7 +1476,7 @@ mod tests {
                 "chain {id} missing from get_chains()"
             );
         }
-        assert_eq!(configured.len(), 10, "expected exactly 10 chains");
+        assert_eq!(configured.len(), 15, "expected exactly 15 chains");
     }
 
     /// Every resolved token must be a syntactically valid EVM address.
@@ -1038,11 +1663,11 @@ mod tests {
     /// Chains with no registry-listed V2 market must still be covered by V3.
     #[test]
     fn v3_covers_chains_without_v2() {
-        // Celo's V2 factory is deployed but holds no pairs, so it must be
-        // served by V3-style venues.
+        // The Uniswap-deployed V2 factory on Celo holds no pairs, so Celo is
+        // served by Ubeswap (its native V2 fork) plus its V3 venues.
         assert!(
-            !has_v2_factory(42220),
-            "Celo unexpectedly has a usable V2 market"
+            has_v2_factory(42220),
+            "Celo should resolve V2 through Ubeswap"
         );
         assert!(
             has_v3_factory(42220),
@@ -1129,6 +1754,22 @@ mod tests {
                             p.pool_sig
                         );
                     }
+                    Protocol::Solidly => {
+                        let p = v.v3.unwrap_or_else(|| {
+                            panic!("chain {id} {}: Solidly venue without params", v.name)
+                        });
+                        assert_eq!(
+                            p.pool_sig, SIG_GET_POOL_BOOL,
+                            "chain {id} {}: Solidly venue must use getPool(a,b,bool)",
+                            v.name
+                        );
+                        // Flags, not fees: 0 = volatile pool, 1 = stable pool.
+                        assert_eq!(
+                            p.fees, SOLIDLY_STABLE_FLAGS,
+                            "chain {id} {}: Solidly venue must probe volatile+stable",
+                            v.name
+                        );
+                    }
                     Protocol::V2 => assert!(
                         v.v3.is_none(),
                         "chain {id} {}: V2 venue must not carry V3 params",
@@ -1147,7 +1788,9 @@ mod tests {
         for id in CHAINS {
             for v in get_venues(id) {
                 let Some(p) = v.v3 else { continue };
-                if v.name.contains("Slipstream") {
+                if v.protocol == Protocol::Solidly {
+                    assert_eq!(p.pool_sig, SIG_GET_POOL_BOOL, "chain {id} {}", v.name);
+                } else if v.name.contains("Slipstream") {
                     assert_eq!(p.pool_sig, SIG_GET_POOL_INT24, "chain {id} {}", v.name);
                 } else {
                     assert_eq!(p.pool_sig, SIG_GET_POOL_UINT24, "chain {id} {}", v.name);
