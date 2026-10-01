@@ -5,6 +5,7 @@ mod config;
 mod discovery;
 mod etherscan;
 mod gas_bidder;
+mod gasless;
 mod mev_guard;
 mod multicall;
 mod paper_trader;
@@ -62,8 +63,31 @@ async fn main() {
 
     let discovery_svc = Arc::new(discovery::DiscoveryService::new());
 
+    // Build the shared RPC pool before the scanner so venue quoting selects
+    // endpoints by health score rather than blind round-robin.
+    let rpc_pool = {
+        let pool = Arc::new(rpc_pool::RpcPool::new(
+            crate::config::ServerConfig::from_env().rpc_max_concurrency,
+        ));
+        for chain in chains::get_chains() {
+            let mut urls = rpc_catalog::all_default_endpoints(chain.id);
+            // Operator-supplied endpoints are appended so they take part in
+            // the same health tracking and failover.
+            urls.extend(env_rpc_urls(chain.id));
+            pool.register(chain.id, &urls);
+        }
+        info!(
+            "RPC pool registered {} endpoints across {} chains",
+            pool.total_endpoints(),
+            chains::get_chains().len()
+        );
+        pool
+    };
+    let mut scanner = RadarScanner::new();
+    scanner.set_rpc_pool(rpc_pool.clone());
+
     let state = AppState {
-        scanner: Arc::new(RadarScanner::new()),
+        scanner: Arc::new(scanner),
         velora: Arc::new(VeloraClient::new(std::env::var("VELORA_API_KEY").ok())),
         pimlico: Arc::new(pimlico_client::PimlicoClient::new(
             std::env::var("PIMLICO_API_KEY").ok(),
@@ -95,7 +119,9 @@ async fn main() {
             llm_config: None,
             scan_interval_secs: 30,
             max_concurrent_tx: 3,
-            chains_enabled: vec![1, 42161, 10, 137, 56, 43114, 8453, 42220, 100, 59144],
+            chains_enabled: vec![
+                1, 42161, 10, 137, 56, 43114, 8453, 42220, 100, 59144, 146, 130, 534352, 324, 5000,
+            ],
             dexes_enabled: vec![],
         })),
         llm_config: Arc::new(parking_lot::RwLock::new(None)),
@@ -235,27 +261,7 @@ async fn main() {
         profit_transfer: Arc::new(profit_transfer::ProfitTransferService::new(
             profit_transfer::ProfitTransferConfig::from_env(),
         )),
-        rpc_pool: {
-            // Register every built-in endpoint for every chain. The pool
-            // dedupes and drops non-HTTP entries, so a stale placeholder in
-            // the catalogue cannot break startup.
-            let pool = Arc::new(rpc_pool::RpcPool::new(
-                crate::config::ServerConfig::from_env().rpc_max_concurrency,
-            ));
-            for chain in chains::get_chains() {
-                let mut urls = rpc_catalog::all_default_endpoints(chain.id);
-                // Operator-supplied endpoints are appended so they take part in
-                // the same health tracking and failover.
-                urls.extend(env_rpc_urls(chain.id));
-                pool.register(chain.id, &urls);
-            }
-            info!(
-                "RPC pool registered {} endpoints across {} chains",
-                pool.total_endpoints(),
-                chains::get_chains().len()
-            );
-            pool
-        },
+        rpc_pool,
         discovery: discovery_svc,
     };
 
@@ -347,6 +353,11 @@ fn env_rpc_urls(chain_id: u64) -> Vec<String> {
         42220 => "CELO_RPC_URL",
         100 => "GNOSIS_RPC_URL",
         59144 => "LINEA_RPC_URL",
+        146 => "SONIC_RPC_URL",
+        130 => "UNICHAIN_RPC_URL",
+        534352 => "SCROLL_RPC_URL",
+        324 => "ZKSYNC_RPC_URL",
+        5000 => "MANTLE_RPC_URL",
         _ => return Vec::new(),
     };
 
