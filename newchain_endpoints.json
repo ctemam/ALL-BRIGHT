@@ -1,0 +1,16 @@
+{
+ "146": [
+  "https://rpc.soniclabs.com"
+ ],
+ "130": [],
+ "534352": [
+  "https://scroll.api.onfinality.io/public"
+ ],
+ "324": [
+  "https://mainnet.era.zksync.io",
+  "https://zksync.api.onfinality.io/public"
+ ],
+ "5000": [
+  "https://rpc.mantle.xyz"
+ ]
+}

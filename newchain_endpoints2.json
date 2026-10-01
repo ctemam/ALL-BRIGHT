@@ -1,0 +1,35 @@
+{
+ "146": [
+  "https://rpc.soniclabs.com",
+  "https://sonic-rpc.publicnode.com",
+  "https://sonic.drpc.org",
+  "https://sonic-json-rpc.stakely.io",
+  "https://146.rpc.thirdweb.com"
+ ],
+ "130": [
+  "https://mainnet.unichain.org",
+  "https://unichain-rpc.publicnode.com",
+  "https://unichain.drpc.org",
+  "https://unichain.api.onfinality.io/public",
+  "https://130.rpc.thirdweb.com"
+ ],
+ "534352": [
+  "https://rpc.scroll.io",
+  "https://scroll-rpc.publicnode.com",
+  "https://scroll.drpc.org",
+  "https://534352.rpc.thirdweb.com"
+ ],
+ "324": [
+  "https://mainnet.era.zksync.io",
+  "https://zksync.drpc.org",
+  "https://zksync.api.onfinality.io/public",
+  "https://324.rpc.thirdweb.com"
+ ],
+ "5000": [
+  "https://rpc.mantle.xyz",
+  "https://mantle-rpc.publicnode.com",
+  "https://mantle.drpc.org",
+  "https://mantle.api.onfinality.io/public",
+  "https://5000.rpc.thirdweb.com"
+ ]
+}

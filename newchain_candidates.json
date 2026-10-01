@@ -1,0 +1,25 @@
+{
+ "130": [
+  "https://mainnet.unichain.org",
+  "https://unichain-rpc.publicnode.com"
+ ],
+ "146": [
+  "https://rpc.soniclabs.com",
+  "https://sonic-rpc.publicnode.com",
+  "https://sonic.drpc.org"
+ ],
+ "324": [
+  "https://mainnet.era.zksync.io",
+  "https://zksync.drpc.org"
+ ],
+ "5000": [
+  "https://rpc.mantle.xyz",
+  "https://mantle-rpc.publicnode.com"
+ ],
+ "534352": [
+  "https://rpc.scroll.io",
+  "https://rpc.ankr.com/scroll",
+  "https://scroll-mainnet.chainstacklabs.com",
+  "https://scroll-rpc.publicnode.com"
+ ]
+}
