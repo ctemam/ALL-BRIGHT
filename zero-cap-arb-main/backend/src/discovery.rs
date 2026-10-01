@@ -79,6 +79,11 @@ fn chain_slug(chain_id: u64) -> Option<&'static str> {
         42220 => Some("celo"),
         100 => Some("gnosischain"),
         59144 => Some("linea"),
+        146 => Some("sonic"),
+        130 => Some("unichain"),
+        534352 => Some("scroll"),
+        324 => Some("zksync"),
+        5000 => Some("mantle"),
         _ => None,
     }
 }
@@ -95,6 +100,11 @@ fn slug_to_chain_id(slug: &str) -> u64 {
         "celo" => 42220,
         "gnosischain" => 100,
         "linea" => 59144,
+        "sonic" => 146,
+        "unichain" => 130,
+        "scroll" => 534352,
+        "zksync" => 324,
+        "mantle" => 5000,
         _ => 0,
     }
 }
@@ -334,6 +344,11 @@ fn llama_chain_to_id(name: &str) -> Option<u64> {
         "celo" => Some(42220),
         "xdai" | "gnosis" => Some(100),
         "linea" => Some(59144),
+        "sonic" => Some(146),
+        "unichain" => Some(130),
+        "scroll" => Some(534352),
+        "zksync" | "zksync era" => Some(324),
+        "mantle" => Some(5000),
         _ => None,
     }
 }
@@ -545,7 +560,7 @@ impl DiscoveryService {
             Some(s) => s,
             None => {
                 return match chain_id {
-                    42161 | 10 | 8453 | 59144 | 100 => 100.0,
+                    42161 | 10 | 8453 | 59144 | 100 | 146 | 130 | 534352 | 324 | 5000 => 100.0,
                     137 | 42220 => 200.0,
                     _ => 500.0,
                 };
@@ -558,7 +573,7 @@ impl DiscoveryService {
         if chain_tvl <= 0.0 {
             // No TVL data — use hard-coded defaults
             return match chain_id {
-                42161 | 10 | 8453 | 59144 | 100 => 100.0,
+                42161 | 10 | 8453 | 59144 | 100 | 146 | 130 | 534352 | 324 | 5000 => 100.0,
                 137 | 42220 => 200.0,
                 _ => 500.0,
             };

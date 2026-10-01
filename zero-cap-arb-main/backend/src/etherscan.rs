@@ -68,6 +68,20 @@ fn explorer_for_chain(chain_id: u64) -> Option<ExplorerConfig> {
             api_base: "https://api.lineascan.build/api",
             name: "Lineascan",
         }),
+        146 => Some(ExplorerConfig {
+            api_base: "https://api.sonicscan.org/api",
+            name: "Sonicscan",
+        }),
+        534352 => Some(ExplorerConfig {
+            api_base: "https://api.scrollscan.com/api",
+            name: "Scrollscan",
+        }),
+        5000 => Some(ExplorerConfig {
+            api_base: "https://api.mantlescan.xyz/api",
+            name: "Mantlescan",
+        }),
+        // Unichain (uniscan.xyz) and zkSync Era use non-Etherscan explorer
+        // APIs — RPC receipt verification is the primary path for these.
         _ => None,
     }
 }
@@ -85,6 +99,11 @@ pub fn tx_explorer_url(chain_id: u64, tx_hash: &str) -> String {
         42220 => "https://celoscan.io/tx/",
         100 => "https://gnosisscan.io/tx/",
         59144 => "https://lineascan.build/tx/",
+        146 => "https://sonicscan.org/tx/",
+        130 => "https://uniscan.xyz/tx/",
+        534352 => "https://scrollscan.com/tx/",
+        324 => "https://era.zksync.network/tx/",
+        5000 => "https://mantlescan.xyz/tx/",
         _ => "https://etherscan.io/tx/",
     };
     format!("{}{}", base, tx_hash)
