@@ -8,7 +8,7 @@ import {ISparkPool} from "./interfaces/ISparkPool.sol";
 import {IBalancerVault, IFlashLoanRecipient} from "./interfaces/IBalancerVault.sol";
 import {IMorphoBlue, IMorphoFlashLoanCallback} from "./interfaces/IMorphoBlue.sol";
 import {IDssFlash, IERC3156FlashBorrower} from "./interfaces/IDssFlash.sol";
-import {IUniswapV3Pool, IUniswapV3FlashCallback} from "./interfaces/IUniswapV3Flash.sol";
+import {IUniswapV3Pool, IUniswapV3FlashCallback, IUniswapV3SwapCallback} from "./interfaces/IUniswapV3Flash.sol";
 import {IVeloraAugustus} from "./interfaces/IVeloraAugustus.sol";
 
 /// @title ZeroRiskArb
@@ -25,7 +25,8 @@ contract ZeroRiskArb is
     IFlashLoanRecipient,
     IMorphoFlashLoanCallback,
     IERC3156FlashBorrower,
-    IUniswapV3FlashCallback
+    IUniswapV3FlashCallback,
+    IUniswapV3SwapCallback
 {
     // ─── Constants & Storage ───────────────────────────
 
@@ -40,7 +41,35 @@ contract ZeroRiskArb is
     address public morphoBlue;
     address public dssFlash;
 
+    /// @notice Routers/executors approved to receive token approvals in
+    ///         direct-route mode. Pool legs (`toPool`) only receive plain
+    ///         transfers — never approvals — so they need no entry.
+    mapping(address => bool) public allowedTargets;
+
     uint8 private _activeSource;
+
+    /// @dev Transient V3-swap guard: armed to the pool address for the
+    ///      duration of one direct-route V3 leg, cleared after the call.
+    ///      `uniswapV3SwapCallback` only pays while msg.sender matches it,
+    ///      so no arbitrary caller can pull tokens through the callback.
+    address private _v3CallbackPool;
+
+    /// @notice One swap step of a direct route.
+    /// @param target   Router or pool address the leg calls.
+    /// @param tokenIn  Token the leg spends.
+    /// @param toPool   true → transfer tokenIn to target, then call `data`
+    ///                 (e.g. a V2 pair's swap()); false → approve tokenIn to
+    ///                 target, then call `data` (router target must be
+    ///                 whitelisted first).
+    /// @param amountIn Only used for toPool legs: exact amount transferred.
+    /// @param data     Calldata sent to `target`.
+    struct SwapLeg {
+        address target;
+        address tokenIn;
+        bool    toPool;
+        uint256 amountIn;
+        bytes   data;
+    }
 
     /// @dev ERC-3156 success return value.
     bytes32 private constant ERC3156_CALLBACK_SUCCESS = keccak256("ERC3156FlashBorrower.onFlashLoan");
@@ -57,6 +86,7 @@ contract ZeroRiskArb is
     );
 
     event PoolsUpdated(address aave, address radiant, address spark, address balancer, address morpho, address dss);
+    event TargetSet(address indexed target, bool allowed);
 
     // ─── Errors ────────────────────────────────────────
 
@@ -69,6 +99,7 @@ contract ZeroRiskArb is
     error PoolUnset();
     error ApprovalFailed();
     error BadCaller();
+    error TargetNotAllowed();
 
     // ─── Modifiers ─────────────────────────────────────
 
@@ -105,6 +136,14 @@ contract ZeroRiskArb is
         emit PoolsUpdated(_aave, _radiant, _spark, _balancer, _morpho, _dss);
     }
 
+    /// @notice Allow/disallow a router/executor target for direct-route legs.
+    ///         Only affects legs that receive token approvals; pool legs are
+    ///         transfer-only and never read this map.
+    function setAllowedTarget(address target, bool allowed) external onlyOwner {
+        allowedTargets[target] = allowed;
+        emit TargetSet(target, allowed);
+    }
+
     // ─── Entry Point ───────────────────────────────────
 
     /// @param source 0=AaveV3, 1=RadiantV2, 2=Spark, 3=Balancer(0%), 4=Morpho(0%), 5=MakerDAI(0%), 6=UniV3
@@ -123,8 +162,40 @@ contract ZeroRiskArb is
         bool flashbots,
         address v3Pool
     ) external {
+        _run(source, asset, amount, minProfit, swapData, flashbots, v3Pool, false);
+    }
+
+    /// @notice Direct-route variant for chains without a Velora deployment.
+    ///         `swapData` is `abi.encode(SwapLeg[])`: each leg either calls a
+    ///         whitelisted router (approval-based) or a pool directly
+    ///         (transfer + precomputed `pair.swap` calldata).
+    /// @dev    No flashbots tip in this mode.
+    function executeDirect(
+        uint8 source,
+        address asset,
+        uint256 amount,
+        uint256 minProfit,
+        bytes calldata swapData,
+        address v3Pool
+    ) external {
+        _run(source, asset, amount, minProfit, swapData, false, v3Pool, true);
+    }
+
+    function _run(
+        uint8 source,
+        address asset,
+        uint256 amount,
+        uint256 minProfit,
+        bytes calldata swapData,
+        bool flashbots,
+        address v3Pool,
+        bool direct
+    ) internal {
         _activeSource = source;
-        bytes memory params = abi.encode(asset, minProfit, swapData, flashbots, tx.origin);
+        // msg.sender — not tx.origin: under ERC-4337 the bundler is tx.origin
+        // and our smart account is the direct caller. Routing profit to
+        // tx.origin would send it to the bundler.
+        bytes memory params = abi.encode(asset, minProfit, swapData, flashbots, msg.sender, direct);
 
         if (source == 0) {
             if (aaveV3Pool == address(0)) revert PoolUnset();
@@ -268,6 +339,26 @@ contract ZeroRiskArb is
         _handleFlashLoan(asset, amount, fee, params);
     }
 
+    // ─── Uniswap V3 Swap Callback (direct-route legs) ───
+    //
+    // A V3 pool leg calls pool.swap(...); the pool streams the output to us
+    // immediately and collects its input through this hook. The `data` arg
+    // we passed to swap() carries abi.encode(tokenIn) so the callback knows
+    // which token to send back. Payment is only made to the armed pool.
+    function uniswapV3SwapCallback(
+        int256 amount0Delta,
+        int256 amount1Delta,
+        bytes calldata data
+    ) external override {
+        if (_v3CallbackPool == address(0) || msg.sender != _v3CallbackPool) {
+            revert BadCaller();
+        }
+        address tokenIn = abi.decode(data, (address));
+        uint256 owed = amount0Delta > 0 ? uint256(amount0Delta) : uint256(amount1Delta);
+        if (owed == 0) revert BadCaller();
+        _transfer(tokenIn, msg.sender, owed);
+    }
+
     // ─── Core Logic ────────────────────────────────────
 
     function _handleFlashLoan(
@@ -276,17 +367,60 @@ contract ZeroRiskArb is
         uint256 premium,
         bytes memory params
     ) internal {
-        (address token, uint256 minProfit, bytes memory swapData, bool flashbots, address user) =
-            abi.decode(params, (address, uint256, bytes, bool, address));
+        (address token, uint256 minProfit, bytes memory swapData, bool flashbots, address user, bool direct) =
+            abi.decode(params, (address, uint256, bytes, bool, address, bool));
 
-        // Approve ParaSwap to pull tokens
-        _approve(token, tokenTransferProxy);
+        // Snapshot the source before any external call: a leg target could
+        // re-enter execute() and overwrite _activeSource, which would send
+        // the repayment down the wrong branch.
+        uint8 src = _activeSource;
 
-        // Execute the ParaSwap swap
-        (bool ok, bytes memory ret) = veloraAugustus.call(swapData);
-        if (!ok) {
-            if (ret.length > 0) assembly { revert(add(32, ret), mload(ret)) }
-            revert SwapFailed();
+        if (direct) {
+            SwapLeg[] memory legs = abi.decode(swapData, (SwapLeg[]));
+            for (uint256 i = 0; i < legs.length; i++) {
+                SwapLeg memory leg = legs[i];
+                // V3 pools collect their input inside uniswapV3SwapCallback —
+                // pre-transferring tokenIn would double-pay. Detect them by
+                // the swap() selector and arm the callback guard instead.
+                bool isV3Swap = leg.data.length >= 4
+                    && bytes4(leg.data) == bytes4(0x128acb08);
+                if (leg.toPool) {
+                    if (isV3Swap) {
+                        _v3CallbackPool = leg.target;
+                    } else {
+                        // Pool leg: push tokenIn, then call (e.g. pair.swap()).
+                        // No approval is granted — the final balance/debt check
+                        // is the only guard needed. amountIn == 0 sends the
+                        // contract's whole balance of tokenIn — used for later
+                        // legs whose input is the previous leg's output.
+                        uint256 amt = leg.amountIn == 0
+                            ? IERC20(leg.tokenIn).balanceOf(address(this))
+                            : leg.amountIn;
+                        _transfer(leg.tokenIn, leg.target, amt);
+                    }
+                } else {
+                    // Router leg: approvals go only to owner-whitelisted
+                    // targets.
+                    if (!allowedTargets[leg.target]) revert TargetNotAllowed();
+                    _approve(leg.tokenIn, leg.target);
+                }
+                (bool ok, bytes memory ret) = leg.target.call(leg.data);
+                if (isV3Swap) _v3CallbackPool = address(0);
+                if (!ok) {
+                    if (ret.length > 0) assembly { revert(add(32, ret), mload(ret)) }
+                    revert SwapFailed();
+                }
+            }
+        } else {
+            // Approve ParaSwap to pull tokens
+            _approve(token, tokenTransferProxy);
+
+            // Execute the ParaSwap swap
+            (bool ok, bytes memory ret) = veloraAugustus.call(swapData);
+            if (!ok) {
+                if (ret.length > 0) assembly { revert(add(32, ret), mload(ret)) }
+                revert SwapFailed();
+            }
         }
 
         // Settle
@@ -312,7 +446,6 @@ contract ZeroRiskArb is
         // Balancer & UniV3: direct transfer back to the vault/pool.
         // Morpho & DssFlash: approve-based pull (handled in their callbacks).
         // Aave/Radiant/Spark: approve msg.sender to pull.
-        uint8 src = _activeSource;
         if (src == 3) {
             _transfer(token, balancerVault, debt);
         } else if (src == 6) {
