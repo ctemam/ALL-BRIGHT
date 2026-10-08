@@ -1,0 +1,3 @@
+# C: is full — build artifacts live on D:
+[build]
+target-dir = "D:\\allbright-target"

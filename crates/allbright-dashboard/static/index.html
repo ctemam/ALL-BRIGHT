@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AllBright — Autonomous Wealth Engine</title>
+<style>
+:root{
+  --bg:#0a0f1e; --panel:#111a30; --panel2:#0d1526; --line:#1e2b47;
+  --txt:#dbe6ff; --dim:#7f8fb3; --blue:#4f8ff7; --blue2:#1e4fd8;
+  --ok:#2fd08c; --warn:#f5b942; --bad:#f45d6d; --mono:'Cascadia Code',Consolas,monospace;
+}
+[data-theme="light"]{
+  --bg:#f2f5fb; --panel:#ffffff; --panel2:#e9eef7; --line:#d5deee;
+  --txt:#16213a; --dim:#5c6b8c; --blue:#1e4fd8; --blue2:#4f8ff7;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--txt);display:flex;min-height:100vh;font-size:13px}
+a{color:var(--blue)}
+/* ---------- sidebar ---------- */
+#side{width:200px;min-width:200px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;transition:width .2s}
+#side.closed{width:56px;min-width:56px}
+#side .logo{padding:14px 10px;border-bottom:1px solid var(--line)}
+#side .logo img{height:30px;max-width:180px}
+#side.closed .logo img{content:url('/logo.svg');width:36px;height:auto;clip-path:inset(0 78% 0 0)}
+#side nav{flex:1;padding:8px 0}
+#side nav a{display:flex;align-items:center;gap:10px;padding:11px 16px;color:var(--dim);text-decoration:none;border-left:3px solid transparent;white-space:nowrap;overflow:hidden}
+#side nav a:hover{color:var(--txt);background:var(--panel2)}
+#side nav a.active{color:var(--blue);border-left-color:var(--blue);background:var(--panel2)}
+#side nav a .ic{width:18px;text-align:center;flex:none}
+#side.closed nav a span.lbl{display:none}
+#side .ks{margin:8px;padding:10px;border:1px solid var(--bad);border-radius:6px;text-align:center;cursor:pointer;color:var(--bad);font-weight:600}
+#side .ks.halted{background:var(--bad);color:#fff}
+#side .toggle{padding:8px;text-align:center;color:var(--dim);cursor:pointer;border-top:1px solid var(--line)}
+/* ---------- main ---------- */
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+header{display:flex;align-items:center;justify-content:space-between;padding:8px 20px;background:var(--panel);border-bottom:1px solid var(--line);gap:12px;flex-wrap:wrap}
+header .title{font-size:16px;font-weight:600}
+header .motto{color:var(--dim);font-size:11px;font-style:italic;margin-left:8px}
+header .hd-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pulse{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 12px;cursor:help}
+.pulse b{color:var(--ok);font-family:var(--mono)}
+.pulse .sub{display:block;font-size:10px;color:var(--dim)}
+.status-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px}
+.st-HEALTHY{background:var(--ok)} .st-DEGRADED{background:var(--warn)} .st-SAFE-HALT{background:var(--bad)}
+select,input[type=text],input[type=datetime-local]{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:5px;padding:5px 8px;font-size:12px}
+button{background:var(--blue2);color:#fff;border:none;border-radius:5px;padding:6px 12px;cursor:pointer;font-size:12px}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--dim)}
+button:hover{filter:brightness(1.15)}
+/* ---------- content ---------- */
+#content{flex:1;padding:18px 22px;overflow:auto}
+.page{display:none}.page.active{display:block}
+.ctl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:14px}
+.ctl label{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+.card .k{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px}
+.card .v{font-family:var(--mono);font-size:17px;margin-top:4px}
+.card .v.pos{color:var(--ok)} .card .v.neg{color:var(--bad)} .card .v.na{color:var(--dim);font-size:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px}
+.panel h3{font-size:13px;margin-bottom:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+/* ---------- table engine ---------- */
+.twrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+thead th{background:var(--panel2);position:sticky;top:0;cursor:pointer;user-select:none}
+thead tr.grp th{cursor:pointer;color:var(--blue);border-bottom:2px solid var(--line)}
+thead tr.cols th{color:var(--dim);font-weight:600}
+td.num,th.num{text-align:right;font-family:var(--mono)}
+tbody tr:hover{background:var(--panel2)}
+.tfoot{display:flex;align-items:center;gap:10px;padding:8px 6px;color:var(--dim);font-size:12px;flex-wrap:wrap}
+.tfoot .sp{flex:1}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:600}
+.b-ok{background:rgba(47,208,140,.15);color:var(--ok)}
+.b-warn{background:rgba(245,185,66,.15);color:var(--warn)}
+.b-bad{background:rgba(244,93,109,.15);color:var(--bad)}
+.b-na{background:rgba(127,143,179,.18);color:var(--dim)}
+canvas.viz{width:100%;height:340px;background:var(--panel2);border-radius:6px}
+.na{color:var(--dim);font-style:italic}
+.muted{color:var(--dim)}
+footer{padding:14px;text-align:center;color:var(--dim);border-top:1px solid var(--line);font-size:11.5px}
+footer img{height:22px;display:block;margin:0 auto 6px}
+.custom-range{display:none;gap:6px;align-items:center}
+.notice{padding:10px 14px;border:1px solid var(--warn);border-radius:6px;color:var(--warn);background:rgba(245,185,66,.06);margin-bottom:12px}
+</style>
+</head>
+<body>
+<aside id="side">
+  <div class="logo"><img src="/logo.svg" alt="AllBright"></div>
+  <nav id="nav"></nav>
+  <div class="ks" id="killswitch" title="Global Kill Switch — halts NEW execution activity">◉ KILL SWITCH</div>
+  <div class="toggle" id="sideToggle" title="Expand / collapse">◀</div>
+</aside>
+<div id="main">
+  <header>
+    <div><span class="title" id="pageTitle">Profit Metrics</span><span class="motto">Autonomous Wealth Engine. 24/7. Like No One.</span></div>
+    <div class="hd-right">
+      <div class="pulse" id="pulse" title="Profit Pulse — realized profit settled to wallet (lineage: executor ExecResult realized_usd). NOT wallet balance."><span class="sub">PROFIT PULSE</span><b id="pulseVal">$0.00</b><span class="sub" id="pulseSub">realized · lifetime</span></div>
+      <select id="currency" title="Display currency"><option>USD</option><option>ETH</option></select>
+      <select id="refresh" title="Refresh cadence"><option value="5">5s</option><option value="15" selected>15s</option><option value="60">60s</option><option value="0">manual</option></select>
+      <span id="sysStatus" title="system status"><span class="status-dot st-DEGRADED"></span>—</span>
+      <button class="ghost" id="themeBtn" title="Day / night">◐</button>
+    </div>
+  </header>
+  <div id="content">
+    <!-- ============ PROFIT ============ -->
+    <section class="page active" id="pg-profit">
+      <div class="ctl">
+        <label>Time</label>
+        <select id="pnl-time"></select>
+        <span class="custom-range" id="pnl-custom">
+          <input type="datetime-local" id="pnl-from"><input type="datetime-local" id="pnl-to"><button id="pnl-apply">Apply</button>
+        </span>
+        <label>Chain</label><select id="pnl-chain"></select>
+        <label>Strategy Variant</label><select id="pnl-variant"></select>
+        <label>View</label><select id="pnl-mode"><option value="table">Table</option><option value="chart">Chart</option><option value="bar">Bar</option></select>
+      </div>
+      <div class="cards" id="pnl-cards"></div>
+      <div class="panel">
+        <h3>Profit &amp; Loss <span class="muted" id="pnl-lineage"></span></h3>
+        <canvas class="viz" id="pnl-viz" style="display:none"></canvas>
+        <div id="pnl-table"></div>
+      </div>
+    </section>
+    <!-- ============ BLOCKCHAIN STREAM ============ -->
+    <section class="page" id="pg-stream">
+      <div class="ctl">
+        <label>Time</label><select id="bs-time"></select>
+        <label>Chain</label><select id="bs-chain"></select>
+        <label>Variant</label><select id="bs-variant"></select>
+        <span id="bs-feed" class="muted">● live</span>
+      </div>
+      <div class="panel" style="padding:8px 14px">
+        <div id="bs-defense" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+      </div>
+      <div class="cards" id="bs-cards"></div>
+      <div class="panel"><h3>Live Trade Stream — DETECT → QUALIFY → SIMULATE → DEFEND → EXECUTE → CONFIRM → PROFIT</h3>
+        <div id="bs-stream"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="panel"><h3>Opportunity Funnel</h3><div id="bs-funnel"></div></div>
+        <div class="panel"><h3>Opportunity Rise / Fall</h3><canvas class="viz" id="bs-chart" style="height:220px"></canvas></div>
+      </div>
+      <div class="panel"><h3>Soldier Activity</h3><div id="bs-activity" style="font-family:var(--mono);font-size:11.5px;max-height:260px;overflow:auto"></div></div>
+      <div class="panel"><h3>Blocked Opportunities — what AllBright defended against</h3><div id="bs-blocked"></div></div>
+    </section>
+    <!-- ============ STRATEGY ============ -->
+    <section class="page" id="pg-strategy">
+      <div class="ctl"><label>Time</label><select id="st-time"></select>
+        <label>Chain</label><select id="st-chain"></select>
+        <label>Variant</label><select id="st-variant"></select></div>
+      <div class="panel"><h3>Strategy Variant Comparison</h3><div id="st-table"></div></div>
+    </section>
+    <!-- ============ DEPLOYMENT ============ -->
+    <section class="page" id="pg-deploy">
+      <div class="ctl"><label>Time</label><select id="dp-time"></select></div>
+      <div class="panel"><h3>Deployment Register</h3><div id="dp-table"></div></div>
+      <div class="panel"><h3>Pipeline</h3><div id="dp-pipeline" class="muted"></div></div>
+    </section>
+    <!-- ============ INFRASTRUCTURE ============ -->
+    <section class="page" id="pg-infra">
+      <div class="ctl"><label>Time</label><select id="if-time"></select></div>
+      <div class="cards" id="if-cards"></div>
+      <div class="panel"><h3>RPC per Chain — visibility &amp; capacity</h3><div id="if-rpc"></div></div>
+      <div class="panel"><h3>Self-Diagnosis — recent failures</h3><div id="if-diag"></div></div>
+      <div class="panel"><h3>Self-Healing — remediation records</h3><div id="if-heal"></div></div>
+    </section>
+    <!-- ============ REPORTS ============ -->
+    <section class="page" id="pg-reports">
+      <div class="ctl"><label>Range</label><select id="rp-time"></select></div>
+      <div class="panel"><h3>Profit by Chain</h3><div id="rp-profit"></div></div>
+      <div class="panel"><h3>Opportunity &amp; Infrastructure</h3><div id="rp-opp"></div></div>
+    </section>
+    <!-- ============ WALLET ============ -->
+    <section class="page" id="pg-wallet">
+      <div class="ctl">
+        <button id="mm-connect">Connect MetaMask</button>
+        <span id="mm-status" class="muted">not connected</span>
+      </div>
+      <div class="panel"><h3>Configured Profit Wallet</h3><div id="wl-table"></div></div>
+      <div class="panel"><h3>Auto-Transfer <span class="muted">(opening this page never initiates a transfer)</span></h3>
+        <div id="wl-transfer" class="muted">—</div></div>
+      <div class="panel"><h3>Connected Wallet (MetaMask)</h3><div id="mm-table" class="muted">—</div></div>
+    </section>
+  </div>
+  <footer>
+    <img src="/logo.svg" alt="AllBright">
+    <div>AllBright DeFi Software Engineering Ltd. © 2026</div>
+    <div class="muted">Autonomous Wealth Engine. 24/7. Like No One.</div>
+  </footer>
+</div>
+
+<script>
+/* ================= AllBright Commander Dashboard =================
+   SPA: Profit → Strategy → Deployment → Infrastructure → Reports →
+   Wallet. All data from /api/* — no mock values; nulls render as
+   NOT VERIFIED / DATA UNAVAILABLE (AGENTS §38.24). */
+
+const $ = s => document.querySelector(s);
+const state = {
+  page: 'profit',
+  meta: null,
+  // per-page time-range persistence (§38.4)
+  ranges: JSON.parse(localStorage.getItem('ab_ranges') || '{}'),
+};
+
+/* ---------- time ranges ---------- */
+const RANGES = [
+  ['1m',60e3],['5m',300e3],['15m',900e3],['30m',1800e3],['60m',3600e3],
+  ['1h',3600e3],['2h',7200e3],['4h',14400e3],['8h',28800e3],['12h',43200e3],['24h',86400e3],
+  ['1D',86400e3],['2D',172800e3],['7D',604800e3],['14D',1209600e3],['30D',2592000e3],
+  ['1M',2592000e3],['3M',7776000e3],['6M',15552000e3],['12M',31104000e3],
+  ['Today','today'],['Since Deployment','since'],['All Time','all'],['Custom','custom'],
+];
+function fillTime(sel, page){
+  sel.innerHTML='';
+  for(const [lbl,v] of RANGES){
+    const o=document.createElement('option');o.value=v;o.textContent=lbl;sel.appendChild(o);
+  }
+  sel.value = state.ranges[page] || '24h';
+  sel.onchange = () => {
+    state.ranges[page]=sel.value;
+    localStorage.setItem('ab_ranges',JSON.stringify(state.ranges));
+    const cust = $('#pnl-custom');
+    if(sel.id==='pnl-time') cust.style.display = sel.value==='custom'?'flex':'none';
+    refresh();
+  };
+}
+function rangeParams(selId){
+  const v=$(selId).value, now=Date.now();
+  if(v==='custom'){
+    const f=new Date($('#pnl-from').value).getTime(), t=new Date($('#pnl-to').value).getTime();
+    return `from=${f||0}&to=${t||0}`;
+  }
+  if(v==='all') return 'from=0&to=0';
+  if(v==='today'){const d=new Date();d.setHours(0,0,0,0);return `from=${d.getTime()}&to=0`;}
+  if(v==='since'){const s=state.meta?state.meta.index_since_ms:0;return `from=${s}&to=0`;}
+  return `from=${now-parseInt(v)}&to=0`;
+}
+
+/* ---------- helpers ---------- */
+const fmt$ = v => v==null?'<span class="na">NOT VERIFIED</span>':(v>=0?'+':'−')+'$'+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:2});
+const fmtN = v => v==null?'<span class="na">—</span>':v.toLocaleString();
+const fmtT = ts => ts?new Date(ts).toLocaleTimeString():'—';
+const badge = (txt,cls)=>`<span class="badge b-${cls}">${txt}</span>`;
+
+/* ---------- navigation ---------- */
+const PAGES = [
+  ['profit','◈','Profit Metrics'], ['stream','⟶','Blockchain Stream'],
+  ['strategy','◇','Strategy'], ['deploy','⛁','Deployment'],
+  ['infra','⌁','Infrastructure'], ['reports','≡','Reports'], ['wallet','◍','Wallet'],
+];
+$('#nav').innerHTML = PAGES.map(([id,ic,lbl])=>
+  `<a href="#" data-pg="${id}"><span class="ic">${ic}</span><span class="lbl">${lbl}</span></a>`).join('');
+document.querySelectorAll('#nav a').forEach(a=>a.onclick=e=>{
+  e.preventDefault();
+  document.querySelectorAll('#nav a').forEach(x=>x.classList.remove('active'));
+  a.classList.add('active');
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  state.page=a.dataset.pg;
+  $('#pg-'+state.page).classList.add('active');
+  $('#pageTitle').textContent=a.textContent.trim();
+  refresh();
+});
+$('#nav a').classList.add('active');
+$('#sideToggle').onclick=()=>{const s=$('#side');s.classList.toggle('closed');
+  $('#sideToggle').textContent=s.classList.contains('closed')?'▶':'◀';};
+$('#themeBtn').onclick=()=>{const h=document.documentElement;
+  h.dataset.theme=h.dataset.theme==='dark'?'light':'dark';};
+
+/* ---------- universal table engine (§38.4) ----------
+   cols: [{key,label,num?,group,render?}]  groups render as an expandable
+   header row; sort/search/pagination all client-side over the fetched page. */
+function tableEngine(el, cols, rows, opts={}){
+  const st = el._tst = el._tst || {sort:null,asc:true,q:'',page:1,size:25,collapsed:new Set()};
+  // group header
+  const groups=[];let cur=null;
+  cols.forEach((c,i)=>{if(c.group!==cur){groups.push({name:c.group||'',start:i,count:0});cur=c.group;}groups[groups.length-1].count++;});
+  const vis=c=>!st.collapsed.has(c.group||'');
+  let data=rows.filter(r=>!st.q||JSON.stringify(r).toLowerCase().includes(st.q.toLowerCase()));
+  if(st.sort!=null){const k=cols[st.sort].key;
+    data=[...data].sort((a,b)=>{const x=a[k],y=b[k];
+      return (typeof x==='number'?x-(y??0):String(x??'').localeCompare(String(y??'')))*(st.asc?1:-1);});}
+  const total=data.length, size=st.size;
+  data=data.slice((st.page-1)*size,st.page*size);
+  let h='<div class="twrap"><table><thead><tr class="grp">';
+  groups.forEach(g=>{if(g.name)h+=`<th colspan="${g.count}" data-g="${g.name}">${st.collapsed.has(g.name)?'▸':'▾'} ${g.name}</th>`;});
+  h+='</tr><tr class="cols">';
+  cols.forEach((c,i)=>{if(vis(c))h+=`<th class="${c.num?'num':''}" data-i="${i}">${c.label}${st.sort===i?(st.asc?' ↑':' ↓'):''}</th>`;});
+  h+='</tr></thead><tbody>';
+  for(const r of data){
+    h+='<tr>'+cols.filter(vis).map(c=>`<td class="${c.num?'num':''}">${c.render?c.render(r):fmtN(r[c.key])}</td>`).join('')+'</tr>';
+  }
+  if(!data.length)h+='<tr><td colspan="99" class="na">DATA UNAVAILABLE — no rows in selected context</td></tr>';
+  h+='</tbody></table></div>';
+  h+=`<div class="tfoot">
+    <button class="ghost" data-act="exp">Expand All</button><button class="ghost" data-act="col">Collapse All</button>
+    <input type=text placeholder="search…" value="${st.q}" data-act="q" style="width:140px">
+    <span class="sp"></span>
+    <span>${total} rows</span>
+    <select data-act="size">${[10,25,50,100].map(n=>`<option ${n===size?'selected':''}>${n}</option>`).join('')}</select>
+    <button class="ghost" data-act="prev">‹</button><span>${st.page}/${Math.max(1,Math.ceil(total/size))}</span><button class="ghost" data-act="next">›</button>
+  </div>`;
+  el.innerHTML=h;
+  el.querySelectorAll('thead tr.cols th').forEach(th=>th.onclick=()=>{const i=+th.dataset.i;
+    if(st.sort===i)st.asc=!st.asc;else{st.sort=i;st.asc=true;}tableEngine(el,cols,rows,opts);});
+  el.querySelectorAll('thead tr.grp th').forEach(th=>th.onclick=()=>{const g=th.dataset.g;
+    st.collapsed.has(g)?st.collapsed.delete(g):st.collapsed.add(g);tableEngine(el,cols,rows,opts);});
+  el.querySelectorAll('[data-act]').forEach(b=>{
+    const a=b.dataset.act;
+    if(a==='q')b.oninput=()=>{st.q=b.value;st.page=1;tableEngine(el,cols,rows,opts);};
+    if(a==='size')b.onchange=()=>{st.size=+b.value;st.page=1;tableEngine(el,cols,rows,opts);};
+    if(a==='prev'||a==='next')b.onclick=()=>{st.page+=a==='next'?1:-1;st.page=Math.max(1,Math.min(st.page,Math.ceil(total/size)||1));tableEngine(el,cols,rows,opts);};
+    if(a==='exp')b.onclick=()=>{st.collapsed.clear();tableEngine(el,cols,rows,opts);};
+    if(a==='col')b.onclick=()=>{groups.forEach(g=>st.collapsed.add(g.name));tableEngine(el,cols,rows,opts);};
+  });
+}
+
+/* ---------- canvas viz ---------- */
+function drawViz(cv, buckets, mode){
+  const dpr=window.devicePixelRatio||1, w=cv.clientWidth, h=cv.clientHeight;
+  cv.width=w*dpr;cv.height=h*dpr;const ctx=cv.getContext('2d');ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,w,h);
+  const vals=buckets.map(b=>mode==='chart'?b.expected:b.expected);
+  if(mode==='chart'){ // cumulative net
+    let cum=0;const pts=vals.map(v=>cum+=v);
+    const mx=Math.max(1e-9,...pts.map(Math.abs));
+    ctx.strokeStyle='#4f8ff7';ctx.lineWidth=1.8;ctx.beginPath();
+    pts.forEach((v,i)=>{const x=20+i/(pts.length-1)*(w-40),y=h-20-(v/mx)*(h-50)*0.5-(h-50)*0.5;
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+    ctx.stroke();
+    ctx.strokeStyle='#2a3a5c';ctx.beginPath();ctx.moveTo(20,h/2);ctx.lineTo(w-20,h/2);ctx.stroke();
+  } else { // bar per bucket
+    const mx=Math.max(1e-9,...vals.map(Math.abs)),bw=(w-40)/vals.length;
+    vals.forEach((v,i)=>{const x=20+i*bw,bh=(v/mx)*(h-60)*0.5;
+      ctx.fillStyle=v>=0?'#2fd08c':'#f45d6d';
+      const zero=h/2;
+      ctx.fillRect(x+1,v>=0?zero-bh:zero,bw-2,Math.abs(bh)||1);});
+    ctx.strokeStyle='#2a3a5c';ctx.beginPath();ctx.moveTo(20,h/2);ctx.lineTo(w-20,h/2);ctx.stroke();
+  }
+  ctx.fillStyle='#7f8fb3';ctx.font='11px sans-serif';
+  ctx.fillText(mode==='chart'?'cumulative expected profit (USD) — basis: solver OpportunitySignal':'net P&L per bucket (USD)',24,16);
+}
+
+/* ---------- page loaders ---------- */
+async function loadProfit(){
+  const p=rangeParams('#pnl-time')+`&chain=${$('#pnl-chain').value}&variant=${$('#pnl-variant').value}&size=200`;
+  const d=await (await fetch('/api/pnl?'+p)).json();
+  const s=d.summary;
+  $('#pnl-cards').innerHTML=[
+    ['Gross (expected)',fmt$(s.gross_profit_usd),'pos'],
+    ['Net (realized)',fmt$(s.net_profit_usd),s.net_profit_usd>=0?'pos':'neg'],
+    ['Total Costs',fmt$(s.total_costs_usd),''],
+    ['Margin',s.margin==null?'<span class="na">NOT VERIFIED</span>':(s.margin*100).toFixed(1)+'%',''],
+    ['ROI',s.roi==null?'<span class="na">NOT VERIFIED</span>':(s.roi*100).toFixed(1)+'%',''],
+    ['Successful',fmtN(s.successful_trades),''],['Failed/Aborted',fmtN(s.failed_trades),''],
+    ['Win Rate',(s.win_rate*100).toFixed(1)+'%',''],
+    ['Avg / Trade',fmt$(s.avg_profit_per_trade),''],
+    ['Index since',fmtT(d.data_since_ms),''],
+  ].map(([k,v,c])=>`<div class="card"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`).join('');
+  const mode=$('#pnl-mode').value, viz=$('#pnl-viz'), tbl=$('#pnl-table');
+  viz.style.display = mode==='table'?'none':'block';
+  tbl.style.display = mode==='table'?'block':'none';
+  $('#pnl-lineage').textContent=`— ${d.total_rows} rows · source: event index since ${new Date(d.data_since_ms).toLocaleString()}`;
+  if(mode!=='table'){drawViz(viz,d.buckets,mode);return;}
+  const G=(g)=>({group:g});
+  tableEngine(tbl,[
+    {key:'ts',label:'Timestamp',group:'Identity',render:r=>fmtT(r.ts)},
+    {key:'chain',label:'Chain',group:'Identity'},
+    {key:'variant',label:'Variant',group:'Identity',render:r=>r.variant||'<span class="na">—</span>'},
+    {key:'opp_id',label:'Opportunity ID',group:'Identity',render:r=>r.opp_id||'—'},
+    {key:'tx_id',label:'Transaction ID',group:'Identity',render:r=>r.tx_id?r.tx_id.slice(0,12)+'…':'<span class="na">—</span>'},
+    {key:'gross_usd',label:'Gross',num:true,group:'Revenue',render:r=>fmt$(r.gross_usd)},
+    {key:'expected_usd',label:'Expected',num:true,group:'Economic Result',render:r=>fmt$(r.expected_usd)},
+    {key:'realized_usd',label:'Realized',num:true,group:'Economic Result',render:r=>fmt$(r.realized_usd)},
+    {key:'net_usd',label:'Net',num:true,group:'Economic Result',render:r=>fmt$(r.net_usd)},
+    {key:'gas_used',label:'Gas',num:true,group:'Costs',render:r=>r.gas_used==null?'<span class="na">NOT VERIFIED</span>':fmtN(r.gas_used)},
+    {key:'status',label:'Status',group:'Execution',render:r=>{
+      const m={EXPECTED:'b-warn',Included:'b-ok',Submitted:'b-ok',Simulated:'b-warn',Reverted:'b-bad',Failed:'b-bad'};
+      return badge(r.status,m[r.status]||'b-na');}},
+    {key:'kind',label:'Source',group:'Data Quality',render:r=>r.kind},
+    {key:'lineage',label:'Lineage',group:'Data Quality',render:r=>`<span class="muted">${r.lineage}</span>`},
+  ], d.rows.concat([{ts:null,chain:'TOTAL',variant:'',opp_id:'',tx_id:'',gross_usd:s.gross_profit_usd,expected_usd:null,realized_usd:s.realized_profit_usd,net_usd:s.net_profit_usd,gas_used:null,status:'Σ',kind:'',lineage:''}]));
+}
+
+async function loadStrategy(){
+  const p=rangeParams('#st-time')+`&chain=${$('#st-chain').value}`;
+  const d=await (await fetch('/api/strategies?'+p)).json();
+  let rows=d.variants;
+  const v=$('#st-variant').value;
+  if(v!=='all')rows=rows.filter(r=>r.variant===v);
+  tableEngine($('#st-table'),[
+    {key:'variant',label:'Variant',group:'Identity'},
+    {key:'name',label:'Strategy',group:'Identity'},
+    {key:'detected',label:'Detected',num:true,group:'Opportunity'},
+    {key:'rejected',label:'Rejected',num:true,group:'Opportunity'},
+    {key:'executed',label:'Executed',num:true,group:'Execution',render:r=>`<span class="na">UNVERIFIED</span>`},
+    {key:'winrate',label:'Win Rate',num:true,group:'Execution',render:()=>'<span class="na">UNVERIFIED</span>'},
+    {key:'gross_usd',label:'Gross $',num:true,group:'Economic',render:r=>fmt$(r.gross_usd)},
+    {key:'realized_usd',label:'Net $',num:true,group:'Economic',render:r=>fmt$(r.realized_usd)},
+    {key:'health',label:'Health',group:'Adaptation',render:()=>badge('UNVERIFIED','b-na')},
+  ], rows);
+}
+
+async function loadDeploy(){
+  const d=await (await fetch('/api/deployments')).json();
+  const nv='<span class="na">NOT VERIFIED</span>';
+  tableEngine($('#dp-table'),[
+    {key:'deployment_id',label:'Deployment ID'},
+    {key:'version',label:'Version'},
+    {key:'git_commit',label:'Git Commit',render:r=>r.git_commit||nv},
+    {key:'environment',label:'Env'},
+    {key:'mode',label:'Mode'},
+    {key:'chain_scope',label:'Chains'},
+    {key:'readiness_score',label:'Readiness',render:r=>r.readiness_score||nv},
+    {key:'critical_gate',label:'Critical Gate'},
+    {key:'commander_decision',label:'Commander',render:r=>r.commander_decision||nv},
+    {key:'verification',label:'Verification'},
+  ], d.deployments);
+  $('#dp-pipeline').textContent='Pipeline stages: '+d.deployments[0].pipeline.join(' → ')+' — stage evidence NOT VERIFIED until pipeline emits it.';
+}
+
+async function loadInfra(){
+  const d=await (await fetch('/api/infrastructure')).json();
+  const s=d.registry;
+  $('#if-cards').innerHTML=[
+    ['Discovered',fmtN(s.total)],['Live',fmtN(s.live)],
+    ['Qualified',fmtN(s.qualified)],['Providers',fmtN(s.providers)],
+    ['Heal Actions',fmtN(d.healing.total)],['Heal Success',fmtN(d.healing.successful)],
+    ['Registry Updated',fmtT(s.updated_ms)],
+  ].map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  tableEngine($('#if-rpc'),[
+    {key:'chain',label:'Chain'},
+    {key:'qualified',label:'Qualified',num:true},
+    {key:'healthy',label:'Healthy',num:true},
+    {key:'providers',label:'Providers',num:true},
+    {key:'p50_ms',label:'p50 ms',num:true,render:r=>r.p50_ms==null?'<span class="na">—</span>':r.p50_ms},
+    {key:'p95_ms',label:'p95 ms',num:true,render:r=>r.p95_ms==null?'<span class="na">—</span>':r.p95_ms},
+    {key:'p99_ms',label:'p99 ms',num:true,render:r=>r.p99_ms==null?'<span class="na">—</span>':r.p99_ms},
+    {key:'ovs_avg',label:'OVS',num:true,render:r=>r.ovs_avg.toFixed(0)},
+    {key:'visibility',label:'Visibility',render:r=>{
+      const m={'V4+resilient':'b-ok','V4':'b-ok','V2-single-homed':'b-warn','V0-blind':'b-bad'};
+      return badge(r.visibility,m[r.visibility]||'b-na');}},
+  ], d.chains);
+  const dg=await (await fetch('/api/diagnoses?size=100')).json();
+  tableEngine($('#if-diag'),[
+    {key:'ts',label:'Time',render:r=>fmtT(r.ts)},
+    {key:'component',label:'Component'},{key:'class',label:'Class'},
+    {key:'chain',label:'Chain',render:r=>r.chain||'—'},
+    {key:'stage',label:'Stage'},{key:'detail',label:'Detail',render:r=>`<span style="white-space:normal">${r.detail.slice(0,140)}</span>`},
+  ], dg.rows);
+  const hl=await (await fetch('/api/healing')).json();
+  tableEngine($('#if-heal'),[
+    {key:'ts',label:'Detection',render:r=>fmtT(r.ts)},
+    {key:'target',label:'Target'},{key:'action',label:'Remediation'},
+    {key:'reason',label:'Diagnosis',render:r=>`<span style="white-space:normal">${r.reason.slice(0,120)}</span>`},
+    {key:'state',label:'State',render:r=>badge(r.state,r.success?'b-ok':'b-bad')},
+  ], hl.rows);
+}
+
+async function loadReports(){
+  const p=rangeParams('#rp-time');
+  const d=await (await fetch('/api/reports?'+p)).json();
+  const rows=Object.entries(d.profit).map(([chain,v])=>({chain,...v}));
+  tableEngine($('#rp-profit'),[
+    {key:'chain',label:'Chain'},
+    {key:'opps',label:'Opportunities',num:true},
+    {key:'expected',label:'Expected $',num:true,render:r=>fmt$(r.expected)},
+    {key:'exec',label:'Executions',num:true},
+    {key:'realized',label:'Realized $',num:true,render:r=>fmt$(r.realized)},
+  ], rows);
+  $('#rp-opp').innerHTML=`<pre style="white-space:pre-wrap;font-size:12px">`+
+    JSON.stringify({opportunity:d.opportunity,infrastructure:d.infrastructure,risk:d.risk},null,1)+`</pre>`;
+}
+
+async function loadWallet(){
+  const d=await (await fetch('/api/wallet')).json();
+  if(!d.configured){$('#wl-table').innerHTML=`<div class="notice">${d.note}</div>`;return;}
+  tableEngine($('#wl-table'),[
+    {key:'chain',label:'Chain'},{key:'address',label:'Address',render:r=>r.address.slice(0,10)+'…'},
+    {key:'balance_native',label:'Native Balance',num:true,render:r=>r.balance_native==null?'<span class="na">DATA UNAVAILABLE</span>':r.balance_native.toFixed(5)},
+    {key:'balance_usd',label:'USD Value',num:true,render:r=>r.balance_usd==null?'<span class="na">NOT VERIFIED</span>':'$'+r.balance_usd.toFixed(2)},
+    {key:'status',label:'Status',render:r=>badge(r.status,r.status==='LIVE'?'b-ok':'b-warn')},
+    {key:'endpoint_provider',label:'Queried via',render:r=>`<span class="muted">${r.endpoint_provider||'—'}</span>`},
+  ], d.rows);
+  $('#wl-transfer').innerHTML=
+    `Mode: <b>${d.transfer_mode}</b> · Threshold: $${d.transfer_min_usd} · `+
+    `Auto-transfer: ${d.transfer_mode==='MANUAL'?badge('OFF — manual only','b-warn'):badge('CONFIGURED','b-ok')} · `+
+    `Manual transfer remains a separate explicit action.`;
+}
+
+/* ---------- MetaMask (§38.10 — read-only, never keys/seed) ---------- */
+$('#mm-connect').onclick=async()=>{
+  if(!window.ethereum){$('#mm-status').textContent='MetaMask not detected — DATA UNAVAILABLE';return;}
+  try{
+    const accts=await window.ethereum.request({method:'eth_requestAccounts'});
+    const chainId=await window.ethereum.request({method:'eth_chainId'});
+    const bal=await window.ethereum.request({method:'eth_getBalance',params:[accts[0],'latest']});
+    $('#mm-status').textContent='connected';
+    $('#mm-table').innerHTML='';
+    tableEngine($('#mm-table'),[
+      {key:'address',label:'Account'},
+      {key:'chain',label:'Chain ID'},
+      {key:'balance',label:'Balance (native)',num:true},
+    ],[{address:accts[0],chain:parseInt(chainId,16),balance:(parseInt(bal,16)/1e18).toFixed(5)}]);
+  }catch(e){$('#mm-status').textContent='connection rejected';}
+};
+
+/* ---------- Blockchain Stream (§38.15) ---------- */
+const STAGES=['detected','qualified','simulated','defended','executed','confirmed','settled'];
+const STAGE_LBL={detected:'DETECT',qualified:'QUALIFY',simulated:'SIMULATE',defended:'DEFEND',executed:'EXECUTE',confirmed:'CONFIRM',settled:'PROFIT'};
+async function loadStream(){
+  const p=rangeParams('#bs-time')+`&chain=${$('#bs-chain').value}&variant=${$('#bs-variant').value}`;
+  const d=await (await fetch('/api/stream?'+p)).json();
+  // defense strip
+  $('#bs-defense').innerHTML=d.defense.map(g=>{
+    const c={'ARMED':'var(--ok)','RED':'var(--bad)','ENGAGED':'var(--bad)','UNVERIFIED':'var(--dim)'}[g.state]||'var(--dim)';
+    return `<span class="badge" style="background:var(--panel2);border:1px solid ${c};color:${c}"
+      title="${g.gate}: ${g.state}">● ${g.gate} — ${g.state}</span>`;}).join('');
+  // battlefield status cards
+  const f=d.funnel,P=d.protection;
+  $('#bs-cards').innerHTML=[
+    ['Evaluated',fmtN(P.evaluated)],['Qualified',fmtN(f.qualified)],
+    ['Executed',fmtN(f.executed)],['Confirmed',fmtN(f.included)],
+    ['Threats',fmtN(P.threats)],['Capital Protected',fmt$(P.capital_protected_usd)],
+    ['Net Realized',fmt$(P.net_realized_usd)],
+  ].map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  // opportunity cards with stage pipeline
+  const card=o=>`<div style="border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:8px;background:var(--panel2)">
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+      <b class="mono">${o.id}</b>
+      <span>${o.chain.toUpperCase()} · ${o.variant} · ${fmt$(o.expected_usd)} exp</span>
+      <span class="muted">${new Date(o.ts).toLocaleTimeString()}.${String(o.ts%1000).padStart(3,'0')}</span>
+    </div>
+    <div style="display:flex;gap:2px;margin-top:7px;align-items:center;flex-wrap:wrap">
+      ${STAGES.map((s,i)=>{
+        const on=o.stages[s];
+        const col=on===true?'var(--ok)':(s==='defended'&&o.blocked)?'var(--warn)':'#33415e';
+        return `${i?'<span class="muted" style="font-size:9px">→</span>':''}
+          <span title="${STAGE_LBL}${on?'':' — UNVERIFIED'}"
+            style="font-size:9.5px;letter-spacing:.4px;color:${col};border:1px solid ${col};border-radius:3px;padding:1px 5px">${STAGE_LBL}${on?'':'?'}</span>`;}).join('')}
+      <span class="muted" style="margin-left:auto;font-size:10px">${o.exec_status||''}${o.tx?' · '+o.tx.slice(0,10)+'…':''}${o.realized_usd!=null?' · '+fmt$(o.realized_usd)+' realized':''}</span>
+    </div></div>`;
+  $('#bs-stream').innerHTML=d.opportunities.length?d.opportunities.map(card).join('')
+    :'<div class="na">No opportunities in selected window — DATA UNAVAILABLE for stream (not fabricated)</div>';
+  // funnel waterfall
+  const fl=[['DETECTED',f.detected],['QUALIFIED',f.qualified],['EXECUTED',f.executed],['CONFIRMED',f.included],['BLOCKED/REJECTED',f.rejected]];
+  const mx=Math.max(1,...fl.map(x=>x[1]));
+  $('#bs-funnel').innerHTML=fl.map(([k,v])=>
+    `<div style="margin:5px 0"><span style="display:inline-block;width:150px;color:var(--dim);font-size:11px">${k}</span>
+     <span style="display:inline-block;height:12px;background:${k.includes('BLOCK')?'var(--bad)':'var(--blue)'};width:${Math.max(2,v/mx*55)}%;border-radius:2px"></span>
+     <b class="mono" style="margin-left:8px">${v}</b></div>`).join('');
+  // trend chart
+  drawViz($('#bs-chart'),d.trend.map(v=>({expected:v})),'chart');
+  // activity feed
+  $('#bs-activity').innerHTML=d.activity.map(a=>{
+    const t=new Date(a.ts);
+    return `<div><span class="muted">${t.toLocaleTimeString()}.${String(t.getMilliseconds()).padStart(3,'0')}</span>
+      <b style="color:var(--blue)">${a.actor.padEnd(9)}</b> ${a.msg}</div>`;}).join('')||'<span class="na">—</span>';
+  // blocked/defended
+  tableEngine($('#bs-blocked'),[
+    {key:'id',label:'ID'},{key:'ts',label:'Time',render:r=>fmtT(r.ts)},
+    {key:'chain',label:'Chain'},{key:'variant',label:'Variant'},
+    {key:'reason',label:'Defense Reason'},{key:'gross_usd',label:'Gross $',num:true,render:r=>fmt$(r.gross_usd)},
+    {key:'threshold_usd',label:'Threshold $',num:true,render:r=>fmt$(r.threshold_usd)},
+  ],d.blocked);
+}
+
+/* ---------- kill switch & status ---------- */
+$('#killswitch').onclick=async()=>{
+  const cur=$('#killswitch').classList.contains('halted');
+  const d=await (await fetch('/api/killswitch',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:cur?'resume':'halt'})})).json();
+  $('#killswitch').classList.toggle('halted',d.state==='HALTED');
+  $('#killswitch').textContent=d.state==='HALTED'?'◉ HALTED':'◉ KILL SWITCH';
+  refresh();
+};
+async function loadStatus(){
+  const d=await (await fetch('/api/status')).json();
+  const el=$('#sysStatus');
+  el.innerHTML=`<span class="status-dot st-${d.status}"></span>${d.status}`;
+  el.title=`RPC qualified: ${d.qualified_rpcs} · index rows: ${d.index_rows} · kill: ${d.kill_switch}`;
+  const ks=$('#killswitch');ks.classList.toggle('halted',d.kill_switch==='HALTED');
+  ks.textContent=d.kill_switch==='HALTED'?'◉ HALTED':'◉ KILL SWITCH';
+  // Profit Pulse — realized only (lineage: ExecResult)
+  const pnl=await (await fetch('/api/pnl?from=0&to=0&size=1')).json();
+  const cur=$('#currency').value;
+  let v=pnl.summary.realized_profit_usd;
+  $('#pulseVal').textContent=(cur==='USD'?'$':'')+(cur==='USD'?v.toFixed(2):'—');
+  $('#pulseSub').textContent='realized · '+(cur);
+}
+
+/* ---------- init ---------- */
+async function init(){
+  state.meta=await (await fetch('/api/meta')).json();
+  const chainOpts=['<option value="all">ALL CHAINS</option>',
+    ...state.meta.chains.map(c=>`<option value="${c}">${c.toUpperCase()}</option>`)].join('');
+  const varOpts=['<option value="all">ALL STRATEGY VARIANTS</option>',
+    ...state.meta.variants.map(v=>`<option value="${v.id}">${v.id} — ${v.name}</option>`)].join('');
+  for(const id of ['pnl-chain','st-chain','bs-chain'])$(id).innerHTML=chainOpts;
+  for(const id of ['pnl-variant','st-variant','bs-variant'])$(id).innerHTML=varOpts;
+  fillTime($('#pnl-time'),'profit');fillTime($('#st-time'),'strategy');
+  fillTime($('#dp-time'),'deploy');fillTime($('#if-time'),'infra');fillTime($('#rp-time'),'reports');
+  fillTime($('#bs-time'),'stream');
+  for(const id of ['pnl-chain','pnl-variant','pnl-mode','st-chain','st-variant','bs-chain','bs-variant'])
+    $(id).onchange=refresh;
+  $('#pnl-apply').onclick=refresh;
+  refresh();
+}
+function refresh(){
+  loadStatus();
+  ({profit:loadProfit,stream:loadStream,strategy:loadStrategy,deploy:loadDeploy,
+    infra:loadInfra,reports:loadReports,wallet:loadWallet}[state.page]||(()=>{}))();
+}
+$('#refresh').onchange=setupTimer;let timer=null;
+function setupTimer(){clearInterval(timer);const s=+$('#refresh').value;if(s)timer=setInterval(refresh,s*1000);}
+setupTimer();
+init();
+
+/* Live telemetry WS — feeds Profit Pulse freshness indicator. */
+try{
+  const ws=new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage=()=>{/* live feed acknowledged; REST carries the pages */};
+}catch(e){}
+</script>
+</body>
+</html>

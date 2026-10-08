@@ -1,0 +1,22 @@
+[package]
+name = "allbright-simulation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+allbright-core.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+alloy.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "route_sim"
+harness = false

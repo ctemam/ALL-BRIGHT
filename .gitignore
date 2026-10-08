@@ -1,22 +1,14 @@
-# ─── Tooling / agent caches ───────────────────────────
-.agent-cache/
-
-# ─── OS ───────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-ehthumbs.db
-desktop.ini
-
-# ─── Editors ──────────────────────────────────────────
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# ─── Logs ─────────────────────────────────────────────
+/target
+**/target/
+/contracts/out
+/contracts/cache
+/contracts/broadcast
+journal/
+run-bsc/
+zero-cap-arb-main/
+ENV
+.env
+*.bsonl
 *.log
-
-# NOTE: the pristine prototype archives are intentionally tracked so the
-# baseline is recoverable from the repository itself:
-#   DeFi-Arbitrage-Engine-main.zip, zero-cap-arb-main.zip
+nul
+rpc_registry.json
