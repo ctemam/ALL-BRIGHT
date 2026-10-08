@@ -280,7 +280,7 @@ Opportunity → Data Freshness → Contract/Token Validation → Route Validatio
 
 Failure of any mandatory gate means: **DO NOT EXECUTE.**
 
-Current gate state: pipeline is armed (`ZCA_AUTO_EXECUTE=true`, `min_profit_usd=$5`). `AllbrightExecutor` deployed on **BSC** at `0x7ce11f29f75371fe21f563713974cde96bbb409f` (owner = Kernel smart account `0x663050Be401F590E8E2c3F01f05536948275015B`). BSC submission: sponsored UserOp → smart account → `execute()`, flash-funded via Aave V3 (pool verified on-chain at submit time), `tokenIn` restricted to runtime-verified stablecoins, executor code-checked on-chain, `minProfit` enforced on-chain. **Caveat:** bundler UserOps are public-mempool — not private orderflow; the contract's profit guard bounds worst case to a revert at sponsor cost. Other chains have no executor configured (`ALLBRIGHT_EXECUTOR_<CHAIN>` unset = not deployable there).
+Current gate state: pipeline is armed (`AUTO_EXECUTE=true`, `min_profit_usd=$5`). `AllbrightExecutor` deployed on **BSC** at `0x7ce11f29f75371fe21f563713974cde96bbb409f` (owner = Kernel smart account `0x663050Be401F590E8E2c3F01f05536948275015B`). BSC submission: sponsored UserOp → smart account → `execute()`, flash-funded via Aave V3 (pool verified on-chain at submit time), `tokenIn` restricted to runtime-verified stablecoins, executor code-checked on-chain, `minProfit` enforced on-chain. **Caveat:** bundler UserOps are public-mempool — not private orderflow; the contract's profit guard bounds worst case to a revert at sponsor cost. Other chains have no executor configured (`ALLBRIGHT_EXECUTOR_<CHAIN>` unset = not deployable there).
 
 ## 18. GAS POLICY
 
@@ -292,7 +292,7 @@ Builder/relay adapters MUST be capability-tested individually per chain. Never a
 
 ## 20. WALLET AND KEY SECURITY
 
-Private keys are security-critical. Agents MUST NOT: print private keys, commit secrets, embed keys in source, send keys to dashboard code, expose keys through telemetry, or use test credentials as production credentials. `ENV` holds `PRIVATE_KEY`, `PIMLICO_API_KEY`, `PROFIT_WALLET` and `ZCA_*` policy — it MUST stay out of version control. Secrets materialize only at signing boundaries (`secrecy::SecretString`). The plaintext `PRIVATE_KEY` in `ENV` MUST be treated as exposed and rotated before real funds depend on it.
+Private keys are security-critical. Agents MUST NOT: print private keys, commit secrets, embed keys in source, send keys to dashboard code, expose keys through telemetry, or use test credentials as production credentials. `ENV` holds `PRIVATE_KEY`, `PIMLICO_API_KEY`, `PROFIT_WALLET` and policy keys (`AUTO_EXECUTE`, `MIN_PROFIT_USD`, `NATIVE_USD`, `SCAN_INTERVAL_SECS`) — it MUST stay out of version control. Secrets materialize only at signing boundaries (`secrecy::SecretString`). The plaintext `PRIVATE_KEY` in `ENV` MUST be treated as exposed and rotated before real funds depend on it.
 
 ## 21. ACCOUNT ABSTRACTION
 

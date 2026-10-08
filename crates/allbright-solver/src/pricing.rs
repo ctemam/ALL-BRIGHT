@@ -1,5 +1,5 @@
 //! Token → USD pricing. Live CEX ticks are the primary oracle (Binance);
-//! stablecoins are treated as $1; `ZCA_NATIVE_USD` is the configured
+//! stablecoins are treated as $1; `NATIVE_USD` is the configured
 //! fallback for wrapped-native units when no tick exists.
 
 use std::collections::HashMap;

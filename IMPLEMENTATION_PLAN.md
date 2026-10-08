@@ -83,18 +83,18 @@ Execution   FLASHBOOTS_RELAY, FLASHBOOTS_AUTH_KEY
 AA          PIMLICO_API_KEY, ZERODEV_PROJECT_ID
 Wallet      PRIVATE_KEY → EOA owner of ERC-4337 smart account
             (0x2eF34d88EC4EBBd5543fFF2784D5AdbC01f14D56)
-Economics   ZCA_NATIVE_USD          (wrapped-native USD price for profit calc)
+Economics   NATIVE_USD          (wrapped-native USD price for profit calc)
 Profit      PROFIT_TRANSFER_MODE=AUTO, PROFIT_TRANSFER_MIN_USD=100,
             PROFIT_WALLET
-Runtime     ZCA_AUTO_EXECUTE, ZCA_MIN_PROFIT_USD=5,
-            ZCA_SCAN_INTERVAL_SECS=5, PORT=3001
+Runtime     AUTO_EXECUTE, MIN_PROFIT_USD=5,
+            SCAN_INTERVAL_SECS=5, PORT=3001
 New (planned):
             ALLBRIGHT_EXECUTOR_{CHAIN}   executor contract address per chain
             ALLBRIGHT_CHAINLIST          e.g. "bsc,arb,eth,op,poly,avax"
             PIMLICO_SPONSORSHIP_POLICY   paymaster policy id (optional)
 ```
 
-Note: env vars use the `ZCA_` prefix. Optionally rename to `ALLBRIGHT_*`
+Note: env vars are unprefixed (`AUTO_EXECUTE`, `MIN_PROFIT_USD`, `NATIVE_USD`, `SCAN_INTERVAL_SECS`)
 for consistency — a config-layer decision, no functional impact.
 
 ## Strategy surface — recommended set
@@ -107,7 +107,7 @@ impossible. This is the highest risk-adjusted strategy for the stack.
 **Secondary (v1): CEX-DEX divergence.** Binance `CexTick` is a *predictive*
 signal — when CEX moves, on-chain pools lag for seconds. Solver pre-computes
 candidate routes before on-chain state confirms; the executor fires the
-moment divergence clears `ZCA_MIN_PROFIT_USD`.
+moment divergence clears `MIN_PROFIT_USD`.
 
 **Tertiary (v1): aggregator-quote divergence.** Velora quotes vs internal
 pool math — a free second opinion that catches mispriced pools our math
@@ -140,7 +140,7 @@ across chains; multi-chain means *independent opportunities per chain*.
 ### Phase 2 — `allbright-ingest` (Artemis lineage)
 - `Collector` trait: async, restartable, typed-event emitter
 - `cex_stream.rs`: Binance WebSocket → decode → validate → `CexTick`
-- `dex_stream.rs`: Velora API polling aligned to `ZCA_SCAN_INTERVAL_SECS=5`
+- `dex_stream.rs`: Velora API polling aligned to `SCAN_INTERVAL_SECS=5`
 - `evm_stream.rs`: one collector per chain — newHeads subscription where
   available, else paced polling; pool-state deltas via batched `eth_call`
 - `recorder.rs`: append-only journal — every event + every sim result,
@@ -162,7 +162,7 @@ across chains; multi-chain means *independent opportunities per chain*.
   (V2: closed-form optimum; V3: iterative with liquidity-depth awareness)
 - Divergence engine: CEX signal and Velora quote vs on-chain pool prices
 - Net-profit model: gas + flashloan fee + relay/builder tip; gate on
-  `ZCA_MIN_PROFIT_USD` ($5), USD-denominated via `ZCA_NATIVE_USD`
+  `MIN_PROFIT_USD` ($5), USD-denominated via `NATIVE_USD`
 - Output is `ExecutionRequest` containing the exact contract calldata the
   simulator already validated — executor never recomputes routes
 
@@ -183,7 +183,7 @@ across chains; multi-chain means *independent opportunities per chain*.
   builder/relay adapters (bloXroute/48Club-class — **each verified
   independently; zero assumption Ethereum semantics carry over**), public
   mempool fallback for L2s where no private relay exists
-- Submit the pre-validated contract calldata; honor `ZCA_AUTO_EXECUTE`
+- Submit the pre-validated contract calldata; honor `AUTO_EXECUTE`
   (simulate-only when false); inclusion monitoring; per-chain revert stats
 - Gas strategy per chain: EIP-1559 caps on L2s, fixed-price on BSC/Polygon
 
@@ -226,7 +226,7 @@ Any future exception requires measured latency evidence first.
 
 ### Phase 10 — Integration & hardening
 - Fork-test each chain end-to-end; then live dry-run
-  (`ZCA_AUTO_EXECUTE=false`) for ≥1 week of observed accuracy before
+  (`AUTO_EXECUTE=false`) for ≥1 week of observed accuracy before
   enabling execution
 - Kill switches: per-chain flag, contract `pause()`, process-level
 - Startup config validation: all env vars, contract addresses, RPC health
@@ -294,7 +294,7 @@ a hard ceiling for competitive block-level MEV.
    per-endpoint quota tracking, failover across the configured URLs.
 2. **Aggressive caching** — per-chain `CacheDB`, batched `eth_call`,
    pool-state deltas instead of full refetches.
-3. **Paced scanning** — `ZCA_SCAN_INTERVAL_SECS=5` fits free-tier budgets.
+3. **Paced scanning** — `SCAN_INTERVAL_SECS=5` fits free-tier budgets.
 4. **Documented upgrade path** — competitive execution later needs
    dedicated nodes / premium RPC; a config change, not a refactor.
 

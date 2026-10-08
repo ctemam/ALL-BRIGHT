@@ -120,7 +120,7 @@ impl Config {
             zerodev_project_id: secret("ZERODEV_PROJECT_ID"),
             private_key: secret("PRIVATE_KEY"),
             profit_wallet: get("PROFIT_WALLET").unwrap_or_default(),
-            native_usd: get("ZCA_NATIVE_USD")
+            native_usd: get("NATIVE_USD")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
             profit_transfer_mode: get("PROFIT_TRANSFER_MODE")
@@ -128,13 +128,13 @@ impl Config {
             profit_transfer_min_usd: get("PROFIT_TRANSFER_MIN_USD")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(100.0),
-            auto_execute: get("ZCA_AUTO_EXECUTE")
+            auto_execute: get("AUTO_EXECUTE")
                 .map(|s| s.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
-            min_profit_usd: get("ZCA_MIN_PROFIT_USD")
+            min_profit_usd: get("MIN_PROFIT_USD")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(5.0),
-            scan_interval_secs: get("ZCA_SCAN_INTERVAL_SECS")
+            scan_interval_secs: get("SCAN_INTERVAL_SECS")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(5),
             port: get("PORT").and_then(|s| s.parse().ok()).unwrap_or(3001),

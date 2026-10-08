@@ -170,7 +170,7 @@ async fn execute(cfg: &Config, req: ExecutionRequest) -> ExecutionResult {
         };
     }
     // Always encode — calldata validity is checked even in dry-run so that
-    // flipping ZCA_AUTO_EXECUTE never surfaces encoding surprises.
+    // flipping AUTO_EXECUTE never surfaces encoding surprises.
     let encoded = calldata::encode_execute(&req.signal, &req.executor_address);
     let has_relay = !cfg.flashbots_auth_key.is_none()
         || req.signal.chain != Chain::Eth; // BSC/L2: public or builder adapters
