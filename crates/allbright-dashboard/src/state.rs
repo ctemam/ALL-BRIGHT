@@ -123,7 +123,12 @@ pub enum IdxRow {
     },
     /// RPC scout sweep summary.
     #[serde(rename = "scan")]
-    Scan { ts: u64, qualified: usize, total: usize, providers: usize },
+    Scan {
+        ts: u64,
+        qualified: usize,
+        total: usize,
+        providers: usize,
+    },
 }
 
 impl IdxRow {
@@ -219,9 +224,8 @@ impl Default for EventIndex {
 
 impl EventIndex {
     pub fn new() -> Self {
-        let path = PathBuf::from(
-            std::env::var("DASHBOARD_INDEX").unwrap_or_else(|_| INDEX_FILE.into()),
-        );
+        let path =
+            PathBuf::from(std::env::var("DASHBOARD_INDEX").unwrap_or_else(|_| INDEX_FILE.into()));
         let mut rows = VecDeque::with_capacity(1024);
         let mut index_since = now_ms();
         if let Ok(content) = std::fs::read_to_string(&path) {
@@ -240,7 +244,11 @@ impl EventIndex {
             .append(true)
             .open(&path)
             .ok();
-        EventIndex { rows, file, index_since_ms: index_since }
+        EventIndex {
+            rows,
+            file,
+            index_since_ms: index_since,
+        }
     }
 
     /// Index a live event; persists when relevant.

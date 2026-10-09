@@ -344,6 +344,28 @@ The continuously updated scorecard mirrors the five dimensions of §3:
 
 Anti-blindness KPIs (research/dashboard surfaces): Opportunity Coverage, Threshold Rejection Rate, Economic Rescue Rate, Strategy Blindness Rate, Simulation Validation Rate, Execution Conversion, Realized Profit Accuracy, False Opportunity Rate, Missed Profit Estimate, Challenger Detection Rate.
 
+### 27.1 Competitive Benchmark Register — public snapshot
+
+A maintained register of six public benchmark platforms used for gap analysis. **This is a snapshot, not a verified "top-tier" ranking** — it mixes distinct platform categories (relay/builder infrastructure, solver networks, intent protocols, aggregators) and MUST NOT be conflated with Allbright's technical lineage (§5). Lineage answers "what our modules descend from"; the register answers "what the market's strongest public players do better than us today".
+
+| Benchmark | Category | Primary dimension it informs (§3) |
+|---|---|---|
+| Flashbots | Relay / bundle infrastructure | Execution Quality |
+| bloXroute BackRunMe | Backrun infrastructure | Latency, Execution Quality |
+| CoW Protocol | Batch-auction solver competition | Economic Accuracy, Opportunity Intelligence |
+| UniswapX | Intent-based execution | Economic Accuracy |
+| 1inch Pathfinder | Route optimization / aggregation | Opportunity Intelligence |
+| Titan Builder | Block building / orderflow | Execution Quality |
+
+**Evidence & cadence requirements:**
+
+- **Event-triggered updates** — refresh an entry when a public source publishes a material change (new APIs, inclusion economics, fee models, network coverage).
+- **Monthly source review** — re-check primary citations for staleness; flag drifted claims.
+- **Quarterly Allbright gap review** — map register findings onto the five-dimension scorecard and emit testable follow-ups.
+- Every register claim carries: citation, confidence, scope, comparison limits, and a testable follow-up. No unsupported rankings; no headline-latency-only comparisons.
+- Register findings feed §27 scoring but never substitute for Allbright's own measured evidence.
+- This is agent-driven monitoring guidance — **not** an implemented real-time feed.
+
 ## 28. AI AGENT BEHAVIOR & DEFINITION OF DONE
 
 Agents behave as senior engineering specialists: question unsupported assumptions, verify protocol behavior, benchmark claims, preserve boundaries, identify hidden economic costs, prefer measurable improvements, document uncertainty. Never optimize a local metric at the expense of the complete system — a µs-faster simulation that produces less accurate profitability decisions is not an improvement; a "profitable" edge that is a math artifact is a bug, not a win.
@@ -1547,7 +1569,7 @@ default landing page:
 
 ```
 PROFIT METRICS → BLOCKCHAIN STREAM → STRATEGY → DEPLOYMENT
-→ INFRASTRUCTURE → REPORTS → WALLET
+→ INFRASTRUCTURE → REPORTS → COMPETITIVE ANALYSIS → WALLET
 ```
 
 Global header: logo, `ALLBRIGHT`, page title (left); Profit Pulse, currency
@@ -1783,15 +1805,31 @@ Mandatory properties:
   protected, threats detected, trades blocked, failed/successful trades,
   net realized, profit transferred.
 
-### 38.16 Dashboard definition of done
+### 38.16 Competitive Analysis page
+
+Sidebar position: between Reports and Wallet. Backed by `/api/competitive`
+and the versioned `benchmark_register.json` (§27.1). Renders the
+AllBright-measured baseline (live: chains, verified pools, qualified RPCs,
+funnel counts, realized P&L) as headline cards, then a sortable KPI
+comparison table — rows are the §21/§27 comparison axes (mapped to the
+five dimensions), columns are AllBright ★ plus the registered platforms.
+Every cell is a rating badge with confidence + evidence tooltip;
+`UNVERIFIED`/`NOT DISCLOSED` where evidence is absent. The register file
+carries citations, review dates and scope; the dashboard never presents
+public marketing claims as measured benchmarks. Page states must degrade
+honestly (`DATA UNAVAILABLE` if the register is missing).
+
+### 38.17 Dashboard definition of done
 
 The dashboard is complete only when it is: master-build aligned,
 data-wired, profit-centric, time-filterable, strategy-variant-aware,
 chain-aware, table-sortable, category-expandable, paginated,
 chart/bar-selectable, real-time/refreshable, RPC-visibility-aware,
 self-diagnosis-aware, self-healing-aware, wallet-wired,
-deployment-aware, Commander-ready, and free of mock data — delivering
-`PROFIT → STRATEGY → DEPLOYMENT → INFRASTRUCTURE → REPORTS → WALLET` with
+competitive-benchmark-aware, deployment-aware, Commander-ready, and free
+of mock data — delivering
+`PROFIT METRICS → BLOCKCHAIN STREAM → STRATEGY → DEPLOYMENT →
+INFRASTRUCTURE → REPORTS → COMPETITIVE ANALYSIS → WALLET` with
 `Time → Chain → Strategy Variant → P&L → Visualization → Transaction
 Evidence` navigable without leaving the Profit page.
 

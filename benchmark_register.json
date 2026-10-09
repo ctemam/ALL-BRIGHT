@@ -1,0 +1,514 @@
+{
+  "meta": {
+    "version": 1,
+    "authority": "AGENTS.md \u00c2\u00a727.1 \u00e2\u20ac\u201d Competitive Benchmark Register",
+    "last_reviewed": "2026-10-08",
+    "next_source_review": "2026-11-08",
+    "next_gap_review": "2027-01-08",
+    "confidence_default": "LOW",
+    "note": "Snapshot across distinct platform categories \u00e2\u20ac\u201d NOT a verified top-tier ranking. Every cell carries rating + confidence + basis; UNVERIFIED where no defensible public evidence exists. AllBright column is computed live from measured system state at query time, not from this file."
+  },
+  "rating_scale": [
+    "LEADING",
+    "STRONG",
+    "PARTIAL",
+    "EARLY",
+    "UNVERIFIED"
+  ],
+  "platforms": [
+    {
+      "id": "allbright",
+      "name": "AllBright",
+      "category": "self \u00e2\u20ac\u201d multi-chain arb + flash-loan platform",
+      "self": true
+    },
+    {
+      "id": "flashbots",
+      "name": "Flashbots",
+      "category": "relay / bundle infrastructure"
+    },
+    {
+      "id": "bloxroute",
+      "name": "bloXroute BackRunMe",
+      "category": "backrun infrastructure / BDN"
+    },
+    {
+      "id": "cow",
+      "name": "CoW Protocol",
+      "category": "batch-auction solver competition"
+    },
+    {
+      "id": "uniswapx",
+      "name": "UniswapX",
+      "category": "intent-based execution"
+    },
+    {
+      "id": "pathfinder",
+      "name": "1inch Pathfinder",
+      "category": "aggregation / route optimization"
+    },
+    {
+      "id": "titan",
+      "name": "Titan Builder",
+      "category": "block builder / orderflow"
+    }
+  ],
+  "axes": [
+    {
+      "axis": "Data speed & state freshness",
+      "dimension": "Latency",
+      "cells": {
+        "bloxroute": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "BDN propagation network \u00e2\u20ac\u201d public docs",
+          "citation": "bloxroute docs \u00e2\u20ac\u201d review quarterly"
+        },
+        "flashbots": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "MEV-Share/private orderflow feed",
+          "citation": "flashbots docs"
+        },
+        "cow": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "batch cadence, not tick-level",
+          "citation": "cow.fi docs"
+        },
+        "uniswapx": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "intent flow, not state streaming"
+        },
+        "pathfinder": {
+          "rating": "STRONG",
+          "confidence": "LOW",
+          "note": "broad liquidity polling"
+        },
+        "titan": {
+          "rating": "STRONG",
+          "confidence": "LOW",
+          "note": "builder-side orderflow"
+        },
+        "allbright": {
+          "rating": "PARTIAL",
+          "confidence": "HIGH",
+          "note": "MEASURED: CEX tick latency 0.03-0.13ms; on-chain via newHeads block cadence (seconds) on free RPCs"
+        }
+      }
+    },
+    {
+      "axis": "Simulation accuracy",
+      "dimension": "Economic Accuracy",
+      "cells": {
+        "flashbots": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "bundle simulation infra (eth_callBundle)"
+        },
+        "cow": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "solver competition requires accurate costing"
+        },
+        "uniswapx": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "filler-side simulation"
+        },
+        "pathfinder": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "multi-hop quoting engine"
+        },
+        "bloxroute": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "backrun simulation"
+        },
+        "titan": {
+          "rating": "STRONG",
+          "confidence": "LOW",
+          "note": "builder simulation for block assembly"
+        },
+        "allbright": {
+          "rating": "STRONG",
+          "confidence": "HIGH",
+          "note": "MEASURED: deterministic AMM math 1-6us/route; revm full-EVM tier pending"
+        }
+      }
+    },
+    {
+      "axis": "Route optimization",
+      "dimension": "Opportunity Intelligence",
+      "cells": {
+        "pathfinder": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "multi-split aggregation routing \u00e2\u20ac\u201d core product"
+        },
+        "uniswapx": {
+          "rating": "STRONG",
+          "confidence": "LOW",
+          "note": "fillers optimize routes"
+        },
+        "cow": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "solvers optimize batch routes"
+        },
+        "flashbots": {
+          "rating": "N/A",
+          "confidence": "HIGH",
+          "note": "infrastructure \u00e2\u20ac\u201d no strategy layer",
+          "scope": "not a route optimizer"
+        },
+        "bloxroute": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "backrun routing"
+        },
+        "titan": {
+          "rating": "N/A",
+          "confidence": "HIGH",
+          "note": "builder \u00e2\u20ac\u201d routes are upstream"
+        },
+        "allbright": {
+          "rating": "PARTIAL",
+          "confidence": "HIGH",
+          "note": "MEASURED: 2-hop + triangular walk, ternary-search sizing; no multi-hop general solver"
+        }
+      }
+    },
+    {
+      "axis": "Execution reliability / inclusion",
+      "dimension": "Execution Quality",
+      "cells": {
+        "flashbots": {
+          "rating": "LEADING",
+          "confidence": "HIGH",
+          "note": "dominant builder/relay share \u00e2\u20ac\u201d public dashboards",
+          "citation": "mevboost/relay public data"
+        },
+        "titan": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "top builder share"
+        },
+        "bloxroute": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "BackRunMe submission path"
+        },
+        "cow": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "solver settlement + MEV protection"
+        },
+        "uniswapx": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "filler network inclusion"
+        },
+        "pathfinder": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "public mempool / fusion variants"
+        },
+        "allbright": {
+          "rating": "UNVERIFIED",
+          "confidence": "HIGH",
+          "note": "MEASURED: BSC executor deployed+verified on-chain; zero measured submissions/inclusions to date"
+        }
+      }
+    },
+    {
+      "axis": "MEV protection / private orderflow",
+      "dimension": "Execution Quality",
+      "cells": {
+        "flashbots": {
+          "rating": "LEADING",
+          "confidence": "HIGH",
+          "note": "Protect/relay privacy \u00e2\u20ac\u201d core offering"
+        },
+        "cow": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "batch auctions eliminate ordering MEV"
+        },
+        "uniswapx": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "intents settle off-mempool"
+        },
+        "titan": {
+          "rating": "STRONG",
+          "confidence": "LOW",
+          "note": "private orderflow via builder"
+        },
+        "bloxroute": {
+          "rating": "STRONG",
+          "confidence": "LOW",
+          "note": "private submission for BackRunMe"
+        },
+        "pathfinder": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "Fusion intents; classic path is public"
+        },
+        "allbright": {
+          "rating": "PARTIAL",
+          "confidence": "MED",
+          "note": "Sponsored Pimlico UserOps \u2014 public mempool exposure documented"
+        }
+      }
+    },
+    {
+      "axis": "Strategy diversity",
+      "dimension": "Opportunity Intelligence",
+      "cells": {
+        "cow": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "open solver competition \u00e2\u20ac\u201d diverse strategies"
+        },
+        "pathfinder": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "aggregation heuristics"
+        },
+        "uniswapx": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "filler competition, intent-only"
+        },
+        "flashbots": {
+          "rating": "N/A",
+          "confidence": "HIGH",
+          "note": "searcher ecosystem external to platform"
+        },
+        "bloxroute": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "backrun-focused"
+        },
+        "titan": {
+          "rating": "N/A",
+          "confidence": "HIGH",
+          "note": "builder, not strategies"
+        },
+        "allbright": {
+          "rating": "PARTIAL",
+          "confidence": "HIGH",
+          "note": "MEASURED: P01 live, P02 functional, P03/P04/P07 partial, P05/P06 pending"
+        }
+      }
+    },
+    {
+      "axis": "Research / replay / auditability",
+      "dimension": "Adaptive Intelligence",
+      "cells": {
+        "flashbots": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "mev-inspect, hindsight research tooling"
+        },
+        "cow": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "solver competition analytics public"
+        },
+        "uniswapx": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "limited public replay"
+        },
+        "pathfinder": {
+          "rating": "UNVERIFIED",
+          "confidence": "LOW",
+          "note": "no public replay evidence"
+        },
+        "bloxroute": {
+          "rating": "UNVERIFIED",
+          "confidence": "LOW",
+          "note": "no public replay evidence"
+        },
+        "titan": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "builder analytics"
+        },
+        "allbright": {
+          "rating": "PARTIAL",
+          "confidence": "HIGH",
+          "note": "MEASURED: full event journal + incremental scanner; fault-injection certification unrun"
+        }
+      }
+    },
+    {
+      "axis": "Adaptive / learning loop",
+      "dimension": "Adaptive Intelligence",
+      "cells": {
+        "cow": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "solver competition self-selects winners"
+        },
+        "uniswapx": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "filler competition"
+        },
+        "pathfinder": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "tuned heuristics"
+        },
+        "flashbots": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "infra-level adaptation"
+        },
+        "bloxroute": {
+          "rating": "UNVERIFIED",
+          "confidence": "LOW",
+          "note": "no public evidence"
+        },
+        "titan": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "builder-side adaptation"
+        },
+        "allbright": {
+          "rating": "EARLY",
+          "confidence": "HIGH",
+          "note": "MEASURED: challenger+observatory live; P12 feedback loop not started"
+        }
+      }
+    },
+    {
+      "axis": "Multi-chain breadth",
+      "dimension": "Opportunity Intelligence",
+      "cells": {
+        "pathfinder": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "wide chain coverage \u00e2\u20ac\u201d public"
+        },
+        "uniswapx": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "multi-chain intent deployment"
+        },
+        "cow": {
+          "rating": "PARTIAL",
+          "confidence": "MED",
+          "note": "select chains"
+        },
+        "flashbots": {
+          "rating": "PARTIAL",
+          "confidence": "MED",
+          "note": "Ethereum-centric"
+        },
+        "bloxroute": {
+          "rating": "STRONG",
+          "confidence": "LOW",
+          "note": "multi-chain BDN"
+        },
+        "titan": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "Ethereum builder"
+        },
+        "allbright": {
+          "rating": "STRONG",
+          "confidence": "HIGH",
+          "note": "MEASURED: 10 chains enabled, 529 verified pools"
+        }
+      }
+    },
+    {
+      "axis": "Gas economics",
+      "dimension": "Economic Accuracy",
+      "cells": {
+        "cow": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "solvers bear gas; batch amortization"
+        },
+        "uniswapx": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "fillers pay gas \u00e2\u20ac\u201d gasless for users"
+        },
+        "flashbots": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "revert risk off-chain via bundles"
+        },
+        "pathfinder": {
+          "rating": "STRONG",
+          "confidence": "LOW",
+          "note": "gas-optimized path splitting"
+        },
+        "bloxroute": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "backrun gas borne by searcher"
+        },
+        "titan": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "block-level gas packing"
+        },
+        "allbright": {
+          "rating": "STRONG",
+          "confidence": "HIGH",
+          "note": "MEASURED: atomic revert + on-chain minProfit guard bounds downside to gas"
+        }
+      }
+    },
+    {
+      "axis": "Security / risk governance",
+      "dimension": "Execution Quality",
+      "cells": {
+        "cow": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "solver bonding + reputation"
+        },
+        "flashbots": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "battle-tested relay infra"
+        },
+        "uniswapx": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "audited intent contracts"
+        },
+        "pathfinder": {
+          "rating": "STRONG",
+          "confidence": "LOW",
+          "note": "mature aggregator ops"
+        },
+        "bloxroute": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "service-level protections"
+        },
+        "titan": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "builder trust model"
+        },
+        "allbright": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "Kill switch + on-chain guard + event lineage; plaintext key rotation pending"
+        }
+      }
+    }
+  ]
+}

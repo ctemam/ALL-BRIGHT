@@ -32,7 +32,10 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 /// Public registry aggregating thousands of independent RPC listings.
-const CHAINLIST_URL: &str = "https://chainid.network/chains.json";
+/// chainlist.org/rpcs.json — NOT chainid.network/chains.json: the latter
+/// encodes `rpc` as plain strings, the former as `{"url": ...}` objects
+/// (the schema `discover` parses).
+const CHAINLIST_URL: &str = "https://chainlist.org/rpcs.json";
 /// Second independent source — Pocket's keyless public gateway slugs
 /// (§36.1.A). Only our enabled chains are seeded.
 const POCKET_SLUGS: &[(Chain, &str)] = &[
@@ -51,15 +54,16 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(7);
 const CONCURRENCY: usize = 64;
 /// Head older than this ⇒ stale state, not a healthy endpoint.
 const MAX_HEAD_LAG_SECS: u64 = 300;
-/// Market-visibility pass runs on the top-N candidates per chain.
-const MARKET_PROBE_TOP: usize = 10;
 /// Multicall3 — deployed identically on every enabled chain; used as the
 /// method-capability and event-visibility probe target.
 const MULTICALL3: &str = "0xcA11bde05977b3631167028862bE2a173976CA11";
 
-async fn rpc_call(client: &reqwest::Client, url: &str, method: &str, params: serde_json::Value)
-    -> Result<serde_json::Value, String>
-{
+async fn rpc_call(
+    client: &reqwest::Client,
+    url: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
     let resp = client
         .post(url)
@@ -67,7 +71,13 @@ async fn rpc_call(client: &reqwest::Client, url: &str, method: &str, params: ser
         .timeout(PROBE_TIMEOUT)
         .send()
         .await
-        .map_err(|e| if e.is_timeout() { "timeout".into() } else { e.to_string() })?;
+        .map_err(|e| {
+            if e.is_timeout() {
+                "timeout".into()
+            } else {
+                e.to_string()
+            }
+        })?;
     let status = resp.status();
     if status.as_u16() == 429 {
         return Err("429 rate limited".into());
@@ -77,13 +87,17 @@ async fn rpc_call(client: &reqwest::Client, url: &str, method: &str, params: ser
     }
     let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     if let Some(err) = v.get("error") {
-        return Err(format!("rpc error {}", err.get("code").and_then(|c| c.as_i64()).unwrap_or(0)));
+        return Err(format!(
+            "rpc error {}",
+            err.get("code").and_then(|c| c.as_i64()).unwrap_or(0)
+        ));
     }
     Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null))
 }
 
 fn hex_u64(v: &serde_json::Value) -> Option<u64> {
-    v.as_str().and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+    v.as_str()
+        .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
 }
 
 /// Full qualification probe for one candidate endpoint (§36.5 ladder).
@@ -118,7 +132,11 @@ async fn qualify(client: &reqwest::Client, mut rec: RpcEndpointRecord) -> RpcEnd
             rec.errors += 1;
             rec.consecutive_errors += 1;
             rec.last_error = Some(e.clone());
-            rec.state = if e.contains("429") { QualState::RateLimited } else { QualState::Broken };
+            rec.state = if e.contains("429") {
+                QualState::RateLimited
+            } else {
+                QualState::Broken
+            };
             rec.visibility = VisibilityClass::V0Dead;
             rec.compute_ovs();
             return rec;
@@ -140,19 +158,34 @@ async fn qualify(client: &reqwest::Client, mut rec: RpcEndpointRecord) -> RpcEnd
     };
 
     // Block freshness via eth_getBlockByNumber timestamp.
-    if let Ok(v) = rpc_call(client, &url, "eth_getBlockByNumber", json!(["latest", false])).await {
+    if let Ok(v) = rpc_call(
+        client,
+        &url,
+        "eth_getBlockByNumber",
+        json!(["latest", false]),
+    )
+    .await
+    {
         if let Some(ts) = v.get("timestamp").and_then(hex_u64) {
             let now = allbright_core::events::now_ms() / 1000;
             let lag = now.saturating_sub(ts);
             rec.head_lag_secs = Some(lag);
-            rec.caps.block_fresh =
-                if lag <= MAX_HEAD_LAG_SECS { CapState::Available } else { CapState::Unavailable };
+            rec.caps.block_fresh = if lag <= MAX_HEAD_LAG_SECS {
+                CapState::Available
+            } else {
+                CapState::Unavailable
+            };
         }
     }
 
     // Method capability: eth_call against canonical Multicall3.
-    match rpc_call(client, &url, "eth_call",
-        json!([{"to": MULTICALL3, "data": "0x0f28c97d"}, "latest"])).await
+    match rpc_call(
+        client,
+        &url,
+        "eth_call",
+        json!([{"to": MULTICALL3, "data": "0x0f28c97d"}, "latest"]),
+    )
+    .await
     {
         Ok(v) if v.as_str().map(|s| s.len() > 2).unwrap_or(false) => {
             rec.caps.eth_call = CapState::Available;
@@ -164,7 +197,15 @@ async fn qualify(client: &reqwest::Client, mut rec: RpcEndpointRecord) -> RpcEnd
     }
 
     // Balance read.
-    if rpc_call(client, &url, "eth_getBalance", json!([MULTICALL3, "latest"])).await.is_ok() {
+    if rpc_call(
+        client,
+        &url,
+        "eth_getBalance",
+        json!([MULTICALL3, "latest"]),
+    )
+    .await
+    .is_ok()
+    {
         rec.caps.get_balance = CapState::Available;
     }
 
@@ -174,12 +215,21 @@ async fn qualify(client: &reqwest::Client, mut rec: RpcEndpointRecord) -> RpcEnd
     if let Some(h) = head {
         let from = format!("{:#x}", h.saturating_sub(32));
         let to = format!("{h:#x}");
-        match rpc_call(client, &url, "eth_getLogs",
-            json!([{"fromBlock": from, "toBlock": to, "address": MULTICALL3}])).await
+        match rpc_call(
+            client,
+            &url,
+            "eth_getLogs",
+            json!([{"fromBlock": from, "toBlock": to, "address": MULTICALL3}]),
+        )
+        .await
         {
             Ok(_) => rec.caps.get_logs = CapState::Available,
             Err(e) => {
-                rec.caps.get_logs = if e.contains("429") { CapState::Unknown } else { CapState::Unavailable };
+                rec.caps.get_logs = if e.contains("429") {
+                    CapState::Unknown
+                } else {
+                    CapState::Unavailable
+                };
             }
         }
     }
@@ -187,7 +237,10 @@ async fn qualify(client: &reqwest::Client, mut rec: RpcEndpointRecord) -> RpcEnd
     // Two extra RTT samples for a latency distribution leg.
     for _ in 0..2 {
         let t = Instant::now();
-        if rpc_call(client, &url, "eth_chainId", json!([])).await.is_ok() {
+        if rpc_call(client, &url, "eth_chainId", json!([]))
+            .await
+            .is_ok()
+        {
             rec.push_rtt(t.elapsed().as_millis() as u64);
         }
     }
@@ -215,23 +268,40 @@ async fn qualify(client: &reqwest::Client, mut rec: RpcEndpointRecord) -> RpcEnd
 /// Market-visibility leg (§37.4): read a real pool's state through the
 /// endpoint. V2/Stable → `getReserves()` (0x0902f1ac); V3 → `slot0()`
 /// (0x3850c98b). Success upgrades the record to V4.
-async fn market_probe(client: &reqwest::Client, rec: &mut RpcEndpointRecord, pool: &chain::PoolDescriptor) {
+///
+/// §37.1 enforcement: RPC ALIVE ≠ RPC OPPORTUNITY-VISIBLE. An endpoint that
+/// passes the V3 floor but cannot read pool state is economically blind and
+/// must not hold `Qualified` — it is demoted to `Degraded` (basic/fallback
+/// tier) and the blindness is recorded in `last_error`.
+async fn market_probe(
+    client: &reqwest::Client,
+    rec: &mut RpcEndpointRecord,
+    pool: &chain::PoolDescriptor,
+) {
     let selector = match pool.dex {
         DexKind::V3 => "0x3850c98b",
         _ => "0x0902f1ac",
     };
-    match rpc_call(client, &rec.url,
+    match rpc_call(
+        client,
+        &rec.url,
         "eth_call",
-        json!([{"to": pool.address, "data": selector}, "latest"])).await
+        json!([{"to": pool.address, "data": selector}, "latest"]),
+    )
+    .await
     {
         Ok(v) if v.as_str().map(|s| s.len() > 2).unwrap_or(false) => {
             rec.caps.pool_state = CapState::Available;
             rec.visibility = VisibilityClass::V4MarketVisible;
         }
-        Ok(_) => rec.caps.pool_state = CapState::Unavailable,
-        Err(e) => {
+        Ok(_) | Err(_) => {
             rec.caps.pool_state = CapState::Unavailable;
-            rec.last_error = Some(format!("market probe: {e}"));
+            if rec.state == QualState::Qualified {
+                rec.state = QualState::Degraded;
+            }
+            rec.last_error = Some(
+                "economically blind: pool state unreadable — fallback tier only (§37.1)".into(),
+            );
         }
     }
     rec.compute_ovs();
@@ -240,21 +310,37 @@ async fn market_probe(client: &reqwest::Client, rec: &mut RpcEndpointRecord, poo
 /// Discovery — multiple independent sources (§36.1). Returns deduplicated
 /// candidate records; templated `{KEY}` URLs are recorded as NeedsKey
 /// (counted, never probed — no static trust).
-async fn discover(client: &reqwest::Client, cfg: &Config, registry: &RpcRegistry)
-    -> Vec<RpcEndpointRecord>
-{
+async fn discover(
+    client: &reqwest::Client,
+    cfg: &Config,
+    registry: &RpcRegistry,
+) -> Vec<RpcEndpointRecord> {
     let mut out: Vec<RpcEndpointRecord> = Vec::new();
     let wanted: HashMap<u64, Chain> = Chain::ALL.iter().map(|c| (c.chain_id(), *c)).collect();
 
     // Source A: Chainlist-style registry (aggregates many providers).
-    match client.get(CHAINLIST_URL).timeout(Duration::from_secs(30)).send().await {
+    match client
+        .get(CHAINLIST_URL)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+    {
         Ok(r) => match r.json::<serde_json::Value>().await {
             Ok(v) => {
                 let mut n = 0usize;
                 for entry in v.as_array().cloned().unwrap_or_default() {
-                    let Some(cid) = entry.get("chainId").and_then(|c| c.as_u64()) else { continue };
-                    let Some(chain) = wanted.get(&cid) else { continue };
-                    for r in entry.get("rpc").and_then(|r| r.as_array()).cloned().unwrap_or_default() {
+                    let Some(cid) = entry.get("chainId").and_then(|c| c.as_u64()) else {
+                        continue;
+                    };
+                    let Some(chain) = wanted.get(&cid) else {
+                        continue;
+                    };
+                    for r in entry
+                        .get("rpc")
+                        .and_then(|r| r.as_array())
+                        .cloned()
+                        .unwrap_or_default()
+                    {
                         let url = r.get("url").and_then(|u| u.as_str()).unwrap_or("");
                         if url.is_empty() || !url.starts_with("http") {
                             continue; // wss endpoints tracked separately
@@ -277,7 +363,10 @@ async fn discover(client: &reqwest::Client, cfg: &Config, registry: &RpcRegistry
     // Source B: Pocket keyless gateway (independent infrastructure).
     for (chain, slug) in POCKET_SLUGS {
         out.push(RpcEndpointRecord::new(
-            &format!("https://{slug}.rpc.grove.city/v1/lb/public"), *chain, "pocket"));
+            &format!("https://{slug}.rpc.grove.city/v1/lb/public"),
+            *chain,
+            "pocket",
+        ));
     }
 
     // Source C: configured ENV pools — operator-curated, already verified.
@@ -304,11 +393,13 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     allbright_core::init_crypto_provider();
     let cfg = Config::load()?;
-    let reg_path = std::env::var("RPC_REGISTRY_PATH")
-        .unwrap_or_else(|_| REGISTRY_FILE.to_string());
+    let reg_path = std::env::var("RPC_REGISTRY_PATH").unwrap_or_else(|_| REGISTRY_FILE.to_string());
     let interval = Duration::from_secs(
         std::env::var("RPC_SCOUT_INTERVAL_SECS")
-            .ok().and_then(|s| s.parse().ok()).unwrap_or(1800));
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1800),
+    );
 
     let bus = BusServer::bind(SocketAddr::from(([127, 0, 0, 1], cfg.ports.scout))).await?;
     info!(port = cfg.ports.scout, "rpc-scout bus listening");
@@ -341,21 +432,35 @@ async fn main() -> anyhow::Result<()> {
             registry.upsert(rec);
         }
 
-        // ---- MARKET VISIBILITY PASS (top-N per chain, real pool read) ----
+        // ---- MARKET VISIBILITY PASS (§37.4 — every live candidate, not top-N) ----
+        // QUALIFIED requires V4 market visibility: a real pool read through the
+        // endpoint. Endpoints that fail are demoted to Degraded (economically
+        // blind — fallback tier only, §37.1).
         let pools = chain::load_pools();
         let by_chain = chain::pools_by_chain(&pools);
         for chain in Chain::ALL {
-            let Some(sample) = by_chain.get(&chain).and_then(|p| p.first()).cloned() else { continue };
-            let mut top: Vec<RpcEndpointRecord> = registry
+            let Some(sample) = by_chain.get(&chain).and_then(|p| p.first()).cloned() else {
+                continue;
+            };
+            let targets: Vec<RpcEndpointRecord> = registry
                 .for_chain(chain)
                 .filter(|e| matches!(e.state, QualState::Qualified | QualState::Degraded))
                 .cloned()
                 .collect();
-            top.sort_by(|a, b| b.ovs.partial_cmp(&a.ovs).unwrap_or(std::cmp::Ordering::Equal));
-            top.truncate(MARKET_PROBE_TOP);
-            for rec in &mut top {
-                market_probe(&client, rec, &sample).await;
-                registry.upsert(rec.clone());
+            let probed: Vec<RpcEndpointRecord> = stream::iter(targets)
+                .map(|mut rec| {
+                    let client = client.clone();
+                    let sample = sample.clone();
+                    async move {
+                        market_probe(&client, &mut rec, &sample).await;
+                        rec
+                    }
+                })
+                .buffer_unordered(CONCURRENCY)
+                .collect()
+                .await;
+            for rec in probed {
+                registry.upsert(rec);
             }
         }
 
@@ -369,16 +474,40 @@ async fn main() -> anyhow::Result<()> {
         let _ = bus.publish(&Event::RpcScan(summary.clone()));
 
         // Chains with zero qualified endpoints are blind — classified,
-        // journaled, never silent (§37.6/§37.12).
+        // journaled, never silent (§37.6/§37.12). Zero V4-visible endpoints
+        // while some remain "alive" is RPC_OPPORTUNITY_BLIND — distinct from
+        // total connectivity failure.
         for chain in Chain::ALL {
             let (q, _) = registry.chain_diversity(chain);
-            if q == 0 && cfg.rpc_pools.contains_key(&chain) {
-                let _ = bus.publish(&Event::Failure(FailureEvent::new(
-                    Component::RpcScout,
-                    FailureClass::RpcChainVisibilityFailure,
-                    "scout.sweep",
-                    format!("{}: zero qualified RPC endpoints after sweep", chain.name()),
-                ).on_chain(chain)));
+            if !cfg.rpc_pools.contains_key(&chain) {
+                continue;
+            }
+            if q == 0 {
+                let _ = bus.publish(&Event::Failure(
+                    FailureEvent::new(
+                        Component::RpcScout,
+                        FailureClass::RpcChainVisibilityFailure,
+                        "scout.sweep",
+                        format!("{}: zero qualified RPC endpoints after sweep", chain.name()),
+                    )
+                    .on_chain(chain),
+                ));
+            } else {
+                let v4 = registry
+                    .for_chain(chain)
+                    .filter(|e| {
+                        e.state == QualState::Qualified
+                            && e.visibility == VisibilityClass::V4MarketVisible
+                    })
+                    .count();
+                if v4 == 0 {
+                    let _ = bus.publish(&Event::Failure(FailureEvent::new(
+                        Component::RpcScout,
+                        FailureClass::RpcOpportunityBlind,
+                        "scout.market_probe",
+                        format!("{}: endpoints alive but zero V4 market visibility — economically blind", chain.name()),
+                    ).on_chain(chain)));
+                }
             }
         }
 

@@ -171,6 +171,15 @@ footer img{height:22px;display:block;margin:0 auto 6px}
       <div class="panel"><h3>Profit by Chain</h3><div id="rp-profit"></div></div>
       <div class="panel"><h3>Opportunity &amp; Infrastructure</h3><div id="rp-opp"></div></div>
     </section>
+    <!-- ============ COMPETITIVE ANALYSIS (§27.1 Benchmark Register) ============ -->
+    <section class="page" id="pg-competitive">
+      <div class="cards" id="cp-cards"></div>
+      <div class="panel"><h3>KPI Comparison — AllBright vs Benchmark Peers <span class="muted">(sortable; hover cells for evidence)</span></h3>
+        <div id="cp-table"></div>
+        <div id="cp-notice" class="muted" style="margin-top:8px"></div>
+      </div>
+      <div class="panel"><h3>Register Metadata</h3><div id="cp-meta" class="muted">—</div></div>
+    </section>
     <!-- ============ WALLET ============ -->
     <section class="page" id="pg-wallet">
       <div class="ctl">
@@ -248,7 +257,8 @@ const badge = (txt,cls)=>`<span class="badge b-${cls}">${txt}</span>`;
 const PAGES = [
   ['profit','◈','Profit Metrics'], ['stream','⟶','Blockchain Stream'],
   ['strategy','◇','Strategy'], ['deploy','⛁','Deployment'],
-  ['infra','⌁','Infrastructure'], ['reports','≡','Reports'], ['wallet','◍','Wallet'],
+  ['infra','⌁','Infrastructure'], ['reports','≡','Reports'],
+  ['competitive','⚖','Competitive Analysis'], ['wallet','◍','Wallet'],
 ];
 $('#nav').innerHTML = PAGES.map(([id,ic,lbl])=>
   `<a href="#" data-pg="${id}"><span class="ic">${ic}</span><span class="lbl">${lbl}</span></a>`).join('');
@@ -473,6 +483,45 @@ async function loadReports(){
     JSON.stringify({opportunity:d.opportunity,infrastructure:d.infrastructure,risk:d.risk},null,1)+`</pre>`;
 }
 
+/* ---------- Competitive Analysis (§27.1 — Benchmark Register) ---------- */
+const RATING_RANK={LEADING:5,STRONG:4,PARTIAL:3,EARLY:2,UNVERIFIED:1,'N/A':0};
+const RATING_CLS={LEADING:'b-ok',STRONG:'b-ok',PARTIAL:'b-warn',EARLY:'b-warn',UNVERIFIED:'b-na','N/A':'b-na'};
+function cellBadge(c){
+  if(!c)return '<span class="na">NOT DISCLOSED</span>';
+  const conf={HIGH:'measured/verified',MED:'public docs',LOW:'low confidence'}[c.confidence]||c.confidence;
+  return `<span title="${conf}${c.note?' — '+c.note.replace(/"/g,'&quot;'):''}${c.citation?' · '+c.citation:''}">`
+    +badge(c.rating,RATING_CLS[c.rating]||'b-na')+`</span>`;
+}
+async function loadCompetitive(){
+  const d=await (await fetch('/api/competitive')).json();
+  if(!d.register){$('#cp-table').innerHTML='<div class="notice">benchmark_register.json not found — DATA UNAVAILABLE</div>';return;}
+  const m=d.allbright_measured;
+  $('#cp-cards').innerHTML=[
+    ['Chains',m.chains_enabled],['Verified Pools',fmtN(m.pools_verified)],
+    ['Qualified RPCs',`${m.rpc_qualified} / ${m.rpc_total}`],['RPC Providers',m.rpc_providers],
+    ['Opps Detected',fmtN(m.opportunities_detected)],['Simulated',fmtN(m.requests_simulated)],
+    ['Exec Submitted',fmtN(m.exec_submitted)],['Exec Included',fmtN(m.exec_included)],
+    ['Realized P&L',fmt$(m.realized_profit_usd)],
+  ].map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  // AllBright column is the live measured baseline (highlighted).
+  const plats=d.register.platforms;
+  const cols=[{key:'axis',label:'KPI Axis',group:'Comparison'},
+              {key:'dimension',label:'Dimension',group:'Comparison'}]
+    .concat(plats.map(p=>({
+      key:p.id+'_r',label:p.name+(p.self?' ★':''),num:true,group:'Platforms',
+      render:r=>cellBadge(r[p.id]),
+    })));
+  const rows=d.register.axes.map(a=>{
+    const r={axis:a.axis,dimension:a.dimension};
+    plats.forEach(p=>{const c=a.cells[p.id];r[p.id]=c;r[p.id+'_r']=c?(RATING_RANK[c.rating]??1):1;});
+    return r;
+  });
+  tableEngine($('#cp-table'),cols,rows);
+  const meta=d.register.meta;
+  $('#cp-meta').textContent=`v${meta.version} · reviewed ${meta.last_reviewed} · next source review ${meta.next_source_review} · next gap review ${meta.next_gap_review} — ${meta.note}`;
+  $('#cp-notice').textContent=d.notice;
+}
+
 async function loadWallet(){
   const d=await (await fetch('/api/wallet')).json();
   if(!d.configured){$('#wl-table').innerHTML=`<div class="notice">${d.note}</div>`;return;}
@@ -610,7 +659,7 @@ async function init(){
 function refresh(){
   loadStatus();
   ({profit:loadProfit,stream:loadStream,strategy:loadStrategy,deploy:loadDeploy,
-    infra:loadInfra,reports:loadReports,wallet:loadWallet}[state.page]||(()=>{}))();
+    infra:loadInfra,reports:loadReports,competitive:loadCompetitive,wallet:loadWallet}[state.page]||(()=>{}))();
 }
 $('#refresh').onchange=setupTimer;let timer=null;
 function setupTimer(){clearInterval(timer);const s=+$('#refresh').value;if(s)timer=setInterval(refresh,s*1000);}

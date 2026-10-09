@@ -95,7 +95,8 @@ async fn main() -> anyhow::Result<()> {
                 v.last_exec = serde_json::to_value(&r).ok();
             }
             Event::Failure(f) => {
-                v.failures.push_front(serde_json::to_value(&f).unwrap_or_default());
+                v.failures
+                    .push_front(serde_json::to_value(&f).unwrap_or_default());
                 v.failures.truncate(50);
             }
             _ => {}
@@ -125,7 +126,8 @@ async fn main() -> anyhow::Result<()> {
             move |ev, v: &mut View| {
                 idx.idx.lock().unwrap().push(&ev);
                 if let Event::Failure(f) = ev {
-                    v.failures.push_front(serde_json::to_value(&f).unwrap_or_default());
+                    v.failures
+                        .push_front(serde_json::to_value(&f).unwrap_or_default());
                     v.failures.truncate(50);
                 }
             },
@@ -160,30 +162,35 @@ async fn main() -> anyhow::Result<()> {
 
     let app_router = Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
-        .route("/logo.svg", get(|| async {
-            ([(header::CONTENT_TYPE, "image/svg+xml")], LOGO_SVG).into_response()
-        }))
+        .route(
+            "/logo.svg",
+            get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], LOGO_SVG).into_response() }),
+        )
         .route("/api/meta", get(api::meta))
         .route("/api/pnl", get(api::pnl))
         .route("/api/strategies", get(api::strategies))
         .route("/api/infrastructure", get(api::infrastructure))
         .route("/api/diagnoses", get(api::diagnoses))
         .route("/api/healing", get(api::healing))
+        .route("/api/competitive", get(api::competitive))
         .route("/api/reports", get(api::reports))
         .route("/api/stream", get(api::stream))
         .route("/api/wallet", get(api::wallet))
         .route("/api/status", get(api::status))
         .route("/api/killswitch", post(api::killswitch))
         .route("/api/deployments", get(api_deployments))
-        .route("/ws", get({
-            let tx = tx.clone();
-            let view = view.clone();
-            move |ws: WebSocketUpgrade| {
+        .route(
+            "/ws",
+            get({
                 let tx = tx.clone();
                 let view = view.clone();
-                async move { ws.on_upgrade(move |s| handle_ws(s, tx, view)) }
-            }
-        }))
+                move |ws: WebSocketUpgrade| {
+                    let tx = tx.clone();
+                    let view = view.clone();
+                    async move { ws.on_upgrade(move |s| handle_ws(s, tx, view)) }
+                }
+            }),
+        )
         .with_state(app);
 
     let addr: SocketAddr = ([127, 0, 0, 1], cfg.ports.dashboard).into();

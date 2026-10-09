@@ -86,6 +86,8 @@ Never copy an implementation blindly; verify the API/version you actually depend
 - **Binance** → streaming freshness; a CEX quote is never an assumed executable DEX price.
 - **Uniswap/PancakeSwap V2/V3, Solidly** → verify formulas, fee tiers, ticks, ordering, decimals, rounding.
 
+**Competitive/reference research handoff:** every research output must carry citation, confidence, scope, comparison limits and a testable follow-up, filed so the quarterly gap review (AGENTS §27.1) can consume it. Monitoring guidance is agent-driven — never present it as an implemented real-time feed.
+
 ## 6. STRATEGY DEVELOPMENT
 
 Every strategy follows: `DISCOVER → FILTER → MODEL → SIMULATE → OPTIMIZE → RANK → EXECUTE → RECORD` and carries a stable `OppKind` + version so outcomes are attributable.
@@ -211,6 +213,10 @@ See AGENTS.md §30 for the diagnostic pipeline.
 ## 21. COMPETITIVE ANALYSIS
 
 Compare on: data speed, state freshness, simulation accuracy, route optimization, strategy diversity, execution reliability, builder connectivity, gas economics, research, adaptivity, security. Never compare headline latency alone. Today the honest gap is **state freshness** (free RPC polling) — naming it precisely is worth more than any microbenchmark.
+
+Use the Competitive Benchmark Register (AGENTS.md §27.1): Flashbots, bloXroute BackRunMe, CoW Protocol, UniswapX, 1inch Pathfinder, Titan Builder. The register is a snapshot across distinct platform categories, not a verified top-tier ranking — do not conflate it with the §5 technical-lineage table.
+
+Evidence/review practice for every register claim and competitive finding: citation, confidence, scope, comparison limits, testable follow-up. Cadence: event-triggered updates on material public changes, monthly source review, quarterly gap review mapped onto the five-dimension scorecard. This is agent-driven monitoring guidance — not an implemented real-time feed.
 
 ## 22. TOP-THREE QUALIFICATION FRAMEWORK
 
@@ -735,6 +741,15 @@ CAPACITY=VERIFIED` — directory membership does not count. Per endpoint:
 `safe_capacity = verified_capacity × 0.90`, `reserve = × 0.10`; monitor
 `current_usage, headroom, reserve`.
 
+**QUALIFIED = V4 market-visible, not V3.** The scout enforces this: every
+Qualified/Degraded endpoint gets the market probe (real `getReserves()`/
+`slot0()` read against a pools.json sample, all endpoints — bounded by
+CONCURRENCY, not top-N). A live endpoint that cannot read pool state is
+economically blind → demoted to `Degraded` (fallback tier) with the
+blindness recorded in `last_error`. A chain with live endpoints but zero
+V4 emits `RpcOpportunityBlind`; zero qualified at all emits
+`RpcChainVisibilityFailure` — never silently `NO_MARKET_OPPORTUNITY`.
+
 ### 34.11 KPI integrity
 
 Every opportunity KPI retains lineage `KPI → Opportunity Engine → Market
@@ -772,8 +787,9 @@ systems; no duplicate engines; no mock data; every metric keeps lineage
 
 ### 35.1 Page architecture
 
-`PROFIT → STRATEGY → DEPLOYMENT → INFRASTRUCTURE → REPORTS → WALLET`.
-Profit is Page 1. Collapsible sidebar (icon-only + tooltip + active
+`PROFIT METRICS → BLOCKCHAIN STREAM → STRATEGY → DEPLOYMENT →
+INFRASTRUCTURE → REPORTS → COMPETITIVE ANALYSIS → WALLET`.
+Profit Metrics is Page 1 (default landing view). Collapsible sidebar (icon-only + tooltip + active
 indicator collapsed; logo top-left; Kill Switch bottom). Header: Profit
 Pulse (realized vs wallet-balance vs unrealized strictly distinguished),
 currency selector, period indicator, refresh selector, system status
@@ -832,6 +848,15 @@ share time state unless the user changes them together explicitly.
   and self-healing panels.
 - **Reports:** 1H–Since-Deployment ranges across Profit/Opportunity/
   Strategy/Execution/Infrastructure/Risk-Security categories.
+- **Competitive Analysis:** `/api/competitive` serves the versioned
+  `benchmark_register.json` (AGENTS §27.1) plus the live measured
+  AllBright baseline (chains, verified pools, qualified RPCs, funnel
+  counts, realized P&L). Sortable KPI table — rows = comparison axes
+  mapped to the five dimensions, columns = AllBright ★ + registered
+  platforms; cells = rating badges with confidence + evidence tooltips.
+  `UNVERIFIED`/`NOT DISCLOSED` where evidence is absent; missing register
+  file renders `DATA UNAVAILABLE`, never fabricated scores. Public claims
+  must never be presented as measured benchmarks.
 - **Wallet:** MetaMask detection → account select → address/chain/
   balance → wallet table + TOTAL row; NEVER seed/private key; auto-
   transfer controls (ON/OFF, threshold, eligible amount, status) with

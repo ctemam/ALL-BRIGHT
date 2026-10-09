@@ -85,9 +85,15 @@ pub async fn pnl(State(st): State<Shared>, Query(q): Query<Range>) -> Json<Value
 
     for r in idx.in_range(q.from, q.to) {
         match r {
-            IdxRow::Opp { ts, chain, variant, expected_usd, legs, input_token, input_amount }
-                if chain_ok(&q.chain, chain) && variant_ok(&q.variant, variant) =>
-            {
+            IdxRow::Opp {
+                ts,
+                chain,
+                variant,
+                expected_usd,
+                legs,
+                input_token,
+                input_amount,
+            } if chain_ok(&q.chain, chain) && variant_ok(&q.variant, variant) => {
                 gross += expected_usd;
                 rows.push(json!({
                     "ts": ts, "chain": chain, "variant": variant,
@@ -105,9 +111,15 @@ pub async fn pnl(State(st): State<Shared>, Query(q): Query<Range>) -> Json<Value
                     "lineage": "solver:OpportunitySignal",
                 }));
             }
-            IdxRow::Exec { ts, chain, status, tx_hash, realized_usd, gas_used, detail }
-                if chain_ok(&q.chain, chain) =>
-            {
+            IdxRow::Exec {
+                ts,
+                chain,
+                status,
+                tx_hash,
+                realized_usd,
+                gas_used,
+                detail,
+            } if chain_ok(&q.chain, chain) => {
                 realized += realized_usd;
                 match status.as_str() {
                     "Included" => n_ok += 1,
@@ -133,7 +145,11 @@ pub async fn pnl(State(st): State<Shared>, Query(q): Query<Range>) -> Json<Value
     // Time buckets for CHART/BAR modes — same filtered dataset (§38.14).
     let (from, to) = (
         q.from,
-        if q.to == 0 { allbright_core::events::now_ms() } else { q.to },
+        if q.to == 0 {
+            allbright_core::events::now_ms()
+        } else {
+            q.to
+        },
     );
     let span = to.saturating_sub(from).max(60_000);
     let nb = 40usize;
@@ -141,20 +157,30 @@ pub async fn pnl(State(st): State<Shared>, Query(q): Query<Range>) -> Json<Value
     let bspan = span / nb as u64;
     for row in &rows {
         let t = row["ts"].as_u64().unwrap_or(0);
-        if t < from || t > to { continue; }
+        if t < from || t > to {
+            continue;
+        }
         let i = ((t - from) / bspan.max(1)).min(nb as u64 - 1) as usize;
         let b = &mut buckets[i];
         b["t"] = json!(from + i as u64 * bspan);
-        b["expected"] = json!(b["expected"].as_f64().unwrap_or(0.0)
-            + row["expected_usd"].as_f64().unwrap_or(0.0));
-        b["realized"] = json!(b["realized"].as_f64().unwrap_or(0.0)
-            + row["realized_usd"].as_f64().unwrap_or(0.0));
+        b["expected"] = json!(
+            b["expected"].as_f64().unwrap_or(0.0) + row["expected_usd"].as_f64().unwrap_or(0.0)
+        );
+        b["realized"] = json!(
+            b["realized"].as_f64().unwrap_or(0.0) + row["realized_usd"].as_f64().unwrap_or(0.0)
+        );
     }
 
     let total = rows.len();
-    let (page, size) = (q.page.unwrap_or(1).max(1), q.size.unwrap_or(25).clamp(1, 100));
-    let rows_page: Vec<Value> =
-        rows.into_iter().skip((page - 1) * size).take(size).collect();
+    let (page, size) = (
+        q.page.unwrap_or(1).max(1),
+        q.size.unwrap_or(25).clamp(1, 100),
+    );
+    let rows_page: Vec<Value> = rows
+        .into_iter()
+        .skip((page - 1) * size)
+        .take(size)
+        .collect();
     let trades = n_ok + n_fail;
     Json(json!({
         "summary": {
@@ -183,25 +209,34 @@ pub async fn strategies(State(st): State<Shared>, Query(q): Query<Range>) -> Jso
     let mut per: HashMap<String, Value> = STRATEGY_VARIANTS
         .iter()
         .map(|(id, name)| {
-            (id.to_string(), json!({
-                "variant": id, "name": name,
-                "detected": 0, "executed": 0, "rejected": 0,
-                "gross_usd": 0.0, "realized_usd": 0.0,
-            }))
+            (
+                id.to_string(),
+                json!({
+                    "variant": id, "name": name,
+                    "detected": 0, "executed": 0, "rejected": 0,
+                    "gross_usd": 0.0, "realized_usd": 0.0,
+                }),
+            )
         })
         .collect();
     for r in idx.in_range(q.from, q.to) {
         match r {
-            IdxRow::Opp { variant, expected_usd, chain, .. }
-                if chain_ok(&q.chain, chain) =>
-            {
+            IdxRow::Opp {
+                variant,
+                expected_usd,
+                chain,
+                ..
+            } if chain_ok(&q.chain, chain) => {
                 if let Some(v) = per.get_mut(variant) {
                     v["detected"] = json!(v["detected"].as_u64().unwrap_or(0) + 1);
-                    v["gross_usd"] =
-                        json!(v["gross_usd"].as_f64().unwrap_or(0.0) + expected_usd);
+                    v["gross_usd"] = json!(v["gross_usd"].as_f64().unwrap_or(0.0) + expected_usd);
                 }
             }
-            IdxRow::Exec { realized_usd, chain, .. } if chain_ok(&q.chain, chain) => {
+            IdxRow::Exec {
+                realized_usd,
+                chain,
+                ..
+            } if chain_ok(&q.chain, chain) => {
                 // Executions carry no variant attribution yet — attributed
                 // bucket "ALL" is surfaced honestly below.
                 let _ = realized_usd;
@@ -228,24 +263,30 @@ pub async fn infrastructure(State(st): State<Shared>) -> Json<Value> {
     let mut chains = Vec::new();
     for c in Chain::ALL {
         let (q, prov) = reg.chain_diversity(c);
-        let mut lat: Vec<u64> = reg
-            .for_chain(c)
-            .filter_map(|e| e.median_rtt())
-            .collect();
+        let mut lat: Vec<u64> = reg.for_chain(c).filter_map(|e| e.median_rtt()).collect();
         lat.sort_unstable();
         let p = |pct: f64| {
-            if lat.is_empty() { Value::Null } else {
+            if lat.is_empty() {
+                Value::Null
+            } else {
                 json!(lat[((lat.len() - 1) as f64 * pct) as usize])
             }
         };
-        let healthy = reg.for_chain(c)
+        let healthy = reg
+            .for_chain(c)
             .filter(|e| matches!(e.state, QualState::Qualified | QualState::Degraded))
             .count();
         let ovs_avg = {
-            let v: Vec<f64> = reg.for_chain(c)
+            let v: Vec<f64> = reg
+                .for_chain(c)
                 .filter(|e| e.state == QualState::Qualified)
-                .map(|e| e.ovs).collect();
-            if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 }
+                .map(|e| e.ovs)
+                .collect();
+            if v.is_empty() {
+                0.0
+            } else {
+                v.iter().sum::<f64>() / v.len() as f64
+            }
         };
         chains.push(json!({
             "chain": c.name(), "qualified": q, "providers": prov,
@@ -282,7 +323,14 @@ pub async fn diagnoses(State(st): State<Shared>, Query(q): Query<Range>) -> Json
     let mut rows: Vec<Value> = idx
         .in_range(q.from, q.to)
         .filter_map(|r| match r {
-            IdxRow::Fail { ts, component, class, chain, stage, detail } => Some(json!({
+            IdxRow::Fail {
+                ts,
+                component,
+                class,
+                chain,
+                stage,
+                detail,
+            } => Some(json!({
                 "id": format!("F-{ts}"), "ts": ts, "component": component,
                 "class": class, "chain": chain, "stage": stage, "detail": detail,
             })),
@@ -291,7 +339,10 @@ pub async fn diagnoses(State(st): State<Shared>, Query(q): Query<Range>) -> Json
         .collect();
     rows.sort_by(|a, b| b["ts"].as_u64().cmp(&a["ts"].as_u64()));
     let total = rows.len();
-    let (page, size) = (q.page.unwrap_or(1).max(1), q.size.unwrap_or(25).clamp(1, 100));
+    let (page, size) = (
+        q.page.unwrap_or(1).max(1),
+        q.size.unwrap_or(25).clamp(1, 100),
+    );
     Json(json!({
         "total": total,
         "rows": rows.into_iter().skip((page - 1) * size).take(size).collect::<Vec<_>>(),
@@ -304,7 +355,13 @@ pub async fn healing(State(st): State<Shared>, Query(q): Query<Range>) -> Json<V
     let mut rows: Vec<Value> = idx
         .in_range(q.from, q.to)
         .filter_map(|r| match r {
-            IdxRow::Heal { ts, target, action, success, reason } => Some(json!({
+            IdxRow::Heal {
+                ts,
+                target,
+                action,
+                success,
+                reason,
+            } => Some(json!({
                 "id": format!("H-{ts}"), "ts": ts, "target": target,
                 "action": action, "success": success, "reason": reason,
                 "state": if *success { "HEALED" } else { "FAILED" },
@@ -323,16 +380,26 @@ pub async fn reports(State(st): State<Shared>, Query(q): Query<Range>) -> Json<V
     let (mut opps, mut execs, mut rejs, mut fails, mut heals) = (0u64, 0u64, 0u64, 0u64, 0u64);
     for r in idx.in_range(q.from, q.to) {
         match r {
-            IdxRow::Opp { chain, expected_usd, .. } => {
+            IdxRow::Opp {
+                chain,
+                expected_usd,
+                ..
+            } => {
                 opps += 1;
-                let e = per_chain.entry(chain.clone())
+                let e = per_chain
+                    .entry(chain.clone())
                     .or_insert(json!({"opps":0,"expected":0.0,"exec":0,"realized":0.0}));
                 e["opps"] = json!(e["opps"].as_u64().unwrap_or(0) + 1);
                 e["expected"] = json!(e["expected"].as_f64().unwrap_or(0.0) + expected_usd);
             }
-            IdxRow::Exec { chain, realized_usd, .. } => {
+            IdxRow::Exec {
+                chain,
+                realized_usd,
+                ..
+            } => {
                 execs += 1;
-                let e = per_chain.entry(chain.clone())
+                let e = per_chain
+                    .entry(chain.clone())
                     .or_insert(json!({"opps":0,"expected":0.0,"exec":0,"realized":0.0}));
                 e["exec"] = json!(e["exec"].as_u64().unwrap_or(0) + 1);
                 e["realized"] = json!(e["realized"].as_f64().unwrap_or(0.0) + realized_usd);
@@ -371,7 +438,10 @@ pub async fn wallet(State(st): State<Shared>) -> Json<Value> {
     let mut rows = Vec::new();
     for c in Chain::ALL {
         let eps = reg.qualified_urls(c);
-        let Some(url) = eps.first().or_else(|| st.cfg.rpc_pools.get(&c).and_then(|p| p.first())) else {
+        let Some(url) = eps
+            .first()
+            .or_else(|| st.cfg.rpc_pools.get(&c).and_then(|p| p.first()))
+        else {
             rows.push(json!({"chain": c.name(), "address": addr,
                 "balance_native": null, "status": "NO QUALIFIED RPC"}));
             continue;
@@ -380,7 +450,10 @@ pub async fn wallet(State(st): State<Shared>) -> Json<Value> {
                           "params":[addr, "latest"]});
         let resp = client.post(url).json(&body).send().await.ok();
         let bal = match resp {
-            Some(r) => r.json::<Value>().await.ok()
+            Some(r) => r
+                .json::<Value>()
+                .await
+                .ok()
                 .and_then(|v| v["result"].as_str().map(|s| s.to_string()))
                 .and_then(|s| u128::from_str_radix(s.trim_start_matches("0x"), 16).ok())
                 .map(|w| w as f64 / 1e18),
@@ -411,48 +484,91 @@ pub async fn wallet(State(st): State<Shared>) -> Json<Value> {
 pub async fn stream(State(st): State<Shared>, Query(q): Query<Range>) -> Json<Value> {
     let idx = st.idx.lock().unwrap();
     let from = q.from;
-    let to = if q.to == 0 { allbright_core::events::now_ms() } else { q.to };
+    let to = if q.to == 0 {
+        allbright_core::events::now_ms()
+    } else {
+        q.to
+    };
 
     let opps: Vec<&IdxRow> = idx
         .in_range(from, q.to)
-        .filter(|r| matches!(r, IdxRow::Opp { .. })
-            && matches!(r, IdxRow::Opp { chain, variant, .. }
-                if chain_ok(&q.chain, chain) && variant_ok(&q.variant, variant)))
+        .filter(|r| {
+            matches!(r, IdxRow::Opp { .. })
+                && matches!(r, IdxRow::Opp { chain, variant, .. }
+                if chain_ok(&q.chain, chain) && variant_ok(&q.variant, variant))
+        })
         .collect();
-    let execreqs: Vec<&IdxRow> =
-        idx.in_range(from, q.to).filter(|r| matches!(r, IdxRow::ExecReq { .. })).collect();
-    let execs: Vec<&IdxRow> =
-        idx.in_range(from, q.to).filter(|r| matches!(r, IdxRow::Exec { .. })).collect();
-    let rejs: Vec<&IdxRow> =
-        idx.in_range(from, q.to).filter(|r| matches!(r, IdxRow::Rej { .. })).collect();
-    let fails: Vec<&IdxRow> =
-        idx.in_range(from, q.to).filter(|r| matches!(r, IdxRow::Fail { .. })).collect();
-    let heals: Vec<&IdxRow> =
-        idx.in_range(from, q.to).filter(|r| matches!(r, IdxRow::Heal { .. })).collect();
+    let execreqs: Vec<&IdxRow> = idx
+        .in_range(from, q.to)
+        .filter(|r| matches!(r, IdxRow::ExecReq { .. }))
+        .collect();
+    let execs: Vec<&IdxRow> = idx
+        .in_range(from, q.to)
+        .filter(|r| matches!(r, IdxRow::Exec { .. }))
+        .collect();
+    let rejs: Vec<&IdxRow> = idx
+        .in_range(from, q.to)
+        .filter(|r| matches!(r, IdxRow::Rej { .. }))
+        .collect();
+    let fails: Vec<&IdxRow> = idx
+        .in_range(from, q.to)
+        .filter(|r| matches!(r, IdxRow::Fail { .. }))
+        .collect();
+    let heals: Vec<&IdxRow> = idx
+        .in_range(from, q.to)
+        .filter(|r| matches!(r, IdxRow::Heal { .. }))
+        .collect();
 
     // Lifecycle cards — newest first, bounded.
     let mut cards: Vec<Value> = Vec::new();
     for r in opps.iter().rev().take(60) {
-        let IdxRow::Opp { ts, chain, variant, expected_usd, legs, input_token, input_amount } = r
-        else { continue };
+        let IdxRow::Opp {
+            ts,
+            chain,
+            variant,
+            expected_usd,
+            legs,
+            input_token,
+            input_amount,
+        } = r
+        else {
+            continue;
+        };
         let opp_id = format!("OPP-{:08x}", ts % 0xFFFF_FFFF);
         // Linkage: ExecRequest for the same chain within 10s carrying the
         // same expected value; ExecResult within 60s after it.
-        let req = execreqs.iter().find(|e| matches!(e,
+        let req = execreqs.iter().find(|e| {
+            matches!(e,
             IdxRow::ExecReq { ts: ets, chain: ec, expected_usd: ee, .. }
                 if ec == chain && ee == expected_usd
-                   && *ets >= *ts && *ets <= ts + 10_000));
+                   && *ets >= *ts && *ets <= ts + 10_000)
+        });
         let res = req.and_then(|rq| {
-            let IdxRow::ExecReq { ts: rts, .. } = rq else { return None };
-            execs.iter().find(|e| matches!(e,
+            let IdxRow::ExecReq { ts: rts, .. } = rq else {
+                return None;
+            };
+            execs.iter().find(|e| {
+                matches!(e,
                 IdxRow::Exec { ts: ets, chain: ec, .. }
-                    if ec == chain && *ets >= *rts && *ets <= rts + 60_000))
+                    if ec == chain && *ets >= *rts && *ets <= rts + 60_000)
+            })
         });
         let (exec_state, tx_hash, realized) = match res {
-            Some(IdxRow::Exec { status, tx_hash, realized_usd, .. }) =>
-                (status.clone(), tx_hash.clone(), Some(*realized_usd)),
-            _ => (if req.is_some() { "REQUESTED".into() } else { "NONE".into() },
-                  None, None),
+            Some(IdxRow::Exec {
+                status,
+                tx_hash,
+                realized_usd,
+                ..
+            }) => (status.clone(), tx_hash.clone(), Some(*realized_usd)),
+            _ => (
+                if req.is_some() {
+                    "REQUESTED".into()
+                } else {
+                    "NONE".into()
+                },
+                None,
+                None,
+            ),
         };
         cards.push(json!({
             "id": opp_id, "ts": ts, "chain": chain, "variant": variant,
@@ -472,47 +588,115 @@ pub async fn stream(State(st): State<Shared>, Query(q): Query<Range>) -> Json<Va
     }
 
     // Rejected opportunities — visible defense evidence (§38.15 bullets).
-    let rejected_cards: Vec<Value> = rejs.iter().rev().take(40).map(|r| {
-        let IdxRow::Rej { ts, chain, variant, reason, gross_usd, threshold_usd } = r
-        else { unreachable!() };
-        json!({"id": format!("REJ-{:08x}", ts % 0xFFFF_FFFF), "ts": ts,
+    let rejected_cards: Vec<Value> = rejs
+        .iter()
+        .rev()
+        .take(40)
+        .map(|r| {
+            let IdxRow::Rej {
+                ts,
+                chain,
+                variant,
+                reason,
+                gross_usd,
+                threshold_usd,
+            } = r
+            else {
+                unreachable!()
+            };
+            json!({"id": format!("REJ-{:08x}", ts % 0xFFFF_FFFF), "ts": ts,
                "chain": chain, "variant": variant, "reason": reason,
                "gross_usd": gross_usd, "threshold_usd": threshold_usd,
                "stages": {"detected": true, "qualified": false, "simulated": false,
                           "defended": true, "executed": false,
                           "confirmed": false, "settled": false}})
-    }).collect();
+        })
+        .collect();
 
     // Soldier activity feed — component-attributed lines (§38.15.15).
     let mut activity: Vec<Value> = Vec::new();
     let window: Vec<&IdxRow> = idx.in_range(from, q.to).collect();
     for r in window.iter().rev().take(80) {
         let line = match r {
-            IdxRow::Opp { ts, chain, variant, expected_usd, .. } =>
-                (*ts, "Solver", format!("detected OPP on {chain} [{variant}] +${expected_usd:.2} expected")),
-            IdxRow::Rej { ts, chain, reason, .. } =>
-                (*ts, "Guard", format!("rejected candidate on {chain}: {reason}")),
-            IdxRow::ExecReq { ts, chain, dry_run, .. } =>
-                (*ts, "Executor", format!("execution {} on {chain}", if *dry_run {"dry-run"} else {"authorized"})),
-            IdxRow::Exec { ts, chain, status, .. } =>
-                (*ts, "Chain", format!("{chain} execution status {status}")),
-            IdxRow::Fail { ts, component, class, .. } =>
-                (*ts, "Sentinel", format!("{component} failure class {class}")),
-            IdxRow::Heal { ts, target, action, success, .. } =>
-                (*ts, "Sentinel", format!("heal {action} on {target} → {}",
-                    if *success {"verified"} else {"failed"})),
-            IdxRow::Scan { ts, qualified, total, .. } =>
-                (*ts, "Scout", format!("RPC sweep: {qualified}/{total} qualified")),
+            IdxRow::Opp {
+                ts,
+                chain,
+                variant,
+                expected_usd,
+                ..
+            } => (
+                *ts,
+                "Solver",
+                format!("detected OPP on {chain} [{variant}] +${expected_usd:.2} expected"),
+            ),
+            IdxRow::Rej {
+                ts, chain, reason, ..
+            } => (
+                *ts,
+                "Guard",
+                format!("rejected candidate on {chain}: {reason}"),
+            ),
+            IdxRow::ExecReq {
+                ts, chain, dry_run, ..
+            } => (
+                *ts,
+                "Executor",
+                format!(
+                    "execution {} on {chain}",
+                    if *dry_run { "dry-run" } else { "authorized" }
+                ),
+            ),
+            IdxRow::Exec {
+                ts, chain, status, ..
+            } => (*ts, "Chain", format!("{chain} execution status {status}")),
+            IdxRow::Fail {
+                ts,
+                component,
+                class,
+                ..
+            } => (
+                *ts,
+                "Sentinel",
+                format!("{component} failure class {class}"),
+            ),
+            IdxRow::Heal {
+                ts,
+                target,
+                action,
+                success,
+                ..
+            } => (
+                *ts,
+                "Sentinel",
+                format!(
+                    "heal {action} on {target} → {}",
+                    if *success { "verified" } else { "failed" }
+                ),
+            ),
+            IdxRow::Scan {
+                ts,
+                qualified,
+                total,
+                ..
+            } => (
+                *ts,
+                "Scout",
+                format!("RPC sweep: {qualified}/{total} qualified"),
+            ),
         };
         activity.push(json!({"ts": line.0, "actor": line.1, "msg": line.2}));
     }
 
     // Defense strip — states derived from recent failures, not assumed.
-    let recent_fails: Vec<&&IdxRow> =
-        window.iter().filter(|r| matches!(r, IdxRow::Fail { .. })
-            && r.ts() >= to.saturating_sub(10 * 60_000)).collect();
+    let recent_fails: Vec<&&IdxRow> = window
+        .iter()
+        .filter(|r| matches!(r, IdxRow::Fail { .. }) && r.ts() >= to.saturating_sub(10 * 60_000))
+        .collect();
     let gate = |pat: &str| {
-        if recent_fails.iter().any(|r| matches!(r, IdxRow::Fail { class, .. } if class.contains(pat))) {
+        if recent_fails
+            .iter()
+            .any(|r| matches!(r, IdxRow::Fail { class, .. } if class.contains(pat)))
+        {
             "RED"
         } else {
             "ARMED"
@@ -530,11 +714,24 @@ pub async fn stream(State(st): State<Shared>, Query(q): Query<Range>) -> Json<Va
     ]);
 
     // Capital-protection summary.
-    let protected: f64 = rejs.iter().filter_map(|r| match r {
-        IdxRow::Rej { gross_usd, .. } => Some(*gross_usd), _ => None }).sum();
-    let realized: f64 = execs.iter().filter_map(|r| match r {
-        IdxRow::Exec { realized_usd, status, .. } if status == "Included" => Some(*realized_usd),
-        _ => None }).sum();
+    let protected: f64 = rejs
+        .iter()
+        .filter_map(|r| match r {
+            IdxRow::Rej { gross_usd, .. } => Some(*gross_usd),
+            _ => None,
+        })
+        .sum();
+    let realized: f64 = execs
+        .iter()
+        .filter_map(|r| match r {
+            IdxRow::Exec {
+                realized_usd,
+                status,
+                ..
+            } if status == "Included" => Some(*realized_usd),
+            _ => None,
+        })
+        .sum();
 
     // Opportunity-rise/fall trend — real event density per bucket.
     let nb = 40usize;
@@ -584,9 +781,11 @@ pub async fn status(State(st): State<Shared>) -> Json<Value> {
     let idx = st.idx.lock().unwrap();
     // Recent chain-blindness drives DEGRADED.
     let cutoff = allbright_core::events::now_ms().saturating_sub(5 * 60_000);
-    let blind_recent = idx.in_range(cutoff, 0).any(|r| matches!(r,
+    let blind_recent = idx.in_range(cutoff, 0).any(|r| {
+        matches!(r,
         IdxRow::Fail { class, .. } if class.contains("RpcChainVisibility")
-            || class.contains("RpcBlindness")));
+            || class.contains("RpcBlindness"))
+    });
     let status = if halted {
         "SAFE-HALT"
     } else if blind_recent || s.qualified == 0 {
@@ -605,16 +804,73 @@ pub async fn status(State(st): State<Shared>) -> Json<Value> {
     }))
 }
 
-// ---------- /api/killswitch — global halt control (§38.11) ----------
+// ---------- /api/killswitch - global halt control (SS38.11) ----------
+
+/// /api/competitive - Competitive Benchmark Register (AGENTS SS27.1).
+/// benchmark_register.json carries confidence-tagged public cells for
+/// peers; the AllBright column is enriched with live measured state so
+/// self-comparison is evidence, not claim.
+pub async fn competitive(State(st): State<Shared>) -> Json<Value> {
+    let reg = [
+        "benchmark_register.json",
+        "../benchmark_register.json",
+        "../../benchmark_register.json",
+    ]
+    .iter()
+    .find_map(|p| std::fs::read_to_string(p).ok())
+    .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+    let pools = allbright_core::chain::load_pools();
+    let rs = RpcRegistry::load(Path::new(&reg_path())).summary();
+    let (mut detected, mut simulated, mut submitted, mut included) = (0u64, 0u64, 0u64, 0u64);
+    let mut realized = 0.0f64;
+    {
+        let idx = st.idx.lock().unwrap();
+        for r in idx.rows() {
+            match r {
+                IdxRow::Opp { .. } => detected += 1,
+                IdxRow::ExecReq { .. } => simulated += 1,
+                IdxRow::Exec {
+                    status,
+                    realized_usd,
+                    ..
+                } => {
+                    if status == "Submitted" || status == "Included" {
+                        submitted += 1;
+                        if status == "Included" {
+                            included += 1;
+                        }
+                        realized += realized_usd;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Json(json!({
+        "register": reg,
+        "data_since_ms": st.idx.lock().unwrap().index_since_ms,
+        "allbright_measured": {
+            "chains_enabled": Chain::ALL.len(),
+            "pools_verified": pools.len(),
+            "rpc_qualified": rs.qualified,
+            "rpc_total": rs.total,
+            "rpc_providers": rs.providers,
+            "opportunities_detected": detected,
+            "requests_simulated": simulated,
+            "exec_submitted": submitted,
+            "exec_included": included,
+            "realized_profit_usd": realized,
+        },
+        "notice": "Public-source snapshot across distinct platform categories - not a verified ranking. AllBright column merges measured live state; peer cells carry confidence tags. UNVERIFIED where evidence is absent.",
+    }))
+}
+
 #[derive(Deserialize)]
 pub struct KillReq {
     action: String,
 }
 
-pub async fn killswitch(
-    State(_st): State<Shared>,
-    Json(req): Json<KillReq>,
-) -> Json<Value> {
+pub async fn killswitch(State(_st): State<Shared>, Json(req): Json<KillReq>) -> Json<Value> {
     let p = Path::new("HALT.flag");
     match req.action.as_str() {
         "halt" => {
