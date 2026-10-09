@@ -139,6 +139,12 @@ pub enum FailureClass {
     RpcQuotaVisibilityLoss,
     RpcMethodVisibilityFailure,
     RpcChainVisibilityFailure,
+    /// Funnel starvation (AGENTS §34.3): pipeline stages silent while
+    /// services are alive — wired-layer blindness, not market absence.
+    FunnelStarvation,
+    /// USD pricing blindness: candidates rejected on NoUsdPricing —
+    /// price-feed coverage gap, not absence of spread.
+    PricingBlindness,
     MetadataMismatch,
     BuilderRejected,
     NotIncluded,

@@ -32,6 +32,11 @@ const TICK: Duration = Duration::from_secs(10);
 const VERIFY_DELAY: Duration = Duration::from_secs(12);
 /// Head not advancing for this long = stale-state blindness.
 const RPC_STALE_AFTER: Duration = Duration::from_secs(120);
+/// Funnel-starvation watch (§34.3): how often the sentinel audits the
+/// opportunity funnel for silence while armed.
+const FUNNEL_AUDIT_EVERY: Duration = Duration::from_secs(300);
+/// No profit-bearing activity for this long triggers diagnosis.
+const PROFIT_STALL_WINDOW_MS: u64 = 30 * 60 * 1000;
 /// Heartbeat re-emit interval while an RPC stays degraded (≈1 min).
 const RPC_DEGRADED_HEARTBEAT: u32 = 6;
 /// Healthy endpoints disagreeing by more than this many blocks are
@@ -159,6 +164,167 @@ struct ManagedProc {
     online: bool,
 }
 
+/// Funnel liveness state — latest observed timestamp per stage plus a
+/// rolling rejection-reason window for diagnosis.
+#[derive(Default)]
+struct FunnelStats {
+    last_row_ms: u64,          // any indexed funnel event
+    last_opp_ms: u64,
+    last_xreq_ms: u64,
+    last_exec_ms: u64,
+    last_exec_included_ms: u64,
+    last_exec_failed_ms: u64,
+    last_fail_ms: u64,
+    /// (ts, reason-bucket) rejection ring — pruned to the stall window.
+    rejections: std::collections::VecDeque<(u64, &'static str)>,
+}
+
+/// Read newly appended index rows since `offset`; updates `st` in place.
+/// Bounded: only bytes appended since last audit are decoded.
+fn funnel_scan(path: &str, offset: &mut u64, st: &mut FunnelStats) {
+    let Ok(mut f) = std::fs::File::open(path) else { return };
+    use std::io::{Read, Seek, SeekFrom};
+    if f.seek(SeekFrom::Start(*offset)).is_err() {
+        return;
+    }
+    let mut buf = String::new();
+    if f.read_to_string(&mut buf).is_err() {
+        return;
+    }
+    *offset += buf.len() as u64;
+    for line in buf.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let ts = v["ts"].as_u64().unwrap_or(0);
+        if ts == 0 {
+            continue;
+        }
+        st.last_row_ms = st.last_row_ms.max(ts);
+        match v["t"].as_str().unwrap_or("") {
+            "opp" => st.last_opp_ms = st.last_opp_ms.max(ts),
+            "xreq" => st.last_xreq_ms = st.last_xreq_ms.max(ts),
+            "exec" => {
+                st.last_exec_ms = st.last_exec_ms.max(ts);
+                match v["status"].as_str().unwrap_or("") {
+                    "Included" | "Submitted" => {
+                        st.last_exec_included_ms = st.last_exec_included_ms.max(ts)
+                    }
+                    "Failed" => st.last_exec_failed_ms = st.last_exec_failed_ms.max(ts),
+                    _ => {}
+                }
+            }
+            "rej" => {
+                let reason = match v["reason"].as_str().unwrap_or("?") {
+                    "NoUsdPricing" => "NoUsdPricing",
+                    "BelowStrategyThreshold" => "BelowStrategyThreshold",
+                    "NegativeEdge" => "NegativeEdge",
+                    _ => "other",
+                };
+                st.rejections.push_back((ts, reason));
+            }
+            "fail" => st.last_fail_ms = st.last_fail_ms.max(ts),
+            _ => {}
+        }
+    }
+}
+
+/// Classify a profit stall into its root funnel stage (§34.3). Returns
+/// (class, human detail). `None` = funnel is alive or execution unarmed.
+fn diagnose_stall(st: &FunnelStats, now: u64, armed: bool) -> Option<(FailureClass, String)> {
+    if !armed {
+        return None; // dormant by policy — not a fault
+    }
+    let age = |ts: u64| now.saturating_sub(ts);
+    let window = PROFIT_STALL_WINDOW_MS;
+
+    // Count rejection reasons inside the window.
+    let mut no_pricing = 0u32;
+    let mut below_thr = 0u32;
+    let mut neg_edge = 0u32;
+    let mut other = 0u32;
+    for (ts, r) in &st.rejections {
+        if now.saturating_sub(*ts) <= window {
+            match *r {
+                "NoUsdPricing" => no_pricing += 1,
+                "BelowStrategyThreshold" => below_thr += 1,
+                "NegativeEdge" => neg_edge += 1,
+                _ => other += 1,
+            }
+        }
+    }
+    let rej_total = no_pricing + below_thr + neg_edge + other;
+    let funnel_quiet = age(st.last_row_ms) > window;
+    let no_profit = st.last_exec_included_ms == 0 || age(st.last_exec_included_ms) > window;
+
+    if !no_profit {
+        return None; // included results inside the window — healthy
+    }
+
+    // Stage-by-stage root cause — symptom → component → cause.
+    if funnel_quiet && rej_total == 0 {
+        return Some((
+            FailureClass::FunnelStarvation,
+            "entire funnel silent — no opportunities, rejections or execs \
+             in window: ingest/solver pipeline not producing (wiring/feed \
+             failure, not market absence)".into(),
+        ));
+    }
+    if rej_total > 0 && st.last_opp_ms == 0 && age(st.last_row_ms) <= window {
+        // Rejections flowing but nothing qualifies — classify dominant cause.
+        if no_pricing * 2 > rej_total {
+            return Some((
+                FailureClass::PricingBlindness,
+                format!("{no_pricing}/{rej_total} rejections = NoUsdPricing — \
+                         USD price coverage gap suppressing the universe"),
+            ));
+        }
+        if below_thr + neg_edge == rej_total {
+            return Some((
+                FailureClass::ProfitBelowThreshold,
+                format!("{rej_total} rejections in window, all economic \
+                         (below-threshold/negative-edge): market thin under \
+                         current liquidity — no market opportunity, not blindness"),
+            ));
+        }
+        return Some((
+            FailureClass::FunnelStarvation,
+            format!("{rej_total} rejections, 0 opportunities — mixed reasons \
+                     (NoUsdPricing={no_pricing} BelowThr={below_thr} NegEdge={neg_edge} other={other})"),
+        ));
+    }
+    if st.last_opp_ms > 0 && st.last_xreq_ms == 0 {
+        return Some((
+            FailureClass::ConfigurationError,
+            format!("opportunities detected (last {}m ago) but ZERO exec \
+                     requests — solver→executor decision boundary broken",
+                    age(st.last_opp_ms) / 60_000),
+        ));
+    }
+    if st.last_xreq_ms > 0 && st.last_exec_ms == 0 {
+        return Some((
+            FailureClass::StreamDrop,
+            format!("exec requests issued (last {}m ago) but ZERO results — \
+                     executor intake path dead", age(st.last_xreq_ms) / 60_000),
+        ));
+    }
+    if st.last_exec_ms > 0 && st.last_exec_included_ms == 0
+        && age(st.last_exec_failed_ms) <= window
+    {
+        return Some((
+            FailureClass::BuilderRejected,
+            format!("executions reaching the executor but ALL failing \
+                     (last failure {}m ago) — relay/provider/gate rejection",
+                    age(st.last_exec_failed_ms) / 60_000),
+        ));
+    }
+    Some((
+        FailureClass::FunnelStarvation,
+        format!("no included execution for {}m — funnel stage undetermined \
+                 (last row {}m ago)", window / 60_000, age(st.last_row_ms) / 60_000),
+    ))
+}
+
 /// Run a pm2 subcommand. On Windows `pm2` resolves to a `.cmd` shim that
 /// requires `cmd.exe`; the extensionless bash shim appears first in PATH
 /// and is not exec'able by CreateProcess. Bounded by a timeout with one
@@ -167,7 +333,10 @@ struct ManagedProc {
 async fn pm2(args: &[&str]) -> Option<std::process::Output> {
     for attempt in 0..2 {
         let fut = if cfg!(windows) {
-            let mut a = vec!["/c", "pm2"];
+            // Explicit `pm2.cmd` — the extensionless bash shim `pm2` resolves
+            // first in PATH and is not exec'able, which silently broke every
+            // pm2 call (diagnosis degraded / remediation suspended).
+            let mut a = vec!["/c", "pm2.cmd"];
             a.extend_from_slice(args);
             quiet_cmd("cmd").args(&a).output()
         } else {
@@ -281,6 +450,24 @@ async fn main() -> anyhow::Result<()> {
     // Post-escalation cooldown: service → don't re-escalate before this.
     let mut escalated_until: HashMap<String, Instant> = HashMap::new();
     let mut pm2_blind_logged = false;
+
+    // ---- Funnel-starvation watch (§34.3/§34.12): "no profit" is a
+    // symptom, not a diagnosis. The sentinel tails the dashboard index
+    // (offset-tracked) and, when armed execution yields zero included
+    // results for PROFIT_STALL_WINDOW, classifies the root stage:
+    //   pipeline silent → FunnelStarvation
+    //   rejections dominated by NoUsdPricing → PricingBlindness
+    //   requests sent but all failed → BuilderRejected/adapter detail
+    //   sub-threshold rejections only → market thin (honest, no heal)
+    let index_path =
+        std::env::var("DASHBOARD_INDEX").unwrap_or_else(|_| "journal/dashboard-index.jsonl".into());
+    let mut index_offset: u64 = std::fs::metadata(&index_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let mut funnel_state: Option<&'static str> = None; // dedupe: emit once per state
+    let mut last_funnel_audit = Instant::now() - FUNNEL_AUDIT_EVERY; // audit on first tick
+    // Counters over the stall window, refreshed each audit.
+    let mut funnel = FunnelStats::default();
 
     // ---- RPC visibility watch (AGENTS §32/§34): the sentinel diagnoses
     // data-layer blindness so it is never silently read as "no market
@@ -698,6 +885,59 @@ async fn main() -> anyhow::Result<()> {
                     ts_ms: now_ms(),
                 }));
                 info!(chain = chain.name(), healthy = healthy_eps, "chain visibility restored");
+            }
+        }
+
+        // ---- Funnel-starvation audit (§34.3): "Allbright must not
+        // sleep" — when armed execution yields zero included results for
+        // the stall window, diagnose the silent stage and classify it.
+        // Bounded actions only: the audit diagnoses + escalates; port/RPC
+        // remediators above handle what they can fix.
+        if last_funnel_audit.elapsed() >= FUNNEL_AUDIT_EVERY {
+            last_funnel_audit = Instant::now();
+            funnel_scan(&index_path, &mut index_offset, &mut funnel);
+            // Prune the rejection ring to the window.
+            let now = now_ms();
+            while funnel
+                .rejections
+                .front()
+                .map(|(ts, _)| now.saturating_sub(*ts) > PROFIT_STALL_WINDOW_MS * 2)
+                .unwrap_or(false)
+            {
+                funnel.rejections.pop_front();
+            }
+            match diagnose_stall(&funnel, now, cfg.auto_execute) {
+                Some((class, detail)) => {
+                    let key = format!("{class:?}");
+                    if funnel_state.as_deref() != Some(key.as_str()) {
+                        funnel_state = Some(match class {
+                            FailureClass::FunnelStarvation => "FunnelStarvation",
+                            FailureClass::PricingBlindness => "PricingBlindness",
+                            FailureClass::ProfitBelowThreshold => "ProfitBelowThreshold",
+                            FailureClass::ConfigurationError => "ConfigurationError",
+                            FailureClass::StreamDrop => "StreamDrop",
+                            FailureClass::BuilderRejected => "BuilderRejected",
+                            _ => "Other",
+                        });
+                        tracing::warn!(?class, %detail, "profit stall diagnosed");
+                        let _ = bus.publish(&Event::Failure(
+                            FailureEvent::new(Component::Sentinel, class, "sentinel.funnel_audit", detail),
+                        ));
+                    }
+                }
+                None => {
+                    if let Some(prev) = funnel_state.take() {
+                        tracing::info!(prev, "funnel recovered — included results resumed");
+                        let _ = bus.publish(&Event::Heal(HealAction {
+                            target: "funnel".into(),
+                            action: "funnel.recovered".into(),
+                            reason: "included executions resumed within window".into(),
+                            success: true,
+                            restarts_in_window: 0,
+                            ts_ms: now_ms(),
+                        }));
+                    }
+                }
             }
         }
 

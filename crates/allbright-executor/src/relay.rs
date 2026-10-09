@@ -30,12 +30,66 @@ pub async fn submit(cfg: &Config, req: &ExecutionRequest, _calldata: &[u8]) -> R
     }
 }
 
-/// Canonical Aave V3 Pool per chain (verified on-chain before every use
-/// via `getReservesList()` — an address here is a candidate, not a trust).
-fn aave_v3_pool(chain: Chain) -> Option<&'static str> {
+/// FlashKind mirror of AllbrightExecutor.sol's enum — keep in sync.
+const KIND_AAVE_V3: u64 = 1;
+const KIND_BALANCER_V2: u64 = 3;
+const KIND_MORPHO: u64 = 4;
+
+/// Flash-loan provider candidates per chain, ordered cheapest-first
+/// (Balancer V2 and Morpho charge 0% premium; Aave charges 0.05%).
+/// Membership here is a candidate, not a trust — every address is
+/// verified on-chain before each submission.
+fn flash_providers(chain: Chain) -> &'static [(&'static str, u64)] {
+    // Balancer V2 Vault — identical address on deployed chains. Verified
+    // via getProtocolFeesCollector() on 9 chains on 2026-10-08; the Blast
+    // address at this slot is ~1.4KB and fails the Vault interface — NOT
+    // a real Balancer deployment, so Blast stays fail-closed below.
+    const BAL: &str = "0xBA12222222228d8Ba445958a75a0704d566BF2C8";
+    const MORPHO: &str = "0xBBBBBbbBBb9cC5e90e3b3Af64BDaf62C37EEFFCb";
     match chain {
-        Chain::Bsc => Some("0x6807dc923806fE8Fd134338EABCA509979a7e0cB"),
-        _ => None,
+        Chain::Eth => &[
+            (BAL, KIND_BALANCER_V2),
+            (MORPHO, KIND_MORPHO),
+            ("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA2", KIND_AAVE_V3),
+        ],
+        Chain::Bsc => &[
+            (BAL, KIND_BALANCER_V2),
+            (MORPHO, KIND_MORPHO),
+            ("0x6807dc923806fE8Fd134338EABCA509979a7e0cB", KIND_AAVE_V3),
+        ],
+        Chain::Base => &[
+            (BAL, KIND_BALANCER_V2),
+            (MORPHO, KIND_MORPHO),
+            ("0xA238Dd80C259a72e81d7e4664a9801593F98d1c5", KIND_AAVE_V3),
+        ],
+        Chain::Arb => &[
+            (BAL, KIND_BALANCER_V2),
+            ("0x794a61358D6845594F94dc1DB02A252b5b4814aD", KIND_AAVE_V3),
+        ],
+        Chain::Op => &[
+            (BAL, KIND_BALANCER_V2),
+            ("0x794a61358D6845594F94dc1DB02A252b5b4814aD", KIND_AAVE_V3),
+        ],
+        Chain::Poly => &[
+            (BAL, KIND_BALANCER_V2),
+            ("0x794a61358D6845594F94dc1DB02A252b5b4814aD", KIND_AAVE_V3),
+        ],
+        Chain::Avax => &[
+            (BAL, KIND_BALANCER_V2),
+            ("0x794a61358D6845594F94dc1DB02A252b5b4814aD", KIND_AAVE_V3),
+        ],
+        Chain::Linea => &[
+            (BAL, KIND_BALANCER_V2),
+            ("0xc47b8C00b0f69a36fa203Ffeac0334874574a8Ac", KIND_AAVE_V3),
+        ],
+        Chain::Scroll => &[
+            (BAL, KIND_BALANCER_V2),
+            ("0x11fCfe756c05AD438e312a7fd934381537D3cFfe", KIND_AAVE_V3),
+        ],
+        // Blast: Aave V3 absent, the 0xBA12 slot is not a real Vault
+        // (~1.4KB, interface probes fail), DODO probe failed earlier.
+        // No verified flash provider → fail-closed.
+        Chain::Blast => &[],
     }
 }
 
@@ -45,6 +99,29 @@ fn aave_v3_pool(chain: Chain) -> Option<&'static str> {
 fn stable_addr(chain: Chain, token: Address) -> bool {
     let t = format!("{token:?}").to_lowercase();
     let list: &[&str] = match chain {
+        // Every entry verified on-chain via decimals() on 2026-10-08.
+        Chain::Eth => &[
+            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // USDC
+            "0xdac17f958d2ee523a2206206994597c13d831ec7", // USDT
+            "0x6b175474e89094c44da98b954eedeac495271d0f", // DAI
+        ],
+        Chain::Arb => &[
+            "0xaf88d065e77c8cc2239327c5edb3a432268e5831", // USDC (native)
+            "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8", // USDC.e
+            "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // USD₮0
+            "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", // DAI
+        ],
+        Chain::Op => &[
+            "0x0b2c639c533813f4aa9d7837caf62653d097ff85", // USDC
+            "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", // USDT
+            "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", // DAI
+        ],
+        Chain::Poly => &[
+            "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", // USDC (native)
+            "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", // USDC.e
+            "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT
+            "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063", // DAI
+        ],
         Chain::Bsc => &[
             "0x55d398326f99059ff775485246999027b3197955", // USDT
             "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", // USDC
@@ -52,7 +129,29 @@ fn stable_addr(chain: Chain, token: Address) -> bool {
             "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3", // DAI
             "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d", // USD1
         ],
-        _ => &[],
+        Chain::Avax => &[
+            "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // USDC
+            "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", // USDT
+            "0xd586e7f844cea2f87f50152665bcbc2c279d8d70", // DAI.e
+        ],
+        Chain::Base => &[
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", // USDC
+            "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT
+            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb", // DAI
+        ],
+        Chain::Linea => &[
+            "0x176211869ca2b568f2a7d4ee941e073a821ee1ff", // USDC
+            "0xa219439258ca9da29e9cc4ce5596924745e12b93", // USDT
+            "0x4af15ec2a0bd43db75dd04e62faa3b8ef36b00d5", // DAI
+        ],
+        Chain::Scroll => &[
+            "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4", // USDC
+            "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", // USDT
+            "0xca77eb3fefe3725dc33bccb54edefc3d9f764f97", // DAI
+        ],
+        Chain::Blast => &[
+            "0x4300000000000000000000000000000000000003", // USDB (native, rebasing)
+        ],
     };
     list.iter().any(|a| *a == t)
 }
@@ -71,6 +170,24 @@ async fn eth_call(rpc: &str, to: Address, data: Bytes) -> Result<Bytes> {
     Ok(Bytes::from(
         alloy::primitives::hex::decode(s.trim_start_matches("0x")).unwrap_or_default(),
     ))
+}
+
+/// On-chain verification for a flash provider candidate:
+/// Aave V3 → `getReservesList()` returns a non-empty array.
+/// Balancer V2 → `getProtocolFeesCollector()` returns an address (only the
+/// real Vault exposes it).
+/// Morpho → `owner()` returns an address (Morpho Blue is owned).
+async fn verify_provider(rpc: &str, addr: Address, kind: u64) -> bool {
+    let probe: &[u8] = match kind {
+        KIND_AAVE_V3 => &keccak256(b"getReservesList()")[..4],
+        KIND_BALANCER_V2 => &keccak256(b"getProtocolFeesCollector()")[..4],
+        KIND_MORPHO => &keccak256(b"owner()")[..4],
+        _ => return false,
+    };
+    match eth_call(rpc, addr, Bytes::from(probe.to_vec())).await {
+        Ok(out) => out.len() >= 32 && out.iter().any(|b| *b != 0),
+        Err(_) => false,
+    }
 }
 
 async fn erc20_decimals(rpc: &str, token: Address) -> Result<u8> {
@@ -138,23 +255,33 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
         anyhow::bail!("zero amountIn");
     }
 
-    // Flash funding: verify the Aave V3 pool on-chain (getReservesList
-    // must return a non-empty dynamic array) before trusting it.
-    let pool_addr: Address = aave_v3_pool(chain)
-        .ok_or_else(|| anyhow::anyhow!("no flash provider for {}", chain.name()))?
-        .parse()?;
-    let sel = &keccak256(b"getReservesList()")[..4];
-    let reserves = eth_call(&rpc, pool_addr, Bytes::from(sel.to_vec())).await?;
-    if reserves.len() < 96 {
-        anyhow::bail!("aave pool {pool_addr:?} failed verification");
+    // Flash funding: walk the provider list cheapest-first (Balancer V2 /
+    // Morpho = 0% premium, Aave = 0.05%) and use the first that verifies
+    // on-chain. Every address is a candidate until the probe passes.
+    let providers = flash_providers(chain);
+    if providers.is_empty() {
+        anyhow::bail!("no flash provider for {}", chain.name());
     }
+    let mut chosen: Option<(Address, u64)> = None;
+    for (addr_str, kind) in providers {
+        let addr: Address = match addr_str.parse() {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        if verify_provider(&rpc, addr, *kind).await {
+            chosen = Some((addr, *kind));
+            break;
+        }
+    }
+    let (pool_addr, kind) = chosen
+        .ok_or_else(|| anyhow::anyhow!("no verified flash provider on {}", chain.name()))?;
 
     let encoded = calldata::encode_execute_full(
         &req.signal,
         amount_in,
         min_profit,
         pool_addr,
-        Bytes::from(U256::from(1u64).to_be_bytes::<32>().to_vec()), // FlashKind::AAVE_V3
+        Bytes::from(U256::from(kind).to_be_bytes::<32>().to_vec()),
     )?;
     let inner = aa::kernel_execute_calldata(executor, U256::ZERO, Bytes::from(encoded));
     let pim = aa::PimlicoClient::new(

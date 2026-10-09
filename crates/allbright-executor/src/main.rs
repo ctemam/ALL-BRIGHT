@@ -9,9 +9,7 @@
 //! This module is an independent implementation and does not copy
 //! proprietary source code.
 
-mod aa;
-mod calldata;
-mod relay;
+use allbright_executor::{aa, calldata, relay};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -60,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
         let settled = settled_profit.clone();
         let sub = submitted.clone();
         let inc = included.clone();
+        let pimlico_feed = pimlico.clone();
         tokio::spawn(async move {
             loop {
                 let mut cli = BusClient::connect_retry(&solver_addr).await;
@@ -69,8 +68,58 @@ async fn main() -> anyhow::Result<()> {
                         match res.status {
                             ExecStatus::Submitted => {
                                 sub.fetch_add(1, Ordering::Relaxed);
+                                // Track the UserOp to inclusion — profit only
+                                // accrues on a confirmed on-chain result.
+                                if let (Some(hash), Some(pim)) =
+                                    (res.tx_hash.clone(), pimlico_feed.clone())
+                                {
+                                    let settled = settled.clone();
+                                    let inc2 = inc.clone();
+                                    let bus2 = bus.clone();
+                                    let chain = res.chain;
+                                    let expected = res.realized_profit_usd;
+                                    tokio::spawn(async move {
+                                        for _ in 0..40 {
+                                            tokio::time::sleep(
+                                                std::time::Duration::from_secs(5),
+                                            )
+                                            .await;
+                                            match pim
+                                                .user_op_outcome(chain.name(), &hash)
+                                                .await
+                                            {
+                                                Ok((true, true)) => {
+                                                    inc2.fetch_add(1, Ordering::Relaxed);
+                                                    settled.fetch_add(
+                                                        (expected.max(0.0) * 1e6) as u64,
+                                                        Ordering::Relaxed,
+                                                    );
+                                                    tracing::info!(%hash, "userop included");
+                                                    let _ = bus2.publish(&Event::ExecResult(
+                                                        ExecutionResult {
+                                                            chain,
+                                                            status: ExecStatus::Included,
+                                                            tx_hash: Some(hash.clone()),
+                                                            realized_profit_usd: expected,
+                                                            gas_used: 0,
+                                                            detail: "userop included".into(),
+                                                            ts_ms: now_ms(),
+                                                        },
+                                                    ));
+                                                    return;
+                                                }
+                                                Ok((true, false)) => {
+                                                    tracing::warn!(%hash, "userop failed on-chain");
+                                                    return;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        tracing::warn!(%hash, "userop outcome unknown after 200s");
+                                    });
+                                }
                             }
-                            ExecStatus::Included | ExecStatus::Simulated => {
+                            ExecStatus::Included => {
                                 inc.fetch_add(1, Ordering::Relaxed);
                                 settled.fetch_add(
                                     (res.realized_profit_usd.max(0.0) * 1e6) as u64,
@@ -117,6 +166,10 @@ async fn main() -> anyhow::Result<()> {
                         {
                             Ok(_) => {
                                 last_swept = settled.load(Ordering::Relaxed);
+                                tracing::warn!(
+                                    "EUREKA — profit sweep submitted: ${pending:.2} → {}",
+                                    cfg.profit_wallet
+                                );
                             }
                             Err(e) => {
                                 tracing::warn!("gasless sweep failed: {e}");

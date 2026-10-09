@@ -39,6 +39,28 @@ interface IDodoPool {
     function flashLoan(uint256 baseAmount, uint256 quoteAmount, address assetTo, bytes calldata data) external;
 }
 
+/// Balancer V2 Vault — 0% flash-loan fee. Same Vault address on every
+/// chain Balancer is deployed to (0xBA12…F2C8).
+interface IBalancerVault {
+    function flashLoan(address recipient, address[] memory tokens, uint256[] memory amounts, bytes memory userData) external;
+}
+
+/// Morpho Blue — 0% flash-loan fee. Deployed on Eth/Base/BSC among others.
+interface IMorpho {
+    function flashLoan(address token, uint256 assets, bytes calldata data) external;
+}
+
+/// Uniswap V3-style pool flash — fee equals the pool's fee tier.
+interface IUniswapV3FlashPool {
+    function token0() external view returns (address);
+    function flash(address recipient, uint256 amount0, uint256 amount1, bytes calldata data) external;
+}
+
+/// EIP-3156 flash lender (e.g. MakerDAO FlashMint — 0% fee, DAI on Eth).
+interface IERC3156FlashLender {
+    function flashLoan(address receiver, address token, uint256 amount, bytes calldata data) external returns (bool);
+}
+
 contract AllbrightExecutor {
     struct RouteLeg {
         address pool;
@@ -48,7 +70,7 @@ contract AllbrightExecutor {
         uint24 fee;     // V3 fee tier (V2: fee_bps convention handled off-chain)
     }
 
-    enum FlashKind { NONE, AAVE_V3, DODO }
+    enum FlashKind { NONE, AAVE_V3, DODO, BALANCER_V2, MORPHO, UNIV3_FLASH, ERC3156 }
 
     address public immutable owner;
     bool public paused;
@@ -118,6 +140,30 @@ contract AllbrightExecutor {
             IDodoPool(flashProvider).flashLoan(
                 baseAmt, quoteAmt, address(this), abi.encode(legs, minProfit, amountIn)
             );
+        } else if (kind == FlashKind.BALANCER_V2) {
+            address[] memory t = new address[](1);
+            uint256[] memory a = new uint256[](1);
+            t[0] = legs[0].tokenIn;
+            a[0] = amountIn;
+            IBalancerVault(flashProvider).flashLoan(
+                address(this), t, a, abi.encode(legs, minProfit)
+            );
+        } else if (kind == FlashKind.MORPHO) {
+            IMorpho(flashProvider).flashLoan(
+                legs[0].tokenIn, amountIn, abi.encode(legs, minProfit)
+            );
+        } else if (kind == FlashKind.UNIV3_FLASH) {
+            bool t0 = legs[0].tokenIn == IUniswapV3FlashPool(flashProvider).token0();
+            IUniswapV3FlashPool(flashProvider).flash(
+                address(this),
+                t0 ? amountIn : 0,
+                t0 ? 0 : amountIn,
+                abi.encode(legs, minProfit, amountIn)
+            );
+        } else if (kind == FlashKind.ERC3156) {
+            IERC3156FlashLender(flashProvider).flashLoan(
+                address(this), legs[0].tokenIn, amountIn, abi.encode(legs, minProfit)
+            );
         } else {
             revert("bad flash kind");
         }
@@ -150,6 +196,56 @@ contract AllbrightExecutor {
             abi.decode(data, (RouteLeg[], uint256, uint256));
         _runRoute(legs, borrowed, minProfit);
         IERC20(legs[0].tokenIn).transfer(msg.sender, borrowed);
+    }
+
+    /// Balancer V2 callback — 0% fee today; feeAmounts handled anyway.
+    /// Repay by transferring amount + fee back to the Vault.
+    function receiveFlashLoan(
+        address[] memory tokens,
+        uint256[] memory amounts,
+        uint256[] memory feeAmounts,
+        bytes memory userData
+    ) external {
+        (RouteLeg[] memory legs, uint256 minProfit) =
+            abi.decode(userData, (RouteLeg[], uint256));
+        _runRoute(legs, amounts[0], minProfit + feeAmounts[0]);
+        IERC20(tokens[0]).transfer(msg.sender, amounts[0] + feeAmounts[0]);
+    }
+
+    /// Morpho Blue callback — 0% fee; Morpho pulls repayment via
+    /// transferFrom after this returns, so approve it here.
+    function onMorphoFlashLoan(uint256 assets, bytes calldata data) external {
+        (RouteLeg[] memory legs, uint256 minProfit) =
+            abi.decode(data, (RouteLeg[], uint256));
+        _runRoute(legs, assets, minProfit);
+        IERC20(legs[0].tokenIn).approve(msg.sender, assets);
+    }
+
+    /// Uniswap V3 pool flash callback — fee = pool fee tier.
+    /// data = abi.encode(legs, minProfit, borrowedAmount).
+    function uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes calldata data) external {
+        (RouteLeg[] memory legs, uint256 minProfit, uint256 borrowed) =
+            abi.decode(data, (RouteLeg[], uint256, uint256));
+        uint256 fee = fee0 > 0 ? fee0 : fee1;
+        _runRoute(legs, borrowed, minProfit + fee);
+        IERC20(legs[0].tokenIn).transfer(msg.sender, borrowed + fee);
+    }
+
+    /// EIP-3156 callback (MakerDAO FlashMint et al.) — lender pulls
+    /// repayment via transferFrom; approve amount + fee.
+    function onFlashLoan(
+        address initiator,
+        address token,
+        uint256 amount,
+        uint256 fee,
+        bytes calldata data
+    ) external returns (bytes32) {
+        require(initiator == address(this), "bad initiator");
+        (RouteLeg[] memory legs, uint256 minProfit) =
+            abi.decode(data, (RouteLeg[], uint256));
+        _runRoute(legs, amount, minProfit + fee);
+        IERC20(token).approve(msg.sender, amount + fee);
+        return keccak256("ERC3156FlashBorrower.onFlashLoan");
     }
 
     /// Run swap legs; revert unless final balance of legs[0].tokenIn

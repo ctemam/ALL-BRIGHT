@@ -31,6 +31,20 @@ pub const ECDSA_VALIDATOR: &str = "0x845ADb2C711129d4f3966735eD98a9F09fC4cE57";
 #[allow(dead_code)]
 pub const KERNEL_IMPL: &str = "0xBAC849bB641841b44E965fB01A4Bf5F074f84b4D";
 
+/// Deterministic-deployment proxy (CREATE2 deployer) — bytecode verified
+/// present on all 10 enabled chains on 2026-10-08. Calling it with
+/// `salt(32) ‖ initcode` deploys at a predictable address.
+pub const CREATE2_PROXY: &str = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
+
+/// Predicted CREATE2 address for `initcode` deployed through the proxy.
+pub fn create2_address(salt: B256, initcode: &[u8]) -> Address {
+    let mut p = vec![0xffu8];
+    p.extend_from_slice(CREATE2_PROXY.parse::<Address>().unwrap().as_slice());
+    p.extend_from_slice(salt.as_slice());
+    p.extend_from_slice(&keccak256(initcode)[..]);
+    Address::from_slice(&keccak256(p)[12..])
+}
+
 sol! {
     interface IKernelFactory {
         function getAddress(bytes data, bytes32 salt) external view returns (address);
@@ -423,6 +437,51 @@ impl PimlicoClient {
             .rpc(chain, "eth_sendUserOperation", json!([final_op, ENTRYPOINT_V07]))
             .await?;
         Ok(res.as_str().unwrap_or_default().to_string())
+    }
+
+    /// Poll the bundler for a UserOp receipt; returns
+    /// (included, success) — `included=false` until the op lands.
+    pub async fn user_op_outcome(&self, chain_key: &str, user_op_hash: &str) -> Result<(bool, bool)> {
+        let chain = pimlico_chain(chain_key);
+        let v = self
+            .rpc(chain, "pimlico_getUserOperationStatus", json!([user_op_hash]))
+            .await?;
+        // statuses: not_found | submitted | included | failed | rejected
+        let status = v["status"].as_str().unwrap_or("not_found");
+        Ok(match status {
+            "included" => (true, true),
+            "failed" | "rejected" | "reverted" => (true, false),
+            _ => (false, false),
+        })
+    }
+
+    /// Gasless contract deployment: the Kernel smart account calls the
+    /// CREATE2 proxy inside a Pimlico-sponsored UserOp — zero native gas
+    /// required on any chain. Returns (predicted address, op result).
+    /// `initcode` must already include constructor args.
+    pub async fn deploy_via_sponsored_userop(
+        &self,
+        chain_key: &str,
+        chain_id: u64,
+        rpc_url: &str,
+        owner: &PrivateKeySigner,
+        initcode: Bytes,
+        dry_run: bool,
+    ) -> Result<(Address, String)> {
+        let salt = B256::ZERO;
+        let predicted = create2_address(salt, &initcode);
+        let mut proxy_data = Vec::with_capacity(32 + initcode.len());
+        proxy_data.extend_from_slice(salt.as_slice());
+        proxy_data.extend_from_slice(&initcode);
+        let call = kernel_execute_calldata(
+            CREATE2_PROXY.parse()?,
+            U256::ZERO,
+            Bytes::from(proxy_data),
+        );
+        let res = self
+            .sponsored_user_op(chain_key, chain_id, rpc_url, owner, call, dry_run)
+            .await?;
+        Ok((predicted, res))
     }
 
     /// Gasless profit sweep: smart account calls
