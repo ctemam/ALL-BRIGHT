@@ -1833,7 +1833,147 @@ INFRASTRUCTURE → REPORTS → COMPETITIVE ANALYSIS → WALLET` with
 `Time → Chain → Strategy Variant → P&L → Visualization → Transaction
 Evidence` navigable without leaving the Profit page.
 
-## 39. FINAL ENGINEERING PRINCIPLE
+## 39. MANDATORY GOVERNANCE, ARCHITECTURAL INTEGRITY & END-TO-END INTEGRATION
+
+**Commander directive — mandatory.** This section governs *how* every
+agent works on Allbright, not merely *what* it builds. It supersedes any
+inferred, remembered, or generic coding-agent workflow. Violations are
+architectural defects, not style issues.
+
+### 39.1 Governing documents are binding
+
+Before any work session, read the **actual current repository versions**
+of `AGENTS.md`, `.devin/skills/allbright-engineering/SKILL.md`,
+`MASTER_BUILD_GUIDE.md`, and applicable integration specs and audit
+reports. Do not substitute remembered instructions, summaries, or
+assumptions. Authority order: **MASTER_BUILD_GUIDE governs product scope
+and approved architecture → AGENTS.md governs agent governance and
+enforcement → SKILL.md governs execution methodology.** If a document is
+missing, outdated, contradictory, or inaccessible, report the precise
+issue — never invent its contents. Never weaken or silently reinterpret
+a governing requirement.
+
+### 39.2 Baseline before change
+
+No substantive change begins without a current-state audit of the
+**actual implementation** — not filenames or documentation claims.
+The audit must identify: implemented capabilities, partial
+implementations, disconnected components, missing integrations, broken
+imports/routes/interfaces/event flows, duplicate subsystems, mock or
+unverified data in production paths, failing tests, configuration
+drift, and security or economic-integrity risks — each with supporting
+evidence.
+
+### 39.3 The integrated economic engine
+
+Allbright is one pipeline, and every stage must have a named owner, a
+defined input/output, a connecting interface or event, an output
+validator, a failure path, and evidence the connection works:
+
+```
+MARKET OBSERVATION → DATA INGESTION AND VALIDATION
+→ OPPORTUNITY DISCOVERY → ECONOMIC QUALIFICATION
+→ STRATEGY SELECTION → SIMULATION → RISK AND SECURITY CONTROLS
+→ EXECUTION AUTHORIZATION → TRANSACTION CONSTRUCTION AND SIGNING
+→ SUBMISSION AND BLOCKCHAIN CONFIRMATION → SETTLEMENT
+→ REALIZED-PROFIT RECONCILIATION → SMART-WALLET ACCOUNTING
+→ AUTHORIZED COMMANDER-WALLET TRANSFER → LEARNING AND OPTIMIZATION
+```
+
+A feature is not integrated merely because its screen, API, module, or
+function exists. A stage with no downstream connection, or an upstream
+stage that never produces its input, is a documented gap — not a
+completed feature.
+
+### 39.4 Requirement traceability matrix
+
+Approved Master Build requirements are tracked with explicit statuses:
+`NOT INSPECTED / MISSING / PRESENT / CONNECTED / WIRED / VERIFIED /
+OPERATIONAL / ECONOMICALLY VALIDATED`. Status may only be promoted on
+evidence. Every requirement is accounted for even when deferred or
+blocked. Each entry records: requirement reference, intended outcome,
+owning component, dependencies, integration points, current status,
+gap, planned correction, acceptance test, and verification evidence.
+
+### 39.5 No superficial completion — prohibited acts
+
+- Dashboard page without authoritative data wiring.
+- Control without its implemented and tested action.
+- Success status displayed for an unverified operation.
+- A second subsystem when an existing component should be repaired or
+  extended.
+- A simpler replacement that breaks architectural compatibility.
+- Mock data anywhere in a production path.
+- Claims of execution, settlement, profit, or wallet transfer without
+  evidence.
+- Treating a successful build as proof of end-to-end correctness.
+- Marking unfinished integration complete because the UI looks polished.
+
+Missing integration is exposed and documented, then implemented only
+through the approved architecture.
+
+### 39.6 Approval gates
+
+Until the current-state audit, traceability matrix, risks, and proposed
+plan are presented and approved, make no substantive code changes.
+The plan states: what changes and why; which governing requirements it
+satisfies; which components are reused; which interfaces change; risks
+introduced; regression prevention; how success is measured. Implement
+the smallest coherent change satisfying the requirement. If
+implementation reveals a material architectural conflict or scope
+change, stop the affected work and seek a decision — never expand
+silently.
+
+### 39.7 Mandatory verification along the whole path
+
+Verification follows the entire affected path, not the modified
+component: static analysis, unit, integration, interface-compatibility,
+event/data-flow, failure-path, end-to-end, regression, runtime-health,
+deployment, and economic reconciliation checks as applicable. On-chain
+paths distinguish **simulation / submission / inclusion / confirmation /
+verified settlement** as separate states. Financial paths distinguish
+**expected profit / realized net profit / smart-wallet balance change /
+confirmed Commander-wallet transfer**. Displayed metrics must have a
+traceable source and a freshness indicator. Never claim a test that was
+not run.
+
+### 39.8 Change control order
+
+Before adding a module, service, registry, event stream, or dependency,
+search for an existing implementation. Preference order: **(1) reuse,
+(2) repair, (3) extend the interface compatibly, (4) refactor with
+approval, (5) introduce new only when a documented gap requires it.**
+Preserve unrelated working behavior. Never delete, overwrite, or bypass
+security controls to make a test pass. Record material architecture,
+schema, API, dependency, and configuration changes.
+
+### 39.9 Reporting standard
+
+Correction is demonstrated through deliverables, not promises.
+Pre-implementation report: documents inspected, baseline, mapped
+requirements, gaps, risks, proposed changes, approval required.
+Post-implementation report: requirements completed, components and
+interfaces changed, tests actually run with results, end-to-end behavior
+verified, security/failure paths checked, deployment status,
+remaining defects, evidence references. Concise, specific, auditable.
+
+### 39.10 Definition of completion
+
+A task is complete only when: the approved requirement is satisfied;
+the implementation matches governing architecture; dependencies and
+integration points are connected; relevant tests pass; end-to-end
+behavior is verified to the extent claimed; security and failure
+behavior checked; no unaddressed regressions; telemetry supports the
+claim; traceability updated; limitations disclosed. Otherwise report
+**PARTIAL, BLOCKED, or FAILED** — never silent completion.
+
+### 39.11 Standing directive
+
+> **Do not optimize for the appearance of progress. Optimize for
+> verified architectural integrity, integrated capability, security,
+> economic correctness, and measurable results.**
+
+## 40. FINAL ENGINEERING PRINCIPLE
 
 Allbright is not a collection of bots. It is a coordinated arbitrage intelligence and execution platform:
 

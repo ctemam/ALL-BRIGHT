@@ -909,7 +909,84 @@ small size; placed top-left of header and footer-center. Motto
 from the logo. Footer identity: `AllBright DeFi Software Engineering
 Ltd. © 2026`.
 
-## 36. FINAL MINDSET
+## 36. GOVERNANCE & INTEGRATION DISCIPLINE — OPERATING PROCEDURE
+
+Operationalizes AGENTS.md §39 (mandatory). This is the required working
+method for every Allbright task — it overrides generic coding-agent
+habit.
+
+### 36.1 Session start
+
+1. Read the current `AGENTS.md`, this `SKILL.md`,
+   `MASTER_BUILD_GUIDE.md`, and any spec touched by the task — the files
+   on disk, not memory of them.
+2. Resolve conflicts by authority order: MASTER_BUILD (scope/architecture)
+   → AGENTS.md (governance) → SKILL.md (method). Report missing or
+   contradictory documents precisely; never invent contents.
+
+### 36.2 Baseline audit before change
+
+Before implementing, inspect the real implementation and running system.
+Answer with evidence:
+
+- Which capabilities are implemented, partial, disconnected, or missing?
+- Are there broken routes/imports/event flows, duplicate subsystems,
+  mock/static data in production paths, failing tests, config drift?
+- For each stage of the integrated pipeline (AGENTS §39.3): owner,
+  input, output, connecting event/interface, output validation,
+  failure path, and the evidence the connection works.
+
+A screen, endpoint, or module existing is not integration.
+
+### 36.3 Traceability
+
+Maintain the requirement traceability matrix. Statuses:
+`NOT INSPECTED / MISSING / PRESENT / CONNECTED / WIRED / VERIFIED /
+OPERATIONAL / ECONOMICALLY VALIDATED` — promoted only on evidence.
+Every approved requirement is accounted for, including deferred ones.
+
+### 36.4 Approval gate
+
+Present the audit, matrix, risks, and plan before substantive changes.
+Plan contents: what changes and why; governing requirements satisfied;
+components reused; interfaces changed; risks; regression prevention;
+success measure. Implement the smallest coherent change. On a material
+architectural conflict or scope expansion — stop and escalate.
+
+### 36.5 Change order
+
+Search for existing implementation first. Prefer: **reuse → repair →
+extend compatibly → refactor (approved) → new component only on a
+documented gap.** Never bypass security controls to make tests pass.
+Record schema/API/dependency/config changes.
+
+### 36.6 Verification along the whole path
+
+Verify the entire affected path, not the edited component: static
+checks, unit/integration/failure-path/E2E/regression tests, runtime
+health, deployment verification, economic reconciliation. On-chain
+claims distinguish `simulation → submission → inclusion → confirmation →
+settlement`. Financial claims distinguish `expected → realized net →
+wallet balance change → confirmed Commander transfer`. Dashboard metrics
+require a traceable source and freshness indicator. Never fabricate a
+test result.
+
+### 36.7 Reporting
+
+Pre-implementation: documents read, baseline, mapped requirements, gaps,
+risks, plan, approval needed. Post-implementation: what changed, tests
+run + results, end-to-end verification, security/failure checks,
+deployment status, remaining defects, evidence references.
+
+### 36.8 Completion definition
+
+Complete means: requirement satisfied, architecture aligned, integration
+points connected, tests pass, behavior verified to the extent claimed,
+failure behavior checked, no unaddressed regressions, telemetry supports
+the claim, traceability updated, limitations disclosed. Otherwise report
+`PARTIAL`, `BLOCKED`, or `FAILED` — never silent or cosmetic completion.
+
+## 37. FINAL MINDSET
 
 Every change must answer: *does this increase Allbright's ability to detect, verify, simulate, execute and learn from profitable opportunities under real multi-chain conditions?*
 
