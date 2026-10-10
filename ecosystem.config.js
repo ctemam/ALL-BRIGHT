@@ -77,14 +77,31 @@ module.exports = {
             // RPC discovery/qualification worker (AGENTS §36/§37) —
             // sole writer of rpc_registry.json; sweeps every 30 min.
             name: "allbright-rpc-scout",
+            // ~365 concurrent TLS probes spike RSS transiently — PM2
+            // SIGINTs on cap breach ~4s post-sweep (kill→sweep→kill loop,
+            // pm2.log: "exited with code [0] via signal [SIGINT]"). 256M
+            // looped ↺76; the spike exceeded even 1G under load.
+            max_memory_restart: "4G",
             script: `${BIN}/allbright-rpc-scout.exe`,
             interpreter: "none",
             autorestart: true,
-            max_memory_restart: "256M",
             env: {
                 RUST_LOG: "info,allbright=info",
                 RPC_SCOUT_INTERVAL_SECS: "1800",
             },
+        },
+        {
+            // Pool curator (AGENTS §28/§34.0): scheduled system job —
+            // daily depth-aware registry refresh + coverage audit, then
+            // a bounded ingest restart ONLY if pools.json changed. Makes
+            // universe maintenance a system capability, not agent work.
+            name: "allbright-pool-curator",
+            script: "tools/pool_curator.py",
+            interpreter: "python",
+            cwd: "D:/Allbright",
+            autorestart: false,
+            cron_restart: "0 5 * * *",
+            env: {},
         },
         {
             name: "allbright-dashboard",

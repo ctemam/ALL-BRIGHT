@@ -10,7 +10,7 @@ use allbright_core::events::{now_ms, CexTick, Event};
 use allbright_core::lineage::{Component, FailureClass, FailureEvent};
 
 // Majors for all configured chains' native assets → USD pricing.
-const SYMBOLS: [&str; 5] = ["btcusdt", "ethusdt", "bnbusdt", "maticusdt", "avaxusdt"];
+const SYMBOLS: [&str; 5] = ["btcusdt", "ethusdt", "bnbusdt", "polusdt", "avaxusdt"];
 
 #[derive(Deserialize)]
 struct Combined {
@@ -53,7 +53,21 @@ async fn run_once(url: &str, tx: &mpsc::Sender<Event>) -> anyhow::Result<()> {
     tracing::info!("binance bookTicker connected");
     let (_, mut stream) = ws.split();
 
-    while let Some(msg) = stream.next().await {
+    // A half-dead TCP socket can sit connected-but-silent forever —
+    // observed live: "connected" logged, zero ticks reached the bus for
+    // hours → every chain priced gas at the ETH fallback. 60 s without a
+    // message on a 5-symbol bookTicker means the stream is dead.
+    loop {
+        let msg = match tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            stream.next(),
+        )
+        .await
+        {
+            Ok(Some(m)) => m,
+            Ok(None) => break,
+            Err(_) => anyhow::bail!("binance stream silent 60s"),
+        };
         match msg {
             Ok(Message::Text(t)) => {
                 if let Ok(c) = serde_json::from_str::<Combined>(&t) {

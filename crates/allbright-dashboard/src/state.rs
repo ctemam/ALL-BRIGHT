@@ -55,6 +55,16 @@ pub fn variant_of(kind: &OppKind, route: &[SwapLeg]) -> &'static str {
     }
 }
 
+/// Resolve strategy attribution: the wire `strategy` field is authoritative;
+/// fall back to the route-shape heuristic only for records predating it.
+fn strat_of<'a>(explicit: &'a str, kind: &OppKind, route: &[SwapLeg]) -> String {
+    if explicit.is_empty() {
+        variant_of(kind, route).to_string()
+    } else {
+        explicit.to_string()
+    }
+}
+
 /// One normalized index row — compact, self-describing, journaled as
 /// JSONL. `t` is the row type tag.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +86,9 @@ pub enum IdxRow {
     Exec {
         ts: u64,
         chain: String,
+        /// Strategy attribution — empty on pre-strategy records.
+        #[serde(default)]
+        variant: String,
         status: String,
         tx_hash: Option<String>,
         realized_usd: f64,
@@ -152,7 +165,7 @@ pub fn row_of(ev: &Event) -> Option<IdxRow> {
         Event::Opportunity(o) => IdxRow::Opp {
             ts: o.ts_ms,
             chain: o.chain.name().to_string(),
-            variant: variant_of(&o.kind, &o.route).to_string(),
+            variant: strat_of(&o.strategy, &o.kind, &o.route),
             expected_usd: o.expected_profit_usd,
             legs: o.route.len(),
             input_token: o.input_token.clone(),
@@ -161,6 +174,7 @@ pub fn row_of(ev: &Event) -> Option<IdxRow> {
         Event::ExecResult(r) => IdxRow::Exec {
             ts: r.ts_ms,
             chain: r.chain.name().to_string(),
+            variant: r.strategy.clone(),
             status: format!("{:?}", r.status),
             tx_hash: r.tx_hash.clone(),
             realized_usd: r.realized_profit_usd,
@@ -170,7 +184,7 @@ pub fn row_of(ev: &Event) -> Option<IdxRow> {
         Event::ExecRequest(q) => IdxRow::ExecReq {
             ts: q.ts_ms,
             chain: q.signal.chain.name().to_string(),
-            variant: variant_of(&q.signal.kind, &q.signal.route).to_string(),
+            variant: strat_of(&q.signal.strategy, &q.signal.kind, &q.signal.route),
             expected_usd: q.signal.expected_profit_usd,
             executor: q.executor_address.clone(),
             dry_run: q.dry_run,
@@ -178,7 +192,7 @@ pub fn row_of(ev: &Event) -> Option<IdxRow> {
         Event::Rejected(r) => IdxRow::Rej {
             ts: r.ts_ms,
             chain: r.chain.name().to_string(),
-            variant: variant_of(&r.kind, &r.route).to_string(),
+            variant: strat_of(&r.strategy, &r.kind, &r.route),
             reason: format!("{:?}", r.reason),
             gross_usd: r.gross_usd,
             threshold_usd: r.threshold_usd,

@@ -494,6 +494,7 @@ impl PimlicoClient {
         cfg: &Config,
         pending_usd: f64,
         _marker: u64,
+        to: &str,
     ) -> Result<()> {
         let Some(key) = cfg.signing_key() else {
             tracing::warn!("sweep: PRIVATE_KEY unset");
@@ -512,7 +513,7 @@ impl PimlicoClient {
             anyhow::bail!("sweep: no RPC for {}", chain.name());
         };
         let executor_addr: Address = executor.parse()?;
-        let profit_wallet: Address = cfg.profit_wallet.parse()?;
+        let profit_wallet: Address = to.parse()?;
         let signer: PrivateKeySigner = key.parse()?;
 
         let sweep = IAllbrightExecutor::sweepNativeCall { to: profit_wallet }
@@ -521,7 +522,8 @@ impl PimlicoClient {
         let res = self
             .sponsored_user_op(chain.name(), chain.chain_id(), &rpc, &signer, call, false)
             .await?;
-        tracing::info!(chain = %chain.name(), pending_usd, userop = %res, "gasless sweep submitted");
+        tracing::info!(chain = %chain.name(), pending_usd, dest = %to, userop = %res,
+            "gasless sweep submitted");
         Ok(())
     }
 }

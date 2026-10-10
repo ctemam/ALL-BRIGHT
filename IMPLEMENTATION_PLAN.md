@@ -371,3 +371,18 @@ a hard ceiling for competitive block-level MEV.
 - Research aggregates `observed_universe`, per-reason rejections,
   `challenged` count, `rescued_usd`; dashboard surfaces failures,
   observed universe, and last verdict.
+
+## Blueprint gap register (audit 2026-10-10)
+
+Authoritative register: AGENTS.md Appendix B. Five tracked gaps:
+
+| ID | Gap | Economic cost | Closure |
+|---|---|---|---|
+| GAP-1 | No EVM-level simulation | 13,028 failed execs, 0 inclusions (bait class) | `eth_call` dry-run gate → revm |
+| GAP-2 | Shallow pool registry | Challenger max ~$0.03 net — dust ceiling | Depth-aware re-fetch, on-chain verify |
+| GAP-3 | Block-cadence ingestion | Seconds-scale state staleness | WSS Swap/Sync log subs |
+| GAP-4 | Flashbots submit stub | Fabricated hash risk | Real bundle or fail-closed |
+| GAP-5 | UniV3-flash + ERC-3156 unused | Two 0% providers dead | Wire into provider selection |
+
+Build order: **GAP-2 → GAP-1 → GAP-4 → GAP-3 → GAP-5** (coverage → truth
+→ honesty → speed → capacity).

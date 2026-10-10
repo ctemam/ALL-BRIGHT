@@ -34,6 +34,8 @@ pub async fn submit(cfg: &Config, req: &ExecutionRequest, _calldata: &[u8]) -> R
 const KIND_AAVE_V3: u64 = 1;
 const KIND_BALANCER_V2: u64 = 3;
 const KIND_MORPHO: u64 = 4;
+const KIND_UNIV3_FLASH: u64 = 5;
+const KIND_ERC3156: u64 = 6;
 
 /// Flash-loan provider candidates per chain, ordered cheapest-first
 /// (Balancer V2 and Morpho charge 0% premium; Aave charges 0.05%).
@@ -172,6 +174,40 @@ async fn eth_call(rpc: &str, to: Address, data: Bytes) -> Result<Bytes> {
     ))
 }
 
+/// `eth_call` with a spoofed `from` — used by the EVM dry-run gate
+/// (GAP-1). Two failure classes are distinguished: `Evm` = the node
+/// executed the call and it failed/reverted (the tx would fail
+/// identically on-chain — always gates); `Transport` = HTTP/JSON
+/// failure (node unreachable — retries, then inconclusive).
+enum DryRunErr {
+    Evm(String),
+    Transport(anyhow::Error),
+}
+
+async fn eth_call_from(rpc: &str, from: Address, to: Address, data: Bytes) -> std::result::Result<Bytes, DryRunErr> {
+    let client = reqwest::Client::new();
+    let v: serde_json::Value = client
+        .post(rpc)
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"eth_call",
+            "params":[{"from":format!("{from:?}"),"to":format!("{to:?}"),
+                "data":format!("0x{}",alloy::primitives::hex::encode(&data))},"latest"]}))
+        .send()
+        .await
+        .map_err(|e| DryRunErr::Transport(e.into()))?
+        .json()
+        .await
+        .map_err(|e| DryRunErr::Transport(e.into()))?;
+    if let Some(err) = v.get("error") {
+        let msg = err["message"].as_str().unwrap_or("evm error");
+        let data = err["data"].as_str().unwrap_or_default();
+        return Err(DryRunErr::Evm(format!("{msg} {data}")));
+    }
+    let s = v["result"].as_str().unwrap_or("0x");
+    Ok(Bytes::from(
+        alloy::primitives::hex::decode(s.trim_start_matches("0x")).unwrap_or_default(),
+    ))
+}
+
 /// On-chain verification for a flash provider candidate:
 /// Aave V3 → `getReservesList()` returns a non-empty array.
 /// Balancer V2 → `getProtocolFeesCollector()` returns an address (only the
@@ -188,6 +224,101 @@ async fn verify_provider(rpc: &str, addr: Address, kind: u64) -> bool {
         Ok(out) => out.len() >= 32 && out.iter().any(|b| *b != 0),
         Err(_) => false,
     }
+}
+
+fn addr_from_ret(b: &Bytes) -> Option<Address> {
+    if b.len() < 32 {
+        return None;
+    }
+    Some(Address::from_slice(&b[12..32]))
+}
+
+fn u256_from_ret(b: &Bytes) -> Option<U256> {
+    if b.len() < 32 {
+        return None;
+    }
+    Some(U256::from_be_slice(&b[..32]))
+}
+
+async fn erc20_balance_of(rpc: &str, token: Address, holder: Address) -> Option<U256> {
+    let mut d = keccak256(b"balanceOf(address)")[..4].to_vec();
+    d.extend_from_slice(&[0u8; 12]);
+    d.extend_from_slice(holder.as_slice());
+    u256_from_ret(&eth_call(rpc, token, Bytes::from(d)).await.ok()?)
+}
+
+async fn max_flash_loan(rpc: &str, lender: Address, token: Address) -> Option<U256> {
+    let mut d = keccak256(b"maxFlashLoan(address)")[..4].to_vec();
+    d.extend_from_slice(&[0u8; 12]);
+    d.extend_from_slice(token.as_slice());
+    u256_from_ret(&eth_call(rpc, lender, Bytes::from(d)).await.ok()?)
+}
+
+/// On-chain proof a UniV3 pool can source `token`'s flash:
+/// token_in must be the pool's token0/token1 AND the pool's token
+/// balance must cover the borrow.
+async fn univ3_pool_holds(rpc: &str, pool: Address, token: Address, amount: U256) -> bool {
+    let sel_t0 = Bytes::from(keccak256(b"token0()")[..4].to_vec());
+    let sel_t1 = Bytes::from(keccak256(b"token1()")[..4].to_vec());
+    let holds = match (
+        eth_call(rpc, pool, sel_t0).await.ok().and_then(|b| addr_from_ret(&b)),
+        eth_call(rpc, pool, sel_t1).await.ok().and_then(|b| addr_from_ret(&b)),
+    ) {
+        (Some(t0), Some(t1)) => t0 == token || t1 == token,
+        _ => false,
+    };
+    if !holds {
+        return false;
+    }
+    erc20_balance_of(rpc, token, pool)
+        .await
+        .map(|b| b >= amount)
+        .unwrap_or(false)
+}
+
+/// GAP-5 dynamic flash fallbacks — invoked only when the static
+/// provider list verifies nothing. ERC-3156 lender comes from
+/// `ERC3156_LENDER_<CHAIN>` env (never a guessed address); UniV3-flash
+/// candidates come from the verified pool registry, cheapest fee tier
+/// first. Every candidate is re-verified on-chain before selection.
+async fn erc3156_or_univ3_flash(
+    rpc: &str,
+    chain: Chain,
+    token_in: Address,
+    amount_in: U256,
+) -> Result<Option<(Address, u64)>> {
+    if let Ok(lender) = std::env::var(format!("ERC3156_LENDER_{}", chain.name().to_uppercase()))
+    {
+        if let Ok(addr) = lender.parse::<Address>() {
+            if max_flash_loan(rpc, addr, token_in)
+                .await
+                .map(|m| m >= amount_in)
+                .unwrap_or(false)
+            {
+                return Ok(Some((addr, KIND_ERC3156)));
+            }
+        }
+    }
+    let t = format!("{token_in:?}").to_lowercase();
+    let mut cands: Vec<_> = allbright_core::chain::load_pools()
+        .into_iter()
+        .filter(|p| {
+            p.chain == chain
+                && p.dex == DexKind::V3
+                && (p.token0.address.eq_ignore_ascii_case(&t)
+                    || p.token1.address.eq_ignore_ascii_case(&t))
+        })
+        .collect();
+    cands.sort_by_key(|p| p.fee_bps);
+    for p in cands {
+        let Ok(addr) = p.address.parse::<Address>() else { continue };
+        if univ3_pool_holds(rpc, addr, token_in, amount_in).await {
+            tracing::info!(chain = %chain.name(), pool = %p.address,
+                fee_bps = p.fee_bps, "univ3 flash provider selected (fallback)");
+            return Ok(Some((addr, KIND_UNIV3_FLASH)));
+        }
+    }
+    Ok(None)
 }
 
 async fn erc20_decimals(rpc: &str, token: Address) -> Result<u8> {
@@ -273,8 +404,16 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
             break;
         }
     }
-    let (pool_addr, kind) = chosen
-        .ok_or_else(|| anyhow::anyhow!("no verified flash provider on {}", chain.name()))?;
+    let (pool_addr, kind) = match chosen {
+        Some(pk) => pk,
+        // GAP-5: static list exhausted → dynamic fallbacks. An
+        // env-configured ERC-3156 lender first, then any verified V3
+        // pool holding token_in (fee = its tier; the contract adds the
+        // fee on top of minProfit so economics stay fail-safe).
+        None => erc3156_or_univ3_flash(&rpc, chain, token_in, amount_in)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no verified flash provider on {}", chain.name()))?,
+    };
 
     let encoded = calldata::encode_execute_full(
         &req.signal,
@@ -283,7 +422,6 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
         pool_addr,
         Bytes::from(U256::from(kind).to_be_bytes::<32>().to_vec()),
     )?;
-    let inner = aa::kernel_execute_calldata(executor, U256::ZERO, Bytes::from(encoded));
     let pim = aa::PimlicoClient::new(
         cfg.pimlico_api_key
             .as_ref()
@@ -291,30 +429,43 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
             .expose_secret()
             .to_string(),
     );
+
+    // Zero-Gas Loss gate (GAP-1): run the exact execute() call inside an
+    // eth_call context — flash loan + callbacks + swaps + the on-chain
+    // minProfit assert all execute off-chain against live state. A
+    // revert here means the real tx would revert identically → drop
+    // BEFORE spending gas or a UserOp. The bail message carries the
+    // revert data so bait forensics convicts the pool upstream.
+    // Transport failure after a retry does not gate (on-chain minProfit
+    // still bounds the risk); reverts always gate.
+    let kernel = pim.account_address(&rpc, signer.address()).await?;
+    let mut gated = false;
+    let mut transport_err: Option<String> = None;
+    for _ in 0..2 {
+        match eth_call_from(&rpc, kernel, executor, Bytes::from(encoded.clone())).await {
+            Ok(_) => { gated = true; break; }
+            // EVM-level failure — the real tx would fail identically.
+            // Bail carrying the revert data so bait forensics convicts.
+            Err(DryRunErr::Evm(d)) => anyhow::bail!("evm dry-run gate: {d}"),
+            Err(DryRunErr::Transport(e)) => transport_err = Some(e.to_string()),
+        }
+    }
+    if !gated {
+        tracing::warn!(chain = %chain.name(),
+            err = %transport_err.unwrap_or_default(),
+            "dry-run gate inconclusive (transport) — proceeding under minProfit guard");
+    }
+
+    let inner = aa::kernel_execute_calldata(executor, U256::ZERO, Bytes::from(encoded));
     pim.sponsored_user_op(chain.name(), chain.chain_id(), &rpc, &signer, inner, false)
         .await
 }
 
-async fn submit_flashbots(cfg: &Config, _req: &ExecutionRequest) -> Result<String> {
-    let key = cfg
-        .flashbots_auth_key
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("FLASHBOOTS_AUTH_KEY empty"))?;
-    // Real submission requires the signed raw tx of the executor call;
-    // scaffolding performs the authenticated ping to verify credentials.
-    let client = reqwest::Client::new();
-    let body = json!({
-        "jsonrpc": "2.0", "id": 1, "method": "flashbots_getUserStatsV2",
-        "params": [{"blockNumber": "latest"}]
-    });
-    let resp = client
-        .post(&cfg.flashbots_relay)
-        .header("X-Flashbots-Signature", format!("{:#}", key.expose_secret()))
-        .json(&body)
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("flashbots http {}", resp.status());
-    }
-    Ok("0xflashbots-pending".into())
+async fn submit_flashbots(_cfg: &Config, _req: &ExecutionRequest) -> Result<String> {
+    // GAP-4 (AGENTS Appendix B): this path previously returned a
+    // fabricated "0xflashbots-pending" hash after a credential ping — a
+    // truth violation (submission ≠ inclusion must never be faked).
+    // Real eth_sendBundle (signed executor tx + bundle ordering) is not
+    // implemented; fail closed until it is.
+    anyhow::bail!("flashbots bundle path not implemented — refusing to fabricate submission")
 }

@@ -508,6 +508,20 @@ After remediation re-run the failed readiness test: pass →
 `RECOVERED → REQUALIFIED`; fail → `RECOVERY_FAILED → ESCALATE`;
 repeated failure → `PERSISTENT_FAILURE → NO-GO / COMMANDER_REVIEW`.
 
+### System-mediated repair mandate (AGENTS §34.0)
+
+The agent is not the healer. Every fault observed or repaired MUST land
+as system capability in the same change set: automatic detection
+(sentinel or owning component), a classified `Failure`/`Heal` journal
+record, bounded remediation or escalation, and post-heal verification.
+Manual `pm2 restart`, process suspension, config edits, and ad-hoc
+diagnosis are **temporary containment, never resolution**. Incidents
+fixed by hand are coverage gaps — journal them as findings and close
+the gap: process CPU/RAM telemetry, PM2 restart-loop watch, data-plane
+event-rate health (silent feeds AND floods), host saturation, PM2
+daemon loss. An agent performing diagnosis the system cannot perform
+reports that gap to the Commander and prioritizes closing it.
+
 ### Prohibited in the heal path
 
 Never lower thresholds, relax gates, mutate config/secrets/contracts,
@@ -999,3 +1013,147 @@ MORE QUALIFIED OPPORTUNITIES + FASTER VERIFIED DECISIONS
 ```
 
 **Detect faster. Simulate accurately. Optimize economically. Execute selectively. Learn continuously.**
+
+## 38. BLUEPRINT GAP REGISTER — ENGINEERING METHOD
+
+Authoritative register: AGENTS.md Appendix B (audit 2026-10-10). Five
+tracked gaps vs the proactive-flash-loan reference blueprint:
+
+| ID | Gap | Engineering duty when closing it |
+|---|---|---|
+| GAP-1 | No EVM-level simulation | `eth_call` dry-run of the full `execute()` flow (flash loan → callbacks → swaps → `minProfit` assert) runs in ONE call context — a true EVM-faithful zero-gas dry run needing no contract change. revm in-memory backend is the µs-scale roadmap; `eth_call` gate is the honest interim |
+| GAP-2 | Shallow pool registry | Depth-aware fetch: keep deepest pools by reserve regardless of pair overlap; on-chain verify (`token0/1`, `getReserves`/`slot0`, `factory`, decimals/symbol, `stable()`); provenance mandatory; only restart ingest to pick up new registry |
+| GAP-3 | Block-cadence ingestion | WSS `Swap`/`Sync`/`PoolSwap` log subscriptions per watched pool → targeted Multicall refresh. This is the L2-feasible equivalent of mempool ingestion (Arb/Base have no public mempool) |
+| GAP-4 | Flashbots submit stub | Either implement signed `eth_sendBundle` (Ethereum only) or fail-closed — NEVER return a fabricated hash |
+| GAP-5 | Dead flash capacity | Contract already supports `UNIV3_FLASH`/`ERC3156`; add per-chain verified provider candidates to `flash_providers()` — verify on-chain before trust |
+
+**Portability rule:** blueprint phases 1/3/5 are Ethereum-shaped. L2s
+have no public mempool or builder auction — adapt per chain and verify
+each relay/builder independently (§5, §15).
+
+### 38.1 Hint-parsing matrix (pre-confirmation feeds — P05 roadmap)
+
+Reference material from the external mempool-hint blueprint (audit
+2026-10-10). Applies IF/WHEN a pending-tx or hint feed exists on a
+chain — today none of the 5 active chains has one (Arb/Base have no
+public mempool; Eth is inactive). The matrix is a parsing design, not
+an execution path:
+
+| Intercepted hint profile | Parsing action | Target extraction rule |
+|---|---|---|
+| Calldata revealed only | Check 4-byte selector against router **AND aggregator** dictionary (1inch/Paraswap/MetaMask — most flow is aggregated) | Extract token params from payload — ABI-verify every selector, never memorize |
+| Logs only (calldata masked) | Match topic0 vs `Swap`/`Sync` signatures | Log `address` → map to **verified** pool registry — log address IS the pair |
+| Fully blind hint | Fan out priority refresh over all verified pools containing the hinted tokens | **Scheduling speculation only — never identity speculation** |
+
+**Doctrine overrides on the blueprint:**
+- NEVER guess a pool address — "speculative pathing" may speculate on
+  which verified pools to refresh first, never on pool identity.
+- `Transfer`-topic matching is a false-positive firehose — `Swap`/`Sync`
+  only.
+- The provided script's endpoint (`https://flashbots.net`) is a
+  marketing page, not the SSE stream — verify the real endpoint per
+  chain/provider before any use.
+- A hint can trigger observation/priority refresh — the full verify →
+  simulate → EVM dry-run → minProfit gates still apply before any
+  execution claim.
+
+**Closure discipline:** a gap closes on measured production evidence,
+not merged code — re-run the blindness tests (AGENTS §28), journal the
+closure, update the register status.
+
+## 39. COMMANDER SUBMISSION & CONTROL ENGINEERING
+
+Constitutional basis: AGENTS.md Appendix C, MASTER_BUILD §41. Allbright
+is a product submitted to the Commander — the dashboard is the
+operating surface, and the agent's duty is to test it to top-tier
+profit-generation grade before submission.
+
+### 39.1 Control-plane engineering duties
+
+- **Chain toggles** — activate/deactivate per chain must be a journaled
+  operator control wired to `ACTIVE_CHAINS` as the live source of
+  truth; collectors/solver/executor read it and honour changes without
+  redeploy where feasible.
+- **Strategy toggles** — per-variant (P01–P12) enable/disable on the
+  control surface; a disabled variant stops emitting ExecRequests but
+  keeps observing (deactivation ≠ blindness).
+- **Registry-driven surface** — the dashboard enumerates chains and
+  variants from the live registries; adding a chain or variant must
+  never require UI code changes.
+- **Invariant preservation** — toggles can never bypass pool
+  verification, `minProfit`, the kill switch, or telemetry; an operator
+  control is a system event with lineage, not a backdoor.
+
+### 39.2 Submission-grade verification
+
+Before submitting to the Commander demonstrate the realized lifecycle
+`detected → simulated → qualified → submitted → included → settled →
+wallet balance change` on at least one live chain — plus the control
+acceptance test: toggle a chain OFF from the dashboard → its
+collectors/opportunities stop (journaled) → toggle ON → recovery.
+Simulated profit is not submission evidence.
+
+### 39.3 Seven-dimension surface duties (AGENTS §C.5)
+
+Per-dimension engineering duty — every control is journaled,
+registry-driven, and safety-invariant-preserving:
+
+- **Simulate** — the UI sandbox calls the *same* dry-run path the
+  executor gate uses; never a separate math toy that can disagree
+  with production.
+- **Deploy** — unsigned artifact → user wallet signature → on-chain
+  bytecode verify → register in `ALLBRIGHT_EXECUTOR_<CHAIN>`; the
+  signature step sits behind an explicit review gate.
+- **Monitor** — swap-event stream freshness is the metric; label
+  missing feeds honestly instead of simulating a mempool view.
+- **Optimize** — slider writes are journaled config events with hard
+  bounds; the profit floor can never slide below the economics floor.
+- **Draw Profit** — activation writes to `data/profit_wallets.json`;
+  destinations are Commander-controlled only.
+- **Expand** — toggles emit journaled control events; collectors
+  honour them live without restarts.
+- **Reports** — every figure carries journal lineage; exports are the
+  same data, never re-derived.
+
+And the standing prohibition: parameter self-adjustment is calibration
+(Challenger → bounded recal), never a script and never silent.
+
+## 40. Auto-forging engineering (AGENTS §27.2–27.4)
+
+The competitive surface is built on the **fitness-function** pattern
+(Ford/Richards): continual, holistic, temporal integrity checks over
+system dimensions — ratings are functions of measured state, executed
+at query time, snapshotted daily for trajectory.
+
+Engineering duties:
+
+- **Measured before curated.** An axis rating must derive from a live
+  KPI (journal counts, registry lag, verified pools, inclusion rate).
+  Where the KPI doesn't exist, return `UNVERIFIED` — never a default
+  optimistic rating.
+- **Peer cells carry provenance.** Public-data cells keep
+  confidence+citation+`asof`; live-feed cells (relay Data API) are
+  refreshed by the collector, never hardcoded.
+- **Gap matrix is auto-derived.** Best ACTIVE peer per axis vs our
+  measured rank → gap + basis. No operator configuration anywhere in
+  the path — the Commander watches forging, they don't wire it.
+- **Competitor-address observation** — implement as a bootstrap
+  pipeline: address → funding-graph cluster → bytecode/nonce/gas
+  fingerprints → measured entity profile. Emit confidence, never
+  certainty; an unverifiable attribution is `UNVERIFIED`, not guessed.
+- **External services are bootstrap-only.** EigenPhi-class label
+  feeds may seed clusters but never sit in the runtime path — a
+  dependency that dies (MEVScan wound down June 2026) must not take
+  the pipeline with it.
+
+## 41. Agent copilot engineering (AGENTS §41)
+
+- Backend: `/api/agent/chat` (OpenAI-compatible proxy + server-side context
+  injector) and `/api/agent/models` (endpoint `/v1/models` lister).
+- Context: aggregates only — status, recent Fail/Heal/Scan rows, gap tasks,
+  axis ratings, gap matrix. Never secrets or raw journals.
+- Frontend: right-side drawer (`#agent`), quick actions (Explain state /
+  Incident digest / Ops report), model picker + add-model field,
+  `localStorage.ab_agent_model` persists selection.
+- Fail-closed: unreachable endpoint surfaces an honest error; unavailable
+  model list is a valid state.

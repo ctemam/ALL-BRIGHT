@@ -74,6 +74,21 @@ contract AllbrightExecutor {
 
     address public immutable owner;
     bool public paused;
+    /// Callback authentication (§27.5-class fix): callbacks must verify
+    /// WHO is calling, not just what the caller claims. Set at loan
+    /// initiation / V3 swap dispatch; cleared inside the callback —
+    /// blocks direct-call drains and re-entry.
+    address private pendingLender;
+    address private pendingSwapPool;
+    /// Reentrancy mutex — OpenZeppelin ReentrancyGuard semantics,
+    /// inlined to keep this contract dependency-free.
+    uint256 private _locked;
+    modifier nonReentrant() {
+        require(_locked == 0, "reentrant");
+        _locked = 1;
+        _;
+        _locked = 0;
+    }
 
     uint160 internal constant MIN_SQRT = 4295128739 + 1;
     uint160 internal constant MAX_SQRT = 1461446703485210103287273052203988822378723970342 - 1;
@@ -115,7 +130,7 @@ contract AllbrightExecutor {
         uint256 minProfit,
         address flashProvider,
         bytes calldata flashData
-    ) external onlyOwner whenNotPaused {
+    ) external onlyOwner whenNotPaused nonReentrant {
         if (flashProvider == address(0)) {
             _runRoute(legs, amountIn, minProfit);
             return;
@@ -123,6 +138,8 @@ contract AllbrightExecutor {
         FlashKind kind = flashData.length >= 32
             ? abi.decode(flashData, (FlashKind))
             : FlashKind.AAVE_V3;
+        // Authorize exactly one callback from this lender.
+        pendingLender = flashProvider;
 
         if (kind == FlashKind.AAVE_V3) {
             // params = (legs, minProfit)
@@ -177,6 +194,8 @@ contract AllbrightExecutor {
         address initiator,
         bytes calldata params
     ) external returns (bool) {
+        require(msg.sender == pendingLender, "bad lender");
+        pendingLender = address(0);
         require(initiator == address(this), "bad initiator");
         (RouteLeg[] memory legs, uint256 minProfit) =
             abi.decode(params, (RouteLeg[], uint256));
@@ -192,10 +211,12 @@ contract AllbrightExecutor {
     /// DODO callback. data = abi.encode(legs, minProfit, borrowedAmount).
     /// DODO flashloans carry no premium; repay exactly the borrow.
     function DPPFlashLoanCall(address, uint256, uint256, bytes calldata data) external {
+        require(msg.sender == pendingLender, "bad lender");
+        pendingLender = address(0);
         (RouteLeg[] memory legs, uint256 minProfit, uint256 borrowed) =
             abi.decode(data, (RouteLeg[], uint256, uint256));
         _runRoute(legs, borrowed, minProfit);
-        IERC20(legs[0].tokenIn).transfer(msg.sender, borrowed);
+        require(IERC20(legs[0].tokenIn).transfer(msg.sender, borrowed), "repay");
     }
 
     /// Balancer V2 callback — 0% fee today; feeAmounts handled anyway.
@@ -206,15 +227,19 @@ contract AllbrightExecutor {
         uint256[] memory feeAmounts,
         bytes memory userData
     ) external {
+        require(msg.sender == pendingLender, "bad lender");
+        pendingLender = address(0);
         (RouteLeg[] memory legs, uint256 minProfit) =
             abi.decode(userData, (RouteLeg[], uint256));
         _runRoute(legs, amounts[0], minProfit + feeAmounts[0]);
-        IERC20(tokens[0]).transfer(msg.sender, amounts[0] + feeAmounts[0]);
+        require(IERC20(tokens[0]).transfer(msg.sender, amounts[0] + feeAmounts[0]), "repay");
     }
 
     /// Morpho Blue callback — 0% fee; Morpho pulls repayment via
     /// transferFrom after this returns, so approve it here.
     function onMorphoFlashLoan(uint256 assets, bytes calldata data) external {
+        require(msg.sender == pendingLender, "bad lender");
+        pendingLender = address(0);
         (RouteLeg[] memory legs, uint256 minProfit) =
             abi.decode(data, (RouteLeg[], uint256));
         _runRoute(legs, assets, minProfit);
@@ -224,11 +249,13 @@ contract AllbrightExecutor {
     /// Uniswap V3 pool flash callback — fee = pool fee tier.
     /// data = abi.encode(legs, minProfit, borrowedAmount).
     function uniswapV3FlashCallback(uint256 fee0, uint256 fee1, bytes calldata data) external {
+        require(msg.sender == pendingLender, "bad lender");
+        pendingLender = address(0);
         (RouteLeg[] memory legs, uint256 minProfit, uint256 borrowed) =
             abi.decode(data, (RouteLeg[], uint256, uint256));
         uint256 fee = fee0 > 0 ? fee0 : fee1;
         _runRoute(legs, borrowed, minProfit + fee);
-        IERC20(legs[0].tokenIn).transfer(msg.sender, borrowed + fee);
+        require(IERC20(legs[0].tokenIn).transfer(msg.sender, borrowed + fee), "repay");
     }
 
     /// EIP-3156 callback (MakerDAO FlashMint et al.) — lender pulls
@@ -240,6 +267,8 @@ contract AllbrightExecutor {
         uint256 fee,
         bytes calldata data
     ) external returns (bytes32) {
+        require(msg.sender == pendingLender, "bad lender");
+        pendingLender = address(0);
         require(initiator == address(this), "bad initiator");
         (RouteLeg[] memory legs, uint256 minProfit) =
             abi.decode(data, (RouteLeg[], uint256));
@@ -271,7 +300,7 @@ contract AllbrightExecutor {
 
         if (leg.dex == 0) {
             // V2: transfer in, swap out to next hop (or self).
-            IERC20(leg.tokenIn).transfer(leg.pool, amt);
+            require(IERC20(leg.tokenIn).transfer(leg.pool, amt), "pay pool");
             (uint112 r0, uint112 r1,) = IUniswapV2Pair(leg.pool).getReserves();
             bool zeroForOne = leg.tokenIn == IUniswapV2Pair(leg.pool).token0();
             (uint256 rIn, uint256 rOut) = zeroForOne ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
@@ -285,6 +314,7 @@ contract AllbrightExecutor {
         } else if (leg.dex == 1) {
             // V3 exact-in single-hop: callback pays tokenIn.
             bool zeroForOne = leg.tokenIn == IUniswapV3Pool(leg.pool).token0();
+            pendingSwapPool = leg.pool;
             IUniswapV3Pool(leg.pool).swap(
                 address(this),
                 zeroForOne,
@@ -292,6 +322,7 @@ contract AllbrightExecutor {
                 zeroForOne ? MIN_SQRT : MAX_SQRT,
                 abi.encode(leg.tokenIn)
             );
+            pendingSwapPool = address(0);
         } else {
             revert("bad dex");
         }
@@ -299,10 +330,11 @@ contract AllbrightExecutor {
 
     /// Uniswap V3 swap callback — pays the input token to the pool.
     function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external {
+        require(msg.sender == pendingSwapPool, "bad pool");
         require(amount0Delta > 0 || amount1Delta > 0, "nothing owed");
         address tokenIn = abi.decode(data, (address));
         uint256 pay = amount0Delta > 0 ? uint256(amount0Delta) : uint256(amount1Delta);
-        IERC20(tokenIn).transfer(msg.sender, pay);
+        require(IERC20(tokenIn).transfer(msg.sender, pay), "pay");
     }
 
     /// Sweep profits — callable by owner; the AA layer sends this as a
@@ -310,7 +342,7 @@ contract AllbrightExecutor {
     function sweep(address token, address to) external onlyOwner {
         uint256 bal = IERC20(token).balanceOf(address(this));
         if (bal > 0) {
-            IERC20(token).transfer(to, bal);
+            require(IERC20(token).transfer(to, bal), "sweep");
             emit Swept(token, to, bal);
         }
     }

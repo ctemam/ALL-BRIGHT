@@ -154,6 +154,10 @@ pub enum FailureClass {
     PortConflict,
     OrphanedProcess,
     MathArtifact,
+    /// Host/process resource pathology (AGENTS §34): sustained CPU/RAM
+    /// saturation, restart loops, PM2 daemon loss, event floods that
+    /// starve subscribers. Detail carries the subtype + measurement.
+    ResourceSaturation,
     Unknown,
 }
 

@@ -412,3 +412,66 @@ Two questions, always:
 | Dashboard observatory | `allbright-dashboard` (:3001) |
 | Universe discovery pipeline | `tools/fetch_pools.py` (overlap-aware) + P06 monitor (factory events) |
 | RPC intelligence / visibility | `Config::{rpc_urls,wss_urls}` + `lineage::FailureClass::Rpc*` + endpoint registry (roadmap) |
+
+---
+
+## Blueprint gap register (audit 2026-10-10)
+
+Five tracked gaps vs the proactive-flash-loan reference blueprint —
+see AGENTS.md Appendix B for the authoritative register. Summary:
+
+| ID | Gap | Closure plan |
+|---|---|---|
+| GAP-1 | No EVM-level simulation (math sim can't see reverts) | `eth_call` dry-run gate pre-submission; revm roadmap |
+| GAP-2 | Shallow pool registry (base/avax depth-blind) | Depth-aware `fetch_pools.py` + on-chain verify |
+| GAP-3 | Block-cadence ingestion only | WSS Swap/Sync/PoolSwap log subscriptions |
+| GAP-4 | Flashbots submit stub (fake-hash return) | Real `eth_sendBundle` or fail-closed |
+| GAP-5 | UniV3-flash + ERC-3156 dead capacity | Wire into `flash_providers()` selection |
+
+Blueprint phases 1/3/5 are Ethereum-shaped: no public mempool or builder
+auction exists on Arbitrum/Base — adapt via event ingestion and
+per-chain private relays; never assume mainnet semantics port.
+
+## 41. Commander Control Plane
+
+Allbright is submitted to the Commander as a top-tier product with a
+capability of continually generating profit — agent-tested against the
+readiness scorecard and the realized execution lifecycle, never
+aspiration. The Commander operates the platform through the dashboard:
+
+- **Deploy & monitor** — the dashboard is the operating surface: live
+  P&L, funnel, chain/strategy/RPC/KPI state, diagnosis and heal state.
+- **Activate / deactivate chains** — operator-controlled chain
+  participation; `ACTIVE_CHAINS` is the live source of truth; every
+  change is journaled.
+- **Activate / deactivate strategy variants** — P01–P12 individually
+  toggled from the control surface, effective without redeploy.
+- **Expansion** — new chains and new variants enter through the
+  verified registry and strategy-plug-in contract; the control surface
+  reads live registries so expansion needs no UI surgery.
+
+The control plane is part of the product, not an admin hack: controls
+are journaled system events, gated by the same safety invariants as
+automated changes (a chain/variant toggle can never bypass pool
+verification, minProfit, or the kill switch).
+
+The dashboard's full operating surface is the **seven-dimension spec**
+(AGENTS Appendix C.5): Simulate, Deploy, Monitor, Optimize, Draw
+Profit, Expand, Reports — zero-text throughout. Binding prohibitions:
+no self-modifying economic parameters (calibration only, bounded and
+journaled), no external heal scripts (the sentinel owns healing), and
+no dead controls (builder-tip or mempool UIs are L2-impossible and
+must not render on chains where they cannot function).
+
+## 42. Competitive Forging Engine
+
+The competitive page is a catch-up engine (AGENTS §27.2–27.4), not a
+mirror: AllBright's axis ratings are **computed from live measured
+state** (fitness functions — never hand-set), the gap matrix auto-derives
+the distance to the best ACTIVE peer per axis, and daily snapshots
+make the forging trajectory visible — all without configuration.
+Benchmark admission is evidence-gated (≥12-month standing, still
+shipping, verifiable position, demotion rule) so winners-then-losers
+never set targets; the Commander promotes watchlist candidates and
+adds competitor on-chain addresses — which the system then measures
+directly — from the dashboard.

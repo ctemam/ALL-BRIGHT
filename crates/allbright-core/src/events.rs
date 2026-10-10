@@ -53,6 +53,18 @@ impl Chain {
             Chain::Blast => "blast",
         }
     }
+
+    /// Binance USDT symbol for the chain's gas asset — single canonical
+    /// mapping (MATIC was delisted; Polygon uses POL post-migration).
+    pub fn native_usdt_symbol(self) -> &'static str {
+        match self {
+            Chain::Eth | Chain::Arb | Chain::Op | Chain::Base
+            | Chain::Linea | Chain::Scroll | Chain::Blast => "ETHUSDT",
+            Chain::Bsc => "BNBUSDT",
+            Chain::Poly => "POLUSDT",
+            Chain::Avax => "AVAXUSDT",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +176,9 @@ pub struct SwapLeg {
 pub struct OpportunitySignal {
     pub chain: Chain,
     pub kind: OppKind,
+    /// Strategy ID (P01..P05) — attribution.
+    #[serde(default)]
+    pub strategy: String,
     pub route: Vec<SwapLeg>,
     pub input_amount: f64,
     pub input_token: String,
@@ -194,6 +209,9 @@ pub struct ExecutionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionResult {
     pub chain: Chain,
+    /// Strategy ID (P01..P05) — echoed from the triggering signal.
+    #[serde(default)]
+    pub strategy: String,
     pub status: ExecStatus,
     pub tx_hash: Option<String>,
     pub realized_profit_usd: f64,
@@ -270,6 +288,9 @@ pub struct SimRequest {
     pub route: Vec<SwapLeg>,
     pub input_amount: f64,
     pub input_token: String,
+    /// Strategy ID (P01..P05) — attribution; absent on pre-strategy records.
+    #[serde(default)]
+    pub strategy: String,
     pub block: u64,
     pub ts_ms: u64,
 }
@@ -344,6 +365,9 @@ pub struct ObservedOpportunity {
 pub struct RejectedCandidate {
     pub chain: Chain,
     pub kind: OppKind,
+    /// Strategy ID (P01..P05) — per-strategy rejection attribution.
+    #[serde(default)]
+    pub strategy: String,
     pub req_id: u64,
     pub route: Vec<SwapLeg>,
     pub input_amount: f64,
@@ -421,6 +445,16 @@ pub struct UniverseStats {
 }
 
 /// The single envelope all processes speak.
+/// Lifecycle/operational marker — service boots, journal rollovers,
+/// config-level facts. Journaled for restart attribution and audit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemEvent {
+    pub component: String,
+    pub action: String,
+    pub detail: String,
+    pub ts_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", content = "d")]
 pub enum Event {
@@ -451,6 +485,8 @@ pub enum Event {
     /// RPC qualification sweep summary — journaled evidence of the
     /// discovery/qualification universe (AGENTS §36/§37).
     RpcScan(crate::rpc_registry::RegistrySummary),
+    /// Lifecycle/operational marker (boot, journal rotate, …).
+    System(SystemEvent),
 }
 
 pub fn now_ms() -> u64 {

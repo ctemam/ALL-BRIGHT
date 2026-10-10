@@ -1,0 +1,124 @@
+{
+ "pools": {
+  "0x138c115bdcc8709d7f782ecc29dfb3829907d74b": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x84652bb2539513baf36e225c930fdd8eaa63ce27": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x97b192198d164c2a1834295e302b713bc32c8f1d": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0xa6c5c7d189fa4eb5af8ba34e63dcdd3a635d433f": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0xe879cf236d541edfb2ed80d48a6d93ee54c98a76": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x1c31fb3359357f6436565ccb3e982bc6bf4189ae": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x460c2c075340ebc19cf4af68e5d83c194e7d21d0": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0xdc2167f4a5dec5401eceff1cb55c3573a13f24bd": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x913398d79438e8d709211cfc3dc8566f6c67e1a8": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x5201f6482eea49c90fe609ed9d8f69328bac8dda": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x9fa7314525d5c706213468220c7c9820cfe629cb": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x01efed58b534d7a7464359a6f8d14d986125816b": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0xd40b7b05ab39a39658de1d7c9301a9ed765b3472": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x54b26faf3671677c19f70c4b879a6f7b898f732c": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0x96059759c6492fb4e8a9777b65f307f2c811a34f": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0xc1ad239594c165bd4d8847d281232172a4520818": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0xa1e48225215d9e656f4f9d779fc32817c50de0e5": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0xe28881d63f4f0577d4f75ea04f3a3e75feffc491": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0xbfca4230115de8341f3a3d5e8845ffb3337b2be3": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  },
+  "0xb4e3a78bf614825d0d2908e3221b28d8c085e6ab": {
+   "reason": "CamelotPair: K \u2014 venue seed: 7,380 exec reverts",
+   "reverts": 7380,
+   "first_ms": 1791603691517,
+   "last_ms": 1791603691517
+  }
+ }
+}

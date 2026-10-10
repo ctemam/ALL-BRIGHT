@@ -62,6 +62,36 @@ contract AllbrightExecutorTest is TestBase {
         ex.execute(legs, 0, 0, address(0), "");
     }
 
+    /// §27.5-class fix: every lender/swap callback MUST reject a direct
+    /// call. Before pendingLender/pendingSwapPool authentication, any
+    /// caller could drain the contract — e.g. uniswapV3SwapCallback
+    /// transferred attacker-chosen amounts with zero checks.
+    function test_callbacks_reject_direct_calls() public {
+        AllbrightExecutor.RouteLeg[] memory legs = new AllbrightExecutor.RouteLeg[](1);
+        bytes memory data = abi.encode(legs, uint256(0), uint256(0));
+        vm.prank(stranger);
+        vm.expectRevert(bytes("bad lender"));
+        ex.executeOperation(address(0), 0, 0, address(ex), data);
+        vm.prank(stranger);
+        vm.expectRevert(bytes("bad lender"));
+        ex.DPPFlashLoanCall(stranger, 0, 0, data);
+        vm.prank(stranger);
+        vm.expectRevert(bytes("bad lender"));
+        ex.receiveFlashLoan(new address[](0), new uint256[](0), new uint256[](0), data);
+        vm.prank(stranger);
+        vm.expectRevert(bytes("bad lender"));
+        ex.onMorphoFlashLoan(0, data);
+        vm.prank(stranger);
+        vm.expectRevert(bytes("bad lender"));
+        ex.uniswapV3FlashCallback(0, 0, data);
+        vm.prank(stranger);
+        vm.expectRevert(bytes("bad lender"));
+        ex.onFlashLoan(address(ex), address(0), 0, 0, data);
+        vm.prank(stranger);
+        vm.expectRevert(bytes("bad pool"));
+        ex.uniswapV3SwapCallback(int256(1), int256(0), abi.encode(address(0x1)));
+    }
+
     /// Fork test — skipped unless BSC_RPC_URL is set in ENV/env.
     /// Verifies the contract deploys and the route machinery runs against
     /// real pool bytecode; profit assertions belong to the research loop.

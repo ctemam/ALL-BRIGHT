@@ -9,6 +9,7 @@
 //! proprietary source code.
 
 pub mod amm;
+pub mod bait;
 pub mod bus;
 pub mod chain;
 pub mod config;

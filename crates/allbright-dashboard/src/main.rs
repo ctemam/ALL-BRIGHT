@@ -6,6 +6,8 @@
 //! Observability layer only — it is never the execution authority.
 
 mod api;
+mod forge;
+mod peer_metrics;
 mod state;
 
 use allbright_core::{
@@ -45,6 +47,7 @@ struct View {
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const LOGO_SVG: &str = include_str!("../static/logo.svg");
+const LOGO_PNG: &[u8] = include_bytes!("../static/logo.png");
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -166,6 +169,10 @@ async fn main() -> anyhow::Result<()> {
             "/logo.svg",
             get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], LOGO_SVG).into_response() }),
         )
+        .route(
+            "/logo.png",
+            get(|| async { ([(header::CONTENT_TYPE, "image/png")], LOGO_PNG).into_response() }),
+        )
         .route("/api/meta", get(api::meta))
         .route("/api/pnl", get(api::pnl))
         .route("/api/strategies", get(api::strategies))
@@ -173,9 +180,24 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/diagnoses", get(api::diagnoses))
         .route("/api/healing", get(api::healing))
         .route("/api/competitive", get(api::competitive))
+        .route("/api/competitive/promote", post(api::competitive_promote))
+        .route("/api/competitive/add", post(api::competitive_add))
+        .route("/api/competitive/address", post(api::competitive_add_address))
+        .route("/api/agent/chat", post(api::agent_chat))
+        .route("/api/agent/models", get(api::agent_models))
+        .route("/api/onboarding", get(api::onboarding))
+        .route("/api/capacity", get(api::capacity))
+        .route("/api/compliance", get(api::compliance))
+        .route("/api/security", get(api::security))
+        .route("/api/transfers", get(api::transfers))
+        .route("/api/deploy/cloud", post(api::deploy_cloud))
+        .route("/api/forge/tasks", get(api::forge_tasks))
+        .route("/api/forge/ack", post(api::forge_ack))
         .route("/api/reports", get(api::reports))
         .route("/api/stream", get(api::stream))
         .route("/api/wallet", get(api::wallet))
+        .route("/api/wallets", get(api::wallets))
+        .route("/api/wallets", post(api::wallets_upsert))
         .route("/api/status", get(api::status))
         .route("/api/killswitch", post(api::killswitch))
         .route("/api/deployments", get(api_deployments))
@@ -191,8 +213,14 @@ async fn main() -> anyhow::Result<()> {
                 }
             }),
         )
-        .with_state(app);
+        .with_state(app.clone())
+        .layer(axum::middleware::from_fn(api::admin_gate));
 
+    spawn_peer_metrics();
+    {
+        let st = app.clone();
+        tokio::spawn(async move { forge::run(st).await });
+    }
     let addr: SocketAddr = ([127, 0, 0, 1], cfg.ports.dashboard).into();
     info!(%addr, "dashboard listening (telemetry only — off hot path)");
     axum::serve(tokio::net::TcpListener::bind(addr).await?, app_router).await?;
@@ -235,6 +263,10 @@ async fn api_deployments(
         }],
         "data_since_ms": st.idx.lock().unwrap().index_since_ms,
     }))
+}
+
+fn spawn_peer_metrics() {
+    tokio::spawn(async move { peer_metrics::run().await });
 }
 
 fn spawn_feed<F>(

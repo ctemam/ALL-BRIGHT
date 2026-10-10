@@ -2,11 +2,13 @@
   "meta": {
     "version": 1,
     "authority": "AGENTS.md \u00c2\u00a727.1 \u00e2\u20ac\u201d Competitive Benchmark Register",
-    "last_reviewed": "2026-10-08",
+    "last_reviewed": "2026-10-10",
     "next_source_review": "2026-11-08",
     "next_gap_review": "2027-01-08",
     "confidence_default": "LOW",
-    "note": "Snapshot across distinct platform categories \u00e2\u20ac\u201d NOT a verified top-tier ranking. Every cell carries rating + confidence + basis; UNVERIFIED where no defensible public evidence exists. AllBright column is computed live from measured system state at query time, not from this file."
+    "note": "Snapshot across distinct platform categories \u00e2\u20ac\u201d NOT a verified top-tier ranking. Every cell carries rating + confidence + basis; UNVERIFIED where no defensible public evidence exists. AllBright column is computed live from measured system state at query time, not from this file.",
+    "evidence_window_months": 12,
+    "admission_criteria": ">=12 months documented standing; still shipping (<6mo activity); verifiable position (share/volume, not marketing); category maps to a real dimension; quarterly review may DEMOTE \u2014 demoted entries remain as lessons, never targets."
   },
   "rating_scale": [
     "LEADING",
@@ -20,37 +22,110 @@
       "id": "allbright",
       "name": "AllBright",
       "category": "self \u00e2\u20ac\u201d multi-chain arb + flash-loan platform",
-      "self": true
+      "self": true,
+      "standing": {
+        "admitted_at": "2026-01-01",
+        "evidence_span_months": 9,
+        "last_activity": "2026-10-10",
+        "status": "ACTIVE"
+      },
+      "website": null
     },
     {
       "id": "flashbots",
       "name": "Flashbots",
-      "category": "relay / bundle infrastructure"
+      "category": "relay / bundle infrastructure",
+      "standing": {
+        "admitted_at": "2025-10-10",
+        "evidence_span_months": 12,
+        "last_activity": "2026-09-01",
+        "status": "ACTIVE"
+      },
+      "website": "https://flashbots.net"
     },
     {
       "id": "bloxroute",
       "name": "bloXroute BackRunMe",
-      "category": "backrun infrastructure / BDN"
+      "category": "backrun infrastructure / BDN",
+      "standing": {
+        "admitted_at": "2025-10-10",
+        "evidence_span_months": 12,
+        "last_activity": "2025-10-23",
+        "status": "ACTIVE"
+      },
+      "website": "https://bloxroute.com"
     },
     {
       "id": "cow",
       "name": "CoW Protocol",
-      "category": "batch-auction solver competition"
+      "category": "batch-auction solver competition",
+      "standing": {
+        "admitted_at": "2025-10-10",
+        "evidence_span_months": 12,
+        "last_activity": "2026-09-01",
+        "status": "ACTIVE"
+      },
+      "website": "https://cow.fi"
     },
     {
       "id": "uniswapx",
       "name": "UniswapX",
-      "category": "intent-based execution"
+      "category": "intent-based execution",
+      "standing": {
+        "admitted_at": "2025-10-10",
+        "evidence_span_months": 12,
+        "last_activity": "2026-08-01",
+        "status": "ACTIVE"
+      },
+      "website": "https://uniswap.org"
     },
     {
       "id": "pathfinder",
       "name": "1inch Pathfinder",
-      "category": "aggregation / route optimization"
+      "category": "aggregation / route optimization",
+      "standing": {
+        "admitted_at": "2025-10-10",
+        "evidence_span_months": 12,
+        "last_activity": "2026-09-01",
+        "status": "ACTIVE"
+      },
+      "website": "https://1inch.io"
     },
     {
       "id": "titan",
       "name": "Titan Builder",
-      "category": "block builder / orderflow"
+      "category": "block builder / orderflow",
+      "standing": {
+        "admitted_at": "2025-10-10",
+        "evidence_span_months": 12,
+        "last_activity": "2025-03-22",
+        "status": "ACTIVE"
+      },
+      "website": "https://titanbuilder.xyz"
+    },
+    {
+      "id": "beaverbuild",
+      "name": "Beaverbuild",
+      "category": "block builder / orderflow",
+      "standing": {
+        "admitted_at": "2026-10-10",
+        "evidence_span_months": 12,
+        "last_activity": "2025-03-22",
+        "status": "ACTIVE"
+      },
+      "website": "https://beaverbuild.org"
+    },
+    {
+      "id": "rsync",
+      "name": "Rsync Builder",
+      "category": "block builder / orderflow",
+      "standing": {
+        "admitted_at": "2026-10-10",
+        "evidence_span_months": 12,
+        "last_activity": "2025-03-22",
+        "status": "ACTIVE"
+      },
+      "website": "https://rsync-builder.xyz"
     }
   ],
   "axes": [
@@ -62,39 +137,58 @@
           "rating": "LEADING",
           "confidence": "MED",
           "note": "BDN propagation network \u00e2\u20ac\u201d public docs",
-          "citation": "bloxroute docs \u00e2\u20ac\u201d review quarterly"
+          "citation": "bloxroute docs \u00e2\u20ac\u201d review quarterly",
+          "asof": "2026-10-08"
         },
         "flashbots": {
           "rating": "STRONG",
           "confidence": "MED",
           "note": "MEV-Share/private orderflow feed",
-          "citation": "flashbots docs"
+          "citation": "flashbots docs",
+          "asof": "2026-10-08"
         },
         "cow": {
           "rating": "PARTIAL",
           "confidence": "LOW",
           "note": "batch cadence, not tick-level",
-          "citation": "cow.fi docs"
+          "citation": "cow.fi docs",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "intent flow, not state streaming"
+          "note": "intent flow, not state streaming",
+          "asof": "2026-10-08"
         },
         "pathfinder": {
           "rating": "STRONG",
           "confidence": "LOW",
-          "note": "broad liquidity polling"
+          "note": "broad liquidity polling",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "STRONG",
           "confidence": "LOW",
-          "note": "builder-side orderflow"
+          "note": "builder-side orderflow",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "PARTIAL",
           "confidence": "HIGH",
-          "note": "MEASURED: CEX tick latency 0.03-0.13ms; on-chain via newHeads block cadence (seconds) on free RPCs"
+          "note": "MEASURED: CEX tick latency 0.03-0.13ms; on-chain via newHeads block cadence (seconds) on free RPCs",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "builder-side orderflow; ~42.5% block share Mar-2025",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "late-bid timing games; ~10% share",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -105,37 +199,56 @@
         "flashbots": {
           "rating": "LEADING",
           "confidence": "MED",
-          "note": "bundle simulation infra (eth_callBundle)"
+          "note": "bundle simulation infra (eth_callBundle)",
+          "asof": "2026-10-08"
         },
         "cow": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "solver competition requires accurate costing"
+          "note": "solver competition requires accurate costing",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "filler-side simulation"
+          "note": "filler-side simulation",
+          "asof": "2026-10-08"
         },
         "pathfinder": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "multi-hop quoting engine"
+          "note": "multi-hop quoting engine",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "backrun simulation"
+          "note": "backrun simulation",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "STRONG",
           "confidence": "LOW",
-          "note": "builder simulation for block assembly"
+          "note": "builder simulation for block assembly",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "STRONG",
           "confidence": "HIGH",
-          "note": "MEASURED: deterministic AMM math 1-6us/route; revm full-EVM tier pending"
+          "note": "MEASURED: deterministic AMM math 1-6us/route; revm full-EVM tier pending",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "block-assembly simulation",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "block-assembly simulation",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -146,38 +259,57 @@
         "pathfinder": {
           "rating": "LEADING",
           "confidence": "MED",
-          "note": "multi-split aggregation routing \u00e2\u20ac\u201d core product"
+          "note": "multi-split aggregation routing \u00e2\u20ac\u201d core product",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "STRONG",
           "confidence": "LOW",
-          "note": "fillers optimize routes"
+          "note": "fillers optimize routes",
+          "asof": "2026-10-08"
         },
         "cow": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "solvers optimize batch routes"
+          "note": "solvers optimize batch routes",
+          "asof": "2026-10-08"
         },
         "flashbots": {
           "rating": "N/A",
           "confidence": "HIGH",
           "note": "infrastructure \u00e2\u20ac\u201d no strategy layer",
-          "scope": "not a route optimizer"
+          "scope": "not a route optimizer",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "backrun routing"
+          "note": "backrun routing",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "N/A",
           "confidence": "HIGH",
-          "note": "builder \u00e2\u20ac\u201d routes are upstream"
+          "note": "builder \u00e2\u20ac\u201d routes are upstream",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "PARTIAL",
           "confidence": "HIGH",
-          "note": "MEASURED: 2-hop + triangular walk, ternary-search sizing; no multi-hop general solver"
+          "note": "MEASURED: 2-hop + triangular walk, ternary-search sizing; no multi-hop general solver",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "N/A",
+          "confidence": "LOW",
+          "note": "builder \u2014 routes are upstream",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "N/A",
+          "confidence": "LOW",
+          "note": "builder \u2014 routes are upstream",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -189,37 +321,56 @@
           "rating": "LEADING",
           "confidence": "HIGH",
           "note": "dominant builder/relay share \u00e2\u20ac\u201d public dashboards",
-          "citation": "mevboost/relay public data"
+          "citation": "mevboost/relay public data",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "LEADING",
           "confidence": "MED",
-          "note": "top builder share"
+          "note": "top builder share",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "BackRunMe submission path"
+          "note": "BackRunMe submission path",
+          "asof": "2026-10-08"
         },
         "cow": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "solver settlement + MEV protection"
+          "note": "solver settlement + MEV protection",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "filler network inclusion"
+          "note": "filler network inclusion",
+          "asof": "2026-10-08"
         },
         "pathfinder": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "public mempool / fusion variants"
+          "note": "public mempool / fusion variants",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "UNVERIFIED",
           "confidence": "HIGH",
-          "note": "MEASURED: BSC executor deployed+verified on-chain; zero measured submissions/inclusions to date"
+          "note": "MEASURED: BSC executor deployed+verified on-chain; zero measured submissions/inclusions to date",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "LEADING",
+          "confidence": "HIGH",
+          "note": "#1-2 builder ~42.5% mev-boost share",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "STRONG",
+          "confidence": "HIGH",
+          "note": "#3 builder ~10% mev-boost share",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -230,37 +381,56 @@
         "flashbots": {
           "rating": "LEADING",
           "confidence": "HIGH",
-          "note": "Protect/relay privacy \u00e2\u20ac\u201d core offering"
+          "note": "Protect/relay privacy \u00e2\u20ac\u201d core offering",
+          "asof": "2026-10-08"
         },
         "cow": {
           "rating": "LEADING",
           "confidence": "MED",
-          "note": "batch auctions eliminate ordering MEV"
+          "note": "batch auctions eliminate ordering MEV",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "intents settle off-mempool"
+          "note": "intents settle off-mempool",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "STRONG",
           "confidence": "LOW",
-          "note": "private orderflow via builder"
+          "note": "private orderflow via builder",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "STRONG",
           "confidence": "LOW",
-          "note": "private submission for BackRunMe"
+          "note": "private submission for BackRunMe",
+          "asof": "2026-10-08"
         },
         "pathfinder": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "Fusion intents; classic path is public"
+          "note": "Fusion intents; classic path is public",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "PARTIAL",
           "confidence": "MED",
-          "note": "Sponsored Pimlico UserOps \u2014 public mempool exposure documented"
+          "note": "Sponsored Pimlico UserOps \u2014 public mempool exposure documented",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "LEADING",
+          "confidence": "MED",
+          "note": "exclusive orderflow agreements",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "orderflow access",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -271,37 +441,56 @@
         "cow": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "open solver competition \u00e2\u20ac\u201d diverse strategies"
+          "note": "open solver competition \u00e2\u20ac\u201d diverse strategies",
+          "asof": "2026-10-08"
         },
         "pathfinder": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "aggregation heuristics"
+          "note": "aggregation heuristics",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "filler competition, intent-only"
+          "note": "filler competition, intent-only",
+          "asof": "2026-10-08"
         },
         "flashbots": {
           "rating": "N/A",
           "confidence": "HIGH",
-          "note": "searcher ecosystem external to platform"
+          "note": "searcher ecosystem external to platform",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "backrun-focused"
+          "note": "backrun-focused",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "N/A",
           "confidence": "HIGH",
-          "note": "builder, not strategies"
+          "note": "builder, not strategies",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "PARTIAL",
           "confidence": "HIGH",
-          "note": "MEASURED: P01 live, P02 functional, P03/P04/P07 partial, P05/P06 pending"
+          "note": "MEASURED: P01 live, P02 functional, P03/P04/P07 partial, P05/P06 pending",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "N/A",
+          "confidence": "LOW",
+          "note": "builder, not strategies",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "N/A",
+          "confidence": "LOW",
+          "note": "builder, not strategies",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -312,37 +501,56 @@
         "flashbots": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "mev-inspect, hindsight research tooling"
+          "note": "mev-inspect, hindsight research tooling",
+          "asof": "2026-10-08"
         },
         "cow": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "solver competition analytics public"
+          "note": "solver competition analytics public",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "limited public replay"
+          "note": "limited public replay",
+          "asof": "2026-10-08"
         },
         "pathfinder": {
           "rating": "UNVERIFIED",
           "confidence": "LOW",
-          "note": "no public replay evidence"
+          "note": "no public replay evidence",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "UNVERIFIED",
           "confidence": "LOW",
-          "note": "no public replay evidence"
+          "note": "no public replay evidence",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "builder analytics"
+          "note": "builder analytics",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "PARTIAL",
           "confidence": "HIGH",
-          "note": "MEASURED: full event journal + incremental scanner; fault-injection certification unrun"
+          "note": "MEASURED: full event journal + incremental scanner; fault-injection certification unrun",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "builder analytics",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "builder analytics",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -353,37 +561,56 @@
         "cow": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "solver competition self-selects winners"
+          "note": "solver competition self-selects winners",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "filler competition"
+          "note": "filler competition",
+          "asof": "2026-10-08"
         },
         "pathfinder": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "tuned heuristics"
+          "note": "tuned heuristics",
+          "asof": "2026-10-08"
         },
         "flashbots": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "infra-level adaptation"
+          "note": "infra-level adaptation",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "UNVERIFIED",
           "confidence": "LOW",
-          "note": "no public evidence"
+          "note": "no public evidence",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "builder-side adaptation"
+          "note": "builder-side adaptation",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "EARLY",
           "confidence": "HIGH",
-          "note": "MEASURED: challenger+observatory live; P12 feedback loop not started"
+          "note": "MEASURED: challenger+observatory live; P12 feedback loop not started",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "builder-side adaptation",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "late-bid adaptation since 2024",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -394,37 +621,56 @@
         "pathfinder": {
           "rating": "LEADING",
           "confidence": "MED",
-          "note": "wide chain coverage \u00e2\u20ac\u201d public"
+          "note": "wide chain coverage \u00e2\u20ac\u201d public",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "multi-chain intent deployment"
+          "note": "multi-chain intent deployment",
+          "asof": "2026-10-08"
         },
         "cow": {
           "rating": "PARTIAL",
           "confidence": "MED",
-          "note": "select chains"
+          "note": "select chains",
+          "asof": "2026-10-08"
         },
         "flashbots": {
           "rating": "PARTIAL",
           "confidence": "MED",
-          "note": "Ethereum-centric"
+          "note": "Ethereum-centric",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "STRONG",
           "confidence": "LOW",
-          "note": "multi-chain BDN"
+          "note": "multi-chain BDN",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "Ethereum builder"
+          "note": "Ethereum builder",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "STRONG",
           "confidence": "HIGH",
-          "note": "MEASURED: 10 chains enabled, 529 verified pools"
+          "note": "MEASURED: 10 chains enabled, 529 verified pools",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "Ethereum builder",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "Ethereum builder",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -435,37 +681,56 @@
         "cow": {
           "rating": "LEADING",
           "confidence": "MED",
-          "note": "solvers bear gas; batch amortization"
+          "note": "solvers bear gas; batch amortization",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "LEADING",
           "confidence": "MED",
-          "note": "fillers pay gas \u00e2\u20ac\u201d gasless for users"
+          "note": "fillers pay gas \u00e2\u20ac\u201d gasless for users",
+          "asof": "2026-10-08"
         },
         "flashbots": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "revert risk off-chain via bundles"
+          "note": "revert risk off-chain via bundles",
+          "asof": "2026-10-08"
         },
         "pathfinder": {
           "rating": "STRONG",
           "confidence": "LOW",
-          "note": "gas-optimized path splitting"
+          "note": "gas-optimized path splitting",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "backrun gas borne by searcher"
+          "note": "backrun gas borne by searcher",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "block-level gas packing"
+          "note": "block-level gas packing",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "STRONG",
           "confidence": "HIGH",
-          "note": "MEASURED: atomic revert + on-chain minProfit guard bounds downside to gas"
+          "note": "MEASURED: atomic revert + on-chain minProfit guard bounds downside to gas",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "STRONG",
+          "confidence": "MED",
+          "note": "block-level gas packing",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "PARTIAL",
+          "confidence": "MED",
+          "note": "block-level gas packing",
+          "asof": "2026-10-10"
         }
       }
     },
@@ -476,39 +741,84 @@
         "cow": {
           "rating": "LEADING",
           "confidence": "MED",
-          "note": "solver bonding + reputation"
+          "note": "solver bonding + reputation",
+          "asof": "2026-10-08"
         },
         "flashbots": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "battle-tested relay infra"
+          "note": "battle-tested relay infra",
+          "asof": "2026-10-08"
         },
         "uniswapx": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "audited intent contracts"
+          "note": "audited intent contracts",
+          "asof": "2026-10-08"
         },
         "pathfinder": {
           "rating": "STRONG",
           "confidence": "LOW",
-          "note": "mature aggregator ops"
+          "note": "mature aggregator ops",
+          "asof": "2026-10-08"
         },
         "bloxroute": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "service-level protections"
+          "note": "service-level protections",
+          "asof": "2026-10-08"
         },
         "titan": {
           "rating": "PARTIAL",
           "confidence": "LOW",
-          "note": "builder trust model"
+          "note": "builder trust model",
+          "asof": "2026-10-08"
         },
         "allbright": {
           "rating": "STRONG",
           "confidence": "MED",
-          "note": "Kill switch + on-chain guard + event lineage; plaintext key rotation pending"
+          "note": "Kill switch + on-chain guard + event lineage; plaintext key rotation pending",
+          "asof": "2026-10-08"
+        },
+        "beaverbuild": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "builder trust model",
+          "asof": "2026-10-10"
+        },
+        "rsync": {
+          "rating": "PARTIAL",
+          "confidence": "LOW",
+          "note": "builder trust model",
+          "asof": "2026-10-10"
         }
       }
+    }
+  ],
+  "watchlist": [
+    {
+      "id": "buildernet",
+      "name": "BuilderNet (Flashbots)",
+      "category": "decentralized block building",
+      "status": "WATCH",
+      "note": "young \u2014 accumulating the 12-month standing window",
+      "website": "https://buildernet.org"
+    },
+    {
+      "id": "ultrasound",
+      "name": "Ultrasound Relay",
+      "category": "mev relay",
+      "status": "WATCH",
+      "note": "live relay; production share evidence thin",
+      "website": "https://relay.ultrasound.money"
+    },
+    {
+      "id": "angstrom",
+      "name": "Angstrom",
+      "category": "UniV4 app-liquidity / auction",
+      "status": "WATCH",
+      "note": "novel mechanism \u2014 watch for sustained usage",
+      "website": "https://angstrom.xyz"
     }
   ]
 }

@@ -60,6 +60,49 @@ pub enum QualState {
     NeedsKey,
 }
 
+/// Access class (§36.9): private keyed endpoints carry per-account
+/// quota — an order of magnitude more usable capacity than shared
+/// public endpoints. The system prefers private capacity for hot-path
+/// reads and counts the classes separately on the infra surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AccessClass {
+    /// Shared unkeyed endpoint — public quota, heavy rate limits.
+    Public,
+    /// Keyed/per-account endpoint — private free-tier or paid quota.
+    Private,
+}
+
+impl Default for AccessClass {
+    fn default() -> Self {
+        AccessClass::Public
+    }
+}
+
+/// Classify a URL: credential material in the query or a known keyed
+/// host means private; everything else is public. Heuristic only —
+/// re-derived on every load so stale classifications never persist.
+pub fn access_of(url: &str) -> AccessClass {
+    let u = url.to_lowercase();
+    for pat in [
+        "dkey=", "apikey=", "api_key=", "?key=", "&key=", "portalid=",
+        "token=", "projectid=", "project_id=", "api-key=",
+    ] {
+        if u.contains(pat) {
+            return AccessClass::Private;
+        }
+    }
+    for pat in [
+        "g.alchemy.com", ".infura.io/", "quiknode.pro", "lb.drpc.org",
+        ".blastapi.io/", "nodereal.io", ".chainstack.com", "tenderly.co",
+    ] {
+        if u.contains(pat) && !u.contains("public.") {
+            return AccessClass::Private;
+        }
+    }
+    AccessClass::Public
+}
+
 /// Tri-state per capability (§37.7): nothing is AVAILABLE merely because
 /// a provider advertises it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +178,10 @@ pub struct RpcEndpointRecord {
     pub ovs: f64,
     /// Verified sustained request rate; safe capacity = ×0.90 (§36.7).
     pub verified_rps: Option<f64>,
+    /// Public vs private keyed endpoint (§36.9) — re-derived from the
+    /// URL on load; never trusted from disk.
+    #[serde(default)]
+    pub access: AccessClass,
 }
 
 impl RpcEndpointRecord {
@@ -160,6 +207,7 @@ impl RpcEndpointRecord {
             head_lag_secs: None,
             ovs: 0.0,
             verified_rps: None,
+            access: access_of(url),
         }
     }
 
@@ -245,10 +293,16 @@ impl Default for RpcRegistry {
 
 impl RpcRegistry {
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut reg: Self = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Access class is derived truth, never stored truth — reclassify
+        // every record so a hand-edited or stale file can't mislabel.
+        for e in &mut reg.endpoints {
+            e.access = access_of(&e.url);
+        }
+        reg
     }
 
     /// Atomic write — tmp + rename so readers never see a partial file.
@@ -277,6 +331,7 @@ impl RpcRegistry {
             e.last_error = rec.last_error;
             e.head_lag_secs = rec.head_lag_secs;
             e.verified_rps = rec.verified_rps;
+            e.access = access_of(&e.url);
             e.compute_ovs();
         } else {
             self.endpoints.push(rec);
@@ -288,12 +343,49 @@ impl RpcRegistry {
         self.endpoints.iter().filter(move |e| e.chain == chain)
     }
 
-    /// Production candidate pool for a chain: QUALIFIED endpoints ordered
-    /// by OVS descending (§36.8 — never blind round-robin).
+    /// Production candidate pool for a chain: QUALIFIED **private**
+    /// endpoints only (§36.9 — the platform is based on private keyed
+    /// capacity; shared public endpoints are excluded from the
+    /// production path even when they qualify). Ordered OVS descending.
     pub fn qualified_urls(&self, chain: Chain) -> Vec<String> {
         let mut v: Vec<&RpcEndpointRecord> = self
             .for_chain(chain)
-            .filter(|e| e.state == QualState::Qualified)
+            .filter(|e| e.state == QualState::Qualified && e.access == AccessClass::Private)
+            .collect();
+        v.sort_by(|a, b| b.ovs.partial_cmp(&a.ovs).unwrap_or(std::cmp::Ordering::Equal));
+        v.into_iter().map(|e| e.url.clone()).collect()
+    }
+
+    /// Per-chain access accounting for the infra surface (§36.9):
+    /// (total, private, private_qualified). Private quota is what the
+    /// 80% budget rule actually trusts.
+    pub fn chain_access_counts(&self, chain: Chain) -> (usize, usize, usize) {
+        let mut t = (0usize, 0usize, 0usize);
+        for e in self.for_chain(chain) {
+            t.0 += 1;
+            if e.access == AccessClass::Private {
+                t.1 += 1;
+                if e.state == QualState::Qualified {
+                    t.2 += 1;
+                }
+            }
+        }
+        t
+    }
+
+    /// Fallback tier (§37.1): Degraded **private** endpoints that PROVED
+    /// V4 market visibility (pool_state read succeeded) but lost
+    /// Qualified on latency or an auxiliary cap. Public endpoints are
+    /// excluded here as well (§36.9); economically-blind endpoints
+    /// (pool_state Unavailable) are never admitted anywhere. OVS order.
+    pub fn fallback_urls(&self, chain: Chain) -> Vec<String> {
+        let mut v: Vec<&RpcEndpointRecord> = self
+            .for_chain(chain)
+            .filter(|e| {
+                e.state == QualState::Degraded
+                    && e.access == AccessClass::Private
+                    && e.caps.pool_state == CapState::Available
+            })
             .collect();
         v.sort_by(|a, b| b.ovs.partial_cmp(&a.ovs).unwrap_or(std::cmp::Ordering::Equal));
         v.into_iter().map(|e| e.url.clone()).collect()
@@ -309,6 +401,36 @@ impl RpcRegistry {
         let providers: std::collections::HashSet<&String> =
             qualified.iter().map(|e| &e.provider).collect();
         (qualified.len(), providers.len())
+    }
+
+    /// §36.9 — measured designed capacity: Σ verified_rps across
+    /// qualified endpoints. `None` = no measured capacity, which must
+    /// surface as unavailable — a budget is never fabricated.
+    pub fn chain_capacity_rps(&self, chain: Chain) -> Option<f64> {
+        let mut sum = 0.0;
+        let mut any = false;
+        for e in self
+            .for_chain(chain)
+            .filter(|e| e.state == QualState::Qualified)
+        {
+            if let Some(r) = e.verified_rps {
+                sum += r;
+                any = true;
+            }
+        }
+        any.then_some(sum)
+    }
+
+    /// §36.9 — 80% utilization rule: planned workload must never
+    /// exceed 80% of measured capacity; the 20% headroom absorbs
+    /// bursts, failover and self-diagnosis probes.
+    pub fn chain_budget_rps(&self, chain: Chain) -> Option<f64> {
+        self.chain_capacity_rps(chain).map(|c| c * 0.80)
+    }
+
+    /// Daily request budget = budget_rps × 3600 × 24 (§36.9).
+    pub fn chain_budget_day(&self, chain: Chain) -> Option<f64> {
+        self.chain_budget_rps(chain).map(|r| r * 86_400.0)
     }
 
     pub fn summary(&self) -> RegistrySummary {

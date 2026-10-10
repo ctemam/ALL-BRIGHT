@@ -177,8 +177,8 @@ Allbright MUST support an extensible strategy registry keyed on `OppKind`. The p
 | P01 | Cross-DEX Arbitrage | **Live** (2-hop, V2/V3) |
 | P02 | Multi-Hop Cyclic Arbitrage | **Live** (triangular) |
 | P03 | CEX–DEX Divergence | Partial (Binance signal ingested; executable-price model pending) |
-| P04 | Stablecoin / Correlated-Asset Arbitrage | Partial (Solidly sAMM math live) |
-| P05 | State-Change Backrun | Blocked — requires per-block/mempool feed |
+| P04 | Stablecoin / Correlated-Asset Arbitrage | **Live** (correlated-universe lane, deeper sizing) |
+| P05 | State-Change Backrun | **Live-lite** (reserve-shift residual trigger; intra-block mempool variant still blocked) |
 | P06 | Long-Tail Liquidity Arbitrage | In progress — new-pool monitor + token-risk layer |
 | P07 | Concentrated-Liquidity / Fee-Tier Optimization | Partial (in-range V3 math; tick-walk pending) |
 | P08 | Protocol Liquidation Arbitrage | In progress — Aave V3 liquidation adapter |
@@ -280,7 +280,7 @@ Opportunity → Data Freshness → Contract/Token Validation → Route Validatio
 
 Failure of any mandatory gate means: **DO NOT EXECUTE.**
 
-Current gate state: pipeline is armed (`AUTO_EXECUTE=true`, `min_profit_usd=$5`). `AllbrightExecutor` deployed on **BSC** at `0x7ce11f29f75371fe21f563713974cde96bbb409f` (owner = Kernel smart account `0x663050Be401F590E8E2c3F01f05536948275015B`). BSC submission: sponsored UserOp → smart account → `execute()`, flash-funded via Aave V3 (pool verified on-chain at submit time), `tokenIn` restricted to runtime-verified stablecoins, executor code-checked on-chain, `minProfit` enforced on-chain. **Caveat:** bundler UserOps are public-mempool — not private orderflow; the contract's profit guard bounds worst case to a revert at sponsor cost. Other chains have no executor configured (`ALLBRIGHT_EXECUTOR_<CHAIN>` unset = not deployable there).
+Current gate state: pipeline is armed (`AUTO_EXECUTE=true`, `min_profit_usd=$5`). `AllbrightExecutor` is deployed at `0xbfb64794e342a3d9a1b6c9bc730c0ef48a602b15` on all five active chains (`bsc, arb, poly, base, avax` — same CREATE2 address, verified 2026-10-09: bytecode matches the local build modulo the `immutable` owner; `owner()` = Kernel smart account `0x663050Be401F590E8E2c3F01f05536948275015B`, which has code on all five). Submission: sponsored UserOp → smart account → `execute()`, flash-funded, executor code-checked on-chain, `minProfit` enforced on-chain. **Caveat:** bundler UserOps are public-mempool — not private orderflow; the contract's profit guard bounds worst case to a revert at sponsor cost. Inactive chains (`eth, op, linea, scroll, blast`) keep configured executor addresses but run no collectors — they are observation-only until `ACTIVE_CHAINS` re-admits them.
 
 ## 18. GAS POLICY
 
@@ -292,7 +292,7 @@ Builder/relay adapters MUST be capability-tested individually per chain. Never a
 
 ## 20. WALLET AND KEY SECURITY
 
-Private keys are security-critical. Agents MUST NOT: print private keys, commit secrets, embed keys in source, send keys to dashboard code, expose keys through telemetry, or use test credentials as production credentials. `ENV` holds `PRIVATE_KEY`, `PIMLICO_API_KEY`, `PROFIT_WALLET` and policy keys (`AUTO_EXECUTE`, `MIN_PROFIT_USD`, `NATIVE_USD`, `SCAN_INTERVAL_SECS`) — it MUST stay out of version control. Secrets materialize only at signing boundaries (`secrecy::SecretString`). The plaintext `PRIVATE_KEY` in `ENV` MUST be treated as exposed and rotated before real funds depend on it.
+Private keys are security-critical. Agents MUST NOT: print private keys, commit secrets, embed keys in source, send keys to dashboard code, expose keys through telemetry, or use test credentials as production credentials. `ENV` holds `PRIVATE_KEY`, `PIMLICO_API_KEY`, `PROFIT_WALLET` and policy keys (`AUTO_EXECUTE`, `MIN_PROFIT_USD`, `NATIVE_USD`, `SCAN_INTERVAL_SECS`, `ACTIVE_CHAINS`, `STRATEGIES`) — it MUST stay out of version control. Secrets materialize only at signing boundaries (`secrecy::SecretString`). The plaintext `PRIVATE_KEY` in `ENV` MUST be treated as exposed and rotated before real funds depend on it.
 
 ## 21. ACCOUNT ABSTRACTION
 
@@ -365,6 +365,91 @@ A maintained register of six public benchmark platforms used for gap analysis. *
 - Every register claim carries: citation, confidence, scope, comparison limits, and a testable follow-up. No unsupported rankings; no headline-latency-only comparisons.
 - Register findings feed §27 scoring but never substitute for Allbright's own measured evidence.
 - This is agent-driven monitoring guidance — **not** an implemented real-time feed.
+
+### 27.2 Auto-forging — measured self-ratings and the gap matrix
+
+The competitive page is a **catch-up engine, not a mirror**. It follows
+the fitness-function pattern (Ford/Richards, *Building Evolutionary
+Architectures*): objective integrity assessments of system dimensions,
+verified continuously, no human in the loop.
+
+- **AllBright axis ratings are COMPUTED from live measured state**
+  (fitness functions) — journal counts, registry lag, verified pools,
+  inclusion rate. Never hand-set; where no measurement exists the
+  rating is `UNVERIFIED`, not optimistic.
+- **Gap matrix** — per axis: best ACTIVE peer rating vs our measured
+  rating → a numeric gap the Commander reads without configuration.
+- **Forging trajectory** — daily snapshots (`data/axis_history.json`)
+  make improvement visible as a trend, not a point-in-time badge.
+- **Competitor configuration is for direction, not parameters** —
+  peer evidence decides *what to build*; our measured economics decide
+  *how the machine runs* (thresholds, budgets, cadence).
+
+### 27.3 Benchmark admission — durable, dynamic, never winner-then-loser
+
+A platform earns register membership only on evidence:
+
+1. **≥12 months documented standing** (the evidence window is capped
+   at 12 months — older glory does not count);
+2. **Still shipping** — activity within ~6 months;
+3. **Verifiable position** — measurable share/volume, not marketing;
+4. **Category fit** — maps to a real §3 dimension;
+5. **Demotion rule** — standing is `ACTIVE/WATCH/DEMOTED`; demoted
+   entries remain as lessons, never as targets. Live data proves the
+   rule is necessary: beaverbuild fell from ~42% to ~0.2% of blocks in
+   months while Quasar and BuilderNet rose — a single-incumbent axis
+   would have gone silently stale.
+- **Incumbent + fast-follower pairing** per axis so a collapse never
+  blinds the bar. ~8 platforms + watchlist is the maintained size —
+  beyond that, confidence decays faster than value grows.
+- The Commander promotes watchlist candidates from the dashboard
+  (`/api/competitive/promote`) and filters cells by a trailing-months
+  window (max 12). No CLI, no file edits.
+- **Measured peer feeds** — the MEV-Boost relay Data API
+  (`/relay/v1/data/bidtraces/*`) is the proven public source for live
+  builder/relay share (relayscan.io lineage). External label services
+  (EigenPhi-class) are **bootstrap-only, never runtime dependencies** —
+  they can die; our attribution pipeline must not.
+
+### 27.4 Competitor-address observation
+
+The Commander may add a competitor's on-chain address (wallet/contract)
+from the dashboard; the system then measures the competitor *directly*:
+
+- funding-graph clustering (weakly-connected components — most
+  controlled addresses share a funding source within ~3 hops);
+- nonce-correlation and bytecode/initcode fingerprinting (>95% match);
+- gas-signature histograms and block-position preference;
+- profit-consolidation flows → entity boundary.
+
+Measured output: the entity's inclusion rate, landed extraction
+signature and estimated PnL on chains we already observe — it becomes a
+measured peer with forging targets. Attribution is **probabilistic**:
+results carry confidence (~80%-overlap rule), never certainty.
+
+### 27.5 Autonomy boundary — the forge worker and gap tasks
+
+AllBright does not wait for a command to forge; it also does not grant
+itself unlimited authority. The forge worker (`forge.rs`) runs a
+continuous loop: `competitive_json → gap tasks → classify → track →
+self-close`. Industry lineage: SafeDeploy stateful workflows and inert
+proposals, SRE error-budget gating, Chromium perf-regression sheriffs.
+
+- **Gap tasks are stateful workflows** (`data/gap_tasks.json`), dedup'd
+  by axis: `OPEN → IN_FLIGHT / ESCALATED → MEASURED / ACKED`.
+- **SAFE class** — the fix is owned by an already-running autonomous
+  loop (pool coverage → curator, RPC freshness → scout). Marked
+  `IN_FLIGHT` with the owning loop named. No new authority is granted.
+- **ESCALATE class** — *inert proposals*. They NEVER auto-execute: no
+  threshold changes, no code changes, no risk weakening. The Commander
+  acknowledges them; work proceeds through the engineering loop.
+- **MEASURED** — a task self-closes only when the fitness function
+  improves to peer par. Evidence closes loops, not clicks.
+- **Regression-as-fault** — an axis rating that drops reopens its task
+  at `HIGH` priority; the forge worker flags it rather than hiding it.
+- This boundary is the same error-budget gate as §34 healing: the safe
+  class is bounded and journaled; the escalate class always requires a
+  human decision.
 
 ## 28. AI AGENT BEHAVIOR & DEFINITION OF DONE
 
@@ -850,6 +935,41 @@ FAULT → DETECTION → DIAGNOSIS → SAFE DECISION → REMEDIATION
 ```
 
 If any link is missing, the self-healing capability is not certified.
+
+### 34.0 The agent is not the healer — system-mediated repair mandate
+
+Any fault discovered during operation MUST be remediated by the
+self-diagnosis/self-healing system — not by manual agent action. An
+agent that diagnoses a fault by hand and repairs it ad hoc has NOT fixed
+the system: it has concealed a blindness the platform still cannot see.
+
+For every fault an agent observes or repairs, the required output is:
+
+1. **Detection** — extend the sentinel (or the owning component) so the
+   same fault class is DETECTED automatically next time. A fix that adds
+   no detector is forbidden.
+2. **Classification** — a machine-readable `FailureClass`/`HealAction`
+   journal record; never silent repair.
+3. **Remediation** — a bounded, blast-radius-scoped heal path where the
+   authority level permits it; otherwise an explicit escalation record.
+4. **Verification** — the healed state is re-verified by the system, not
+   asserted by the agent.
+5. **Regression coverage** — the fault family joins the diagnosis
+   coverage set (§34.2) so repeat incidents surface automatically.
+
+Incidents that required manual agent intervention are themselves proof
+of a self-heal coverage gap and MUST be journaled as such. Known gap
+families (observed): CPU/RAM saturation invisible to process telemetry;
+PM2 restart loops invisible to watchers; silent-dead feeds invisible to
+data-plane monitors; bus event floods starving subscribers; PM2 daemon
+loss emptying the managed-process map. Manual suspension of foreign
+processes, manual `pm2 restart`, and manual config edits are acceptable
+as **temporary containment only — never resolution** — and the missing
+detection plus remediation must land in the same change set.
+
+An agent that finds itself performing diagnosis the system cannot MUST
+report that gap to the Commander and treat closing it as the priority
+task — never continue operating as the hidden healer.
 
 ### 34.1 Deployment readiness must test the healer
 
@@ -1987,3 +2107,138 @@ Every agent must preserve this closed loop.
 **See more opportunities. Understand them more accurately. Choose better. React faster. Execute more reliably. Challenge continuously. Learn from what was missed. Expand the map. Prove what was achieved.**
 
 **Measure first. Optimize second. Challenge continuously. Execute last.**
+
+---
+
+## APPENDIX B — BLUEPRINT GAP REGISTER (audit 2026-10-10)
+
+Gaps identified by comparing AllBright against the proactive-flash-loan
+reference blueprint (mempool ingestion → revm simulation → atomic
+bundling → on-chain execution → validator incentive). Each gap is
+tracked to closure; statuses update only on measured evidence.
+
+| ID | Gap | Evidence | Economic cost | Closure plan |
+|---|---|---|---|---|
+| GAP-1 | No EVM-level simulation — math-only sim cannot see reverts | `allbright-simulation` = `amm.rs` math; no `revm` in workspace | 13,028 execs, 0 inclusions; `CamelotPair: K` bait class | EVM dry-run gate (`eth_call` of `execute()` pre-submission); revm backend roadmap |
+| GAP-2 | Shallow pool registry — depth-blind on base/avax | `pools.json` lacks aerodrome/uniswap-v3/pharaoh/pancake-v3 deep pools; no depth fields | Challenger counterfactuals cap at ~$0.03 net — dust-profit ceiling | Depth-aware `fetch_pools.py` re-run; on-chain verify; provenance kept |
+| GAP-3 | Block-cadence ingestion only | `evm_stream.rs`: `newHeads` + Multicall poll; no Swap-log subs, no pending tx | State staleness vs event-driven competitors | WSS `Swap`/`Sync`/`PoolSwap` log subscriptions → pool refresh |
+| GAP-4 | Flashbots submit is a stub | `relay.rs:319` returns literal `0xflashbots-pending` — no signed tx | Fake-hash landmine if triggered | Implement real `eth_sendBundle` (Eth only) or fail-closed |
+| GAP-5 | Dead flash capacity | Contract supports `UNIV3_FLASH`+`ERC3156`; `flash_providers()` never emits them | Two zero-fee providers unused | Add verified UniV3-flash/ERC-3156 candidates per chain |
+
+**Applicability caveat:** blueprint phases 1/3/5 are Ethereum-mainnet
+shaped. Arbitrum and Base have no public mempool and no builder auction —
+the portable equivalents are Swap-event ingestion (GAP-3) and private
+submission where a verified relay exists. `block.coinbase` tipping is
+N/A on L2s; inclusion incentive on active chains runs through the
+Pimlico paymaster path.
+
+**Rule:** closing a gap means measured evidence of the capability in
+production, not merged code. Each closure re-runs the relevant
+blindness test (§28) and is journaled.
+
+---
+
+## APPENDIX C — COMMANDER SUBMISSION & CONTROL MODEL
+
+Allbright is engineered as a **product submitted to the Commander**,
+not a research artifact the agent babysits.
+
+### C.1 Submission standard
+
+The platform is submitted to the Commander only when the agent has
+tested it to **top-tier grade**: the readiness scorecard (§33) and the
+measured funnel demonstrate a *capability of continually generating
+profit* — evidenced by the live lifecycle
+`detected → simulated → qualified → submitted → included → settled →
+wallet balance change`, not by projections or test counts. Submission
+without that evidence is a CONDITIONAL submission and must say so.
+
+### C.2 Commander operating surface
+
+The Commander deploys and monitors Allbright through the **dashboard**
+(:3001) — the operating surface is the UI, not the codebase. The
+Commander must be able to, without an agent:
+
+- see live profit/loss, funnel health, chain/strategy/RPC state;
+- **activate or deactivate chains** — chain participation is an
+  operator control journaled as a system event (`ACTIVE_CHAINS` is the
+  live source of truth);
+- **activate or deactivate strategy variants** — P01–P12 toggled
+  individually, journaled, effective without redeploy;
+- engage the kill switch and view self-diagnosis/self-heal state.
+
+### C.3 Expansion model
+
+Chain and strategy **expansion is a system capability**: new chains
+enter through the verified registry + config pipeline (never code
+surgery on the control surface); new strategy variants enter the
+strategy registry with the §9 plug-in contract and appear on the
+control surface automatically. The control plane must be built so that
+adding chain N+1 or variant P13 requires **no dashboard rewrite** —
+the surface reads the live registries.
+
+### C.4 Agent duty
+
+The agent's role after submission is bounded: operate the engineering
+loop (measure → fix → expand), keep the self-diagnosis/self-heal system
+capable (§34), and requalify readiness. The Commander decides; the
+system executes and reports; the agent maintains the machine.
+
+### C.5 Turnkey operating surface — seven dimensions
+
+The Commander-facing dashboard carries seven operational dimensions.
+"Zero-text" means **no command-line, no file edits, no text config** —
+visual controls are themselves operations:
+
+| Dimension | Requirement | Current state |
+|---|---|---|
+| Simulate | One-click sandbox replaying routes against live state (`eth_call` dry-run now; revm grid is roadmap) | Exec-path dry-run live; UI sandbox pending |
+| Deploy | One-click executor deploy via injected wallet | Roadmap — capital-critical, gated behind readiness evidence |
+| Monitor | Real-time pipeline + stream-freshness telemetry | Live — swap-event stream is the L2-feasible mempool equivalent |
+| Optimize | Visual calibration of thresholds (profit floor, gas caps) via sliders/toggles | Pending — config-only today |
+| Draw Profit | Profit portal + sweep trigger + wallet activation matrix | Randomized multi-wallet auto-sweep live; UI controls pending |
+| Expand | Toggle chains / strategies / token sets from the surface | Pending — `ACTIVE_CHAINS` is env-only today |
+| Reports | Downloadable performance matrices, win/loss, gas efficiency | Reports page live |
+
+**Rejected mechanisms (binding prohibitions):**
+
+- **No self-modifying economic parameters.** A system may never
+  autonomously rewrite its own profit floors, size caps, or matching
+  rules. Infra heals (sentinel, bounded, H0–H4); economics move only
+  through the Challenger → bounded-recalibration path — journaled,
+  hard-capped, never silent.
+- **No external heal scripts.** Self-diagnosis and self-healing live
+  inside system services in Rust (sentinel + per-service loops). Shell
+  scripts rebooting workers or rewriting parameters bypass the journal
+  and the authority model — prohibited.
+- **No dead controls.** Controls that cannot function on an active
+  chain must not render: builder-tip dials (no builder auction on
+  L2s), mempool views (no mempool on Arb/Base). Every control maps to
+  a real lever or it does not ship.
+
+## 41. AGENT COPILOT GOVERNANCE (dashboard assistant)
+
+The dashboard agent copilot (`/api/agent/*`) is a **read-only advisor** — an
+ops assistant over telemetry, never an actor on the system.
+
+Binding rules:
+
+- **Read-only, always.** The agent receives server-assembled aggregate
+  context only. It MUST NOT call mutating endpoints, execute tools, send
+  transactions, or control any service. Recommendations are *inert
+  proposals* — Commander authority is required for any action (§27.5).
+- **Keys server-side.** `ALLBRIGHT_AGENT_BASE`/`ALLBRIGHT_AGENT_KEY`/
+  `ALLBRIGHT_AGENT_MODEL` live in ENV; the key never reaches the browser,
+  prompts, or journals.
+- **Bounded context.** Injected telemetry is capped (~24KB), aggregates
+  only — no private keys, secrets, full journal payloads, or ENV contents.
+- **Journaled.** Every call appends `data/agent_log.jsonl`
+  (action, model, context bytes, timestamp) — auditable like all decisions.
+- **Fail-closed honesty.** An unreachable endpoint returns an explicit
+  error; the agent MUST NOT fabricate metrics or answers.
+- **Provenance.** Provider + model are declared in the panel and in the
+  journal — attribution, not mystery.
+- **Default = local.** Default endpoint is Ollama
+  (`http://localhost:11434/v1`) — zero cost, zero data egress. External
+  providers (Groq/OpenRouter/Gemini/GitHub Models) require explicit
+  Commander configuration.

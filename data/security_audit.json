@@ -1,0 +1,28 @@
+{
+  "asof": "2026-10-10",
+  "contract": {
+    "callback_auth": "FIXED \u2014 pendingLender + pendingSwapPool caller authentication; all 7 callbacks reject direct calls",
+    "reentrancy": "mutex applied to execute/sweep paths",
+    "transfers": "ERC-20 transfer return values checked",
+    "foundry_tests": {
+      "passed": 6,
+      "failed": 0,
+      "asof": "2026-10-10",
+      "note": "includes test_callbacks_reject_direct_calls"
+    },
+    "slither": {
+      "findings": 84,
+      "critical_class": "eliminated \u2014 unauthenticated callbacks no longer present",
+      "remaining": "reentrancy-detector, calls-in-loop, low-level-call, naming \u2014 classified review-required",
+      "asof": "2026-10-10"
+    },
+    "external_audit": "PENDING \u2014 required before real capital (\u00a7security doctrine)"
+  },
+  "secrets_scan": {
+    "files_with_findings": 0,
+    "findings": 0,
+    "tool": "detect-secrets",
+    "asof": "2026-10-10"
+  },
+  "deployed_status": "UNKNOWN \u2014 source is hardened; deployed executors are NOT known to carry the fix. Sweep+redeploy is a gated Commander action."
+}

@@ -43,6 +43,11 @@ pub async fn run(cfg: Config, tx: mpsc::Sender<Event>) {
 
     let mut handles = Vec::new();
     for (chain_id, rpcs) in cfg.rpc_pools.iter() {
+        if !cfg.active_chains.contains(chain_id) {
+            tracing::info!(chain = %chain_id.name(),
+                "chain outside ACTIVE_CHAINS — collector not started");
+            continue;
+        }
         let Some(chain_pools) = by_chain.get(chain_id) else {
             tracing::info!(chain = %chain_id.name(), "no pools configured — chain idle");
             continue;
@@ -70,11 +75,49 @@ pub async fn run(cfg: Config, tx: mpsc::Sender<Event>) {
         let tx2 = tx.clone();
         let wss = cfg.wss_urls.get(chain_id).cloned();
         let wss2 = wss.clone();
-        handles.push(tokio::spawn(async move {
-            chain_loop(chain, env_pool, rpcs, pools, interval, tx, wss).await;
-        }));
+        // RPC-capacity scaling (AGENTS §37): shard the pool set across
+        // parallel workers, each starting on a different endpoint of the
+        // augmented list. More endpoints in concurrent use → higher
+        // aggregate refresh rate, isolated rate-limit blast radius, and
+        // no single endpoint carrying a chain's whole universe.
+        let shards = (rpcs.len() / 4).clamp(1, 3);
+        for shard in 0..shards {
+            let shard_pools: Vec<PoolDescriptor> = pools
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| i % shards == shard)
+                .map(|(_, p)| p.clone())
+                .collect();
+            if shard_pools.is_empty() {
+                break;
+            }
+            // Rotate each shard's endpoint view so workers don't pile
+            // onto endpoint 0 simultaneously.
+            let mut shard_rpcs = rpcs.clone();
+            shard_rpcs.rotate_left(shard % rpcs.len().max(1));
+            let env_pool_s = env_pool.clone();
+            let tx_s = tx.clone();
+            let wss_s = wss.clone();
+            handles.push(tokio::spawn(async move {
+                chain_loop(chain, env_pool_s, shard_rpcs, shard_pools, interval, tx_s, wss_s).await;
+            }));
+        }
+        tracing::info!(chain = %chain.name(), shards, endpoints = rpcs.len(),
+            pools = pools.len(), "collector shards spawned");
         handles.push(tokio::spawn(async move {
             discovery_loop(chain, rpcs2, factories, known, tx2, wss2).await;
+        }));
+        // GAP-3: event-driven freshness — Swap/Sync/Mint/Burn logs on
+        // watched pools trigger a targeted refresh, so a trade updates
+        // our state within a block instead of waiting for the poll
+        // cycle. L2-feasible equivalent of mempool awareness (no public
+        // mempool exists on Arb/Base).
+        let rpcs3 = rpcs.clone();
+        let pools3 = chain_pools.clone();
+        let tx3 = tx.clone();
+        let wss3 = cfg.wss_urls.get(chain_id).cloned();
+        handles.push(tokio::spawn(async move {
+            swap_watch_loop(chain, rpcs3, pools3, tx3, wss3).await;
         }));
     }
 
@@ -111,7 +154,7 @@ fn host_of(url: &str) -> &str {
 /// stay first (operator-curated primaries), then registry-QUALIFIED
 /// endpoints ordered by OVS. Bounded — the failover substrate is the
 /// shortlist, not the whole 200+ universe.
-const MAX_CHAIN_ENDPOINTS: usize = 12;
+const MAX_CHAIN_ENDPOINTS: usize = 32;
 
 fn augmented_endpoints(chain: Chain, env_pool: &[String]) -> Vec<String> {
     let mut out: Vec<String> = env_pool.to_vec();
@@ -124,6 +167,20 @@ fn augmented_endpoints(chain: Chain, env_pool: &[String]) -> Vec<String> {
         }
         if !out.iter().any(|e| e == &u) {
             out.push(u);
+        }
+    }
+    // Fallback tier (§37.1): when Qualified is exhausted — or absent —
+    // admit V4-verified Degraded endpoints (slow but economically
+    // sighted). A chain with zero Qualified AND zero env URLs otherwise
+    // goes fully dark while the registry holds usable endpoints.
+    if out.len() < MAX_CHAIN_ENDPOINTS {
+        for u in reg.fallback_urls(chain) {
+            if out.len() >= MAX_CHAIN_ENDPOINTS {
+                break;
+            }
+            if !out.iter().any(|e| e == &u) {
+                out.push(u);
+            }
         }
     }
     out
@@ -428,6 +485,119 @@ async fn discovery_loop(
         }
         fail(&tx, FailureClass::StreamDrop, "p06.factory.ended", chain,
             "factory log stream closed".into()).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+/// Swap/state-change event signatures the GAP-3 watcher subscribes to.
+/// V2 `Sync` covers swap+mint+burn on constant-product pools; V3
+/// `Swap`/`Mint`/`Burn` cover price moves and liquidity changes on CL.
+fn swap_sigs() -> [alloy::primitives::B256; 5] {
+    use alloy::primitives::keccak256;
+    [
+        keccak256("Sync(uint112,uint112)"),
+        keccak256("Swap(address,uint256,uint256,uint256,uint256,address)"),
+        keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)"),
+        keccak256("Mint(address,address,int24,int24,uint128,uint256,uint256)"),
+        keccak256("Burn(address,address,int24,int24,uint256,uint256)"),
+    ]
+}
+
+/// GAP-3 (AGENTS Appendix B): event-driven pool freshness. Subscribes to
+/// Swap/Sync/Mint/Burn logs emitted by the watched pool set; every hit
+/// refreshes just that pool via a small Multicall — the solver sees the
+/// post-swap state within a block instead of at the next poll tick.
+/// Without WSS capability the watcher exits (polling still covers).
+async fn swap_watch_loop(
+    chain: Chain,
+    rpcs: Vec<String>,
+    pools: Vec<PoolDescriptor>,
+    tx: mpsc::Sender<Event>,
+    wss: Option<String>,
+) {
+    use alloy::primitives::Address;
+    use alloy::rpc::types::Filter;
+    use futures_util::StreamExt;
+    use std::collections::HashMap;
+
+    let by_addr: HashMap<String, PoolDescriptor> = pools
+        .iter()
+        .map(|p| (p.address.to_lowercase(), p.clone()))
+        .collect();
+    let addrs: Vec<Address> = pools
+        .iter()
+        .filter_map(|p| p.address.parse().ok())
+        .collect();
+    if addrs.is_empty() {
+        return;
+    }
+    let mut ep = 0usize;
+    let mut http =
+        ProviderBuilder::new().connect_http(rpcs[ep].parse().expect("rpc url"));
+    let wss_url = wss.unwrap_or_else(|| rpcs[0].replacen("https://", "wss://", 1));
+    let sigs = swap_sigs().to_vec();
+    let mut backoff = Duration::from_secs(10);
+    // Per-watcher verify cache — reuses refresh()'s verification path
+    // without sharing state with the poll workers.
+    let mut dead: HashSet<String> = HashSet::new();
+    let mut verified: HashSet<String> = HashSet::new();
+
+    loop {
+        let ws = match ProviderBuilder::new()
+            .connect_ws(alloy::providers::WsConnect::new(wss_url.as_str()))
+            .await
+        {
+            Ok(w) => w,
+            Err(e) => {
+                let msg = e.to_string();
+                let class = if msg.contains("400") || msg.contains("405") || msg.contains("unsupported") {
+                    FailureClass::RpcMethodUnavailable
+                } else if msg.contains("429") {
+                    FailureClass::RpcRateLimit
+                } else {
+                    FailureClass::RpcProviderFailure
+                };
+                fail(&tx, class, "gap3.swap.connect", chain, msg).await;
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(300));
+                continue;
+            }
+        };
+        let filter = Filter::new()
+            .address(addrs.clone())
+            .event_signature(sigs.clone());
+        let mut stream = match ws.subscribe_logs(&filter).await {
+            Ok(s) => s.into_stream(),
+            Err(e) => {
+                fail(&tx, FailureClass::StreamDrop, "gap3.swap.subscribe", chain, e.to_string()).await;
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(300));
+                continue;
+            }
+        };
+        backoff = Duration::from_secs(10);
+        tracing::info!(chain = %chain.name(), pools = addrs.len(),
+            "swap-event watch live — event-driven freshness");
+
+        while let Some(log) = stream.next().await {
+            let key = format!("{:?}", log.address()).to_lowercase();
+            let Some(p) = by_addr.get(&key) else { continue };
+            // Targeted refresh of just this pool — bounded by event
+            // rate; a hot pool self-throttles via block cadence.
+            let slice = std::slice::from_ref(p);
+            if let Err(msg) =
+                refresh(&http, slice, &mut dead, &mut verified, chain, &tx).await
+            {
+                if rpcs.len() > 1 {
+                    ep = (ep + 1) % rpcs.len();
+                    http = ProviderBuilder::new()
+                        .connect_http(rpcs[ep].parse().expect("rpc url"));
+                }
+                fail(&tx, classify_rpc_err(&msg), "gap3.swap.refresh", chain, msg).await;
+            }
+        }
+        fail(&tx, FailureClass::StreamDrop, "gap3.swap.ended", chain,
+            "swap log stream closed".into()).await;
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }

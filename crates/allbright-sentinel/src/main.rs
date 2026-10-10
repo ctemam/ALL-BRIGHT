@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use allbright_core::{
     bus::BusServer,
     config::Config,
-    events::{now_ms, Chain, Event, HealAction},
+    events::{now_ms, Chain, Event, HealAction, SystemEvent},
     lineage::{Component, FailureClass, FailureEvent},
     rpc_registry::{RpcRegistry, REGISTRY_FILE},
 };
@@ -42,6 +42,41 @@ const RPC_DEGRADED_HEARTBEAT: u32 = 6;
 /// Healthy endpoints disagreeing by more than this many blocks are
 /// divergent — state not trustworthy (§37.8 quorum).
 const DIVERGENCE_BLOCKS: u64 = 10;
+// ---- Resource & data-plane telemetry (AGENTS §34.0/§34.2): the gaps
+// that made this session's faults invisible — sustained CPU/RAM
+// saturation, PM2 restart loops, silent-dead feeds, event floods,
+// PM2 daemon loss, host saturation. Measured per audit, emitted as
+// classified failures, healed where authorized.
+/// Sustained per-service CPU above this = saturation (PM2 % of one core;
+/// >100 means more than one core).
+const CPU_HOT_PCT: f64 = 150.0;
+/// Sustained RSS above this = memory pressure (bytes).
+const MEM_HOT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// restart_time growth = PM2 restarted it unprompted (memory cap,
+/// crash loop) — autorestart masks the underlying fault.
+/// Consecutive hot audits before a resource finding is emitted.
+const HOT_TICKS: u32 = 3;
+/// Resource audit cadence (PM2 monit + host CPU).
+const RESOURCE_AUDIT_EVERY: Duration = Duration::from_secs(30);
+/// Data-plane rate audit cadence.
+const FEED_AUDIT_EVERY: Duration = Duration::from_secs(30);
+/// Zero CexTick for this long = CEX feed blind (silent-dead socket).
+const CEX_BLIND_AFTER: Duration = Duration::from_secs(90);
+/// Zero PoolUpdate for this long = ingest blind.
+const POOL_BLIND_AFTER: Duration = Duration::from_secs(60);
+/// Sustained PoolUpdate rate above this = subscriber-starving flood.
+const POOL_FLOOD_PER_SEC: f64 = 150.0;
+/// Host CPU above this = machine-level saturation.
+const HOST_CPU_HOT: f64 = 90.0;
+
+/// Data-plane feed state — counted from the ingest bus.
+#[derive(Default)]
+struct FeedState {
+    pool_count: u64,
+    cex_count: u64,
+    last_pool: Option<Instant>,
+    last_cex: Option<Instant>,
+}
 
 /// Per-endpoint RPC visibility state.
 #[derive(Default)]
@@ -97,7 +132,9 @@ async fn rpc_block_number(
 /// OVS, bounded per chain — the sentinel watches the production
 /// shortlist, not the whole candidate universe (§36/§37).
 fn watch_endpoints(cfg: &Config, reg: &RpcRegistry) -> Vec<(Chain, Vec<String>)> {
-    Chain::ALL
+    // Watch the production scope only — retired chains' endpoints aren't
+    // failures, they're out of mandate (ACTIVE_CHAINS).
+    cfg.active_chains
         .iter()
         .filter_map(|c| {
             let mut v: Vec<String> = cfg.rpc_pools.get(c).cloned().unwrap_or_default();
@@ -162,6 +199,9 @@ async fn port_holder_pid(port: u16) -> Option<u32> {
 struct ManagedProc {
     pid: u32,
     online: bool,
+    cpu: f64,
+    mem_bytes: u64,
+    restart_time: u64,
 }
 
 /// Funnel liveness state — latest observed timestamp per stage plus a
@@ -229,9 +269,48 @@ fn funnel_scan(path: &str, offset: &mut u64, st: &mut FunnelStats) {
     }
 }
 
+/// Evidence-pipeline check (§34.3 root-cause discipline): if the index
+/// file itself has gone stale while the raw BSONL journal keeps
+/// appending, the dashboard's index feed is dead — funnel silence is an
+/// observability artifact, not a market signal. Returns true when the
+/// index is provably stalled behind a live journal.
+fn index_stalled(index_path: &str, journal_dir: &str, now: u64) -> bool {
+    let idx_mtime = std::fs::metadata(index_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    if idx_mtime == 0 || now.saturating_sub(idx_mtime) <= PROFIT_STALL_WINDOW_MS {
+        return false; // index fresh — funnel reads are trustworthy
+    }
+    // Is the raw journal still appending? (proof the funnel is alive but
+    // the index feed is not)
+    let journal_fresh = std::fs::read_dir(journal_dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_name().to_string_lossy().starts_with("journal-")
+                        && e.file_name().to_string_lossy().ends_with(".bsonl")
+                })
+                .filter_map(|e| {
+                    e.metadata().and_then(|m| m.modified()).ok()
+                })
+                .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .any(|d| now.saturating_sub(d.as_millis() as u64) <= PROFIT_STALL_WINDOW_MS)
+        })
+        .unwrap_or(false);
+    journal_fresh
+}
+
 /// Classify a profit stall into its root funnel stage (§34.3). Returns
 /// (class, human detail). `None` = funnel is alive or execution unarmed.
-fn diagnose_stall(st: &FunnelStats, now: u64, armed: bool) -> Option<(FailureClass, String)> {
+fn diagnose_stall(
+    st: &FunnelStats,
+    now: u64,
+    armed: bool,
+    index_stalled: bool,
+) -> Option<(FailureClass, String)> {
     if !armed {
         return None; // dormant by policy — not a fault
     }
@@ -262,6 +341,18 @@ fn diagnose_stall(st: &FunnelStats, now: u64, armed: bool) -> Option<(FailureCla
     }
 
     // Stage-by-stage root cause — symptom → component → cause.
+    // Rule 0: if the evidence file itself is dead, the stall is in the
+    // dashboard index feed, not the funnel — never report this as market
+    // absence or pipeline starvation.
+    if funnel_quiet && index_stalled {
+        return Some((
+            FailureClass::StreamDrop,
+            "dashboard index stale while raw journal still appends — \
+             index feed dead (bus/writer fault), funnel evidence \
+             unverifiable — repair observability before diagnosing market"
+                .into(),
+        ));
+    }
     if funnel_quiet && rej_total == 0 {
         return Some((
             FailureClass::FunnelStarvation,
@@ -370,10 +461,44 @@ async fn pm2_list() -> Option<HashMap<String, ManagedProc>> {
             ManagedProc {
                 pid: p["pid"].as_u64().unwrap_or(0) as u32,
                 online: p["pm2_env"]["status"].as_str() == Some("online"),
+                cpu: p["monit"]["cpu"].as_f64().unwrap_or(0.0),
+                mem_bytes: p["monit"]["memory"].as_u64().unwrap_or(0),
+                restart_time: p["pm2_env"]["restart_time"].as_u64().unwrap_or(0),
             },
         );
     }
     Some(map)
+}
+
+/// Host CPU % via typeperf — one sample, ~1s, no admin needed.
+async fn host_cpu_pct() -> Option<f64> {
+    let out = quiet_cmd("typeperf")
+        .args([r"\Processor(_Total)\% Processor Time", "-sc", "1"])
+        .output()
+        .await
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .filter(|l| l.contains(','))
+        .last()
+        .and_then(|l| l.rsplit(',').next()?.trim_matches('"').parse().ok())
+}
+
+/// Top N processes by current CPU sample (attribution for a hot host).
+/// PowerShell Get-Counter two-sample delta — ~2s, runs only when host
+/// is already diagnosed hot.
+async fn top_cpu_processes(n: usize) -> String {
+    let script = format!(
+        "$a=Get-Process;Start-Sleep 1;$b=@{{}};foreach($p in Get-Process){{$b[$p.Id]=$p.TotalProcessorTime.TotalSeconds}};$a|ForEach-Object{{$d=$b[$_.Id]-$_.TotalProcessorTime.TotalSeconds;[pscustomobject]@{{N=$_.Name;C=[int]($d*100)}}}}|Sort-Object C -Descending|Select-Object -First {n}|ForEach-Object{{\"$($_.N):$($_.C)%\"}}"
+    );
+    let out = quiet_cmd("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output()
+        .await
+        .ok();
+    out.map(|o| String::from_utf8_lossy(&o.stdout).trim().replace('\n', " "))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "attribution unavailable".into())
 }
 
 /// Image name of a process (e.g. "allbright-solver.exe"), if alive.
@@ -429,6 +554,12 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = ([127, 0, 0, 1], cfg.ports.sentinel).into();
     let bus = BusServer::bind(addr).await?;
     info!(%addr, "sentinel bus listening");
+    let _ = bus.publish(&Event::System(SystemEvent {
+        component: "sentinel".into(),
+        action: "startup".into(),
+        detail: "process boot".into(),
+        ts_ms: now_ms(),
+    }));
 
     // Sentinel does not watch itself — a dead sentinel is caught by PM2's
     // own autorestart; a wedged one would starve its own loop anyway.
@@ -442,6 +573,48 @@ async fn main() -> anyhow::Result<()> {
         ("allbright-challenger".into(), cfg.ports.challenger),
         ("allbright-dashboard".into(), cfg.ports.dashboard),
     ];
+
+    // ---- Data-plane rate monitor (§34.0): dead-silent feeds and
+    // subscriber-starving floods are both invisible to port probes —
+    // this session's two biggest blind spots. The sentinel counts
+    // per-variant rates on the ingest bus.
+    let feed = std::sync::Arc::new(std::sync::Mutex::new(FeedState::default()));
+    {
+        let feed = feed.clone();
+        let ingest_addr = format!("127.0.0.1:{}", cfg.ports.ingest);
+        tokio::spawn(async move {
+            loop {
+                let mut cli =
+                    allbright_core::bus::BusClient::connect_retry(&ingest_addr).await;
+                while let Some(ev) = cli.incoming.recv().await {
+                    if let Ok(mut f) = feed.lock() {
+                        match &ev {
+                            Event::PoolUpdate(_) => {
+                                f.pool_count += 1;
+                                f.last_pool = Some(Instant::now());
+                            }
+                            Event::CexTick(_) => {
+                                f.cex_count += 1;
+                                f.last_cex = Some(Instant::now());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        });
+    }
+    let mut last_resource_audit = Instant::now() - RESOURCE_AUDIT_EVERY;
+    let mut last_feed_audit = Instant::now(); // grace period: bus warmup
+    let mut hot_ticks: HashMap<String, u32> = HashMap::new();
+    let mut hot_emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut prev_restarts: HashMap<String, u64> = HashMap::new();
+    let mut loop_warned: HashMap<String, Instant> = HashMap::new();
+    let mut feed_prev: (u64, u64) = (0, 0);
+    let mut feed_state: Option<&'static str> = None;
+    let mut host_hot_ticks = 0u32;
+    let mut daemon_fix_at = Instant::now() - BUDGET_WINDOW;
 
     let mut bad_ticks: HashMap<String, u32> = HashMap::new();
     let mut actions: HashMap<String, Vec<Instant>> = HashMap::new();
@@ -550,6 +723,33 @@ async fn main() -> anyhow::Result<()> {
             continue;
         };
         pm2_blind_logged = false;
+
+        // PM2 daemon blind: jlist succeeded but the map is EMPTY — a
+        // daemon respawn loses registrations (observed live: daemon died,
+        // respawned, whole fleet orphaned then dead). Bounded remediation:
+        // resurrect the saved list once per window, escalate on failure.
+        if managed.is_empty() && daemon_fix_at.elapsed() >= BUDGET_WINDOW {
+            daemon_fix_at = Instant::now();
+            tracing::error!("pm2 process list empty — daemon lost registrations; resurrecting");
+            let eco = std::env::var("ECOSYSTEM_CONFIG")
+                .unwrap_or_else(|_| "ecosystem.config.js".into());
+            let ok = pm2(&["resurrect"]).await.is_some()
+                || pm2(&["start", &eco]).await.is_some();
+            let _ = bus.publish(&Event::Heal(HealAction {
+                target: "pm2-daemon".into(),
+                action: "pm2.resurrect".into(),
+                reason: "pm2 process list empty — daemon registrations lost".into(),
+                success: ok,
+                restarts_in_window: 0,
+                ts_ms: now_ms(),
+            }));
+            if !ok {
+                escalate!(
+                    bus, "sentinel.pm2_daemon",
+                    "pm2 resurrect/start failed — fleet unmanaged".to_string()
+                );
+            }
+        }
 
         for (name, port) in &watched {
             // 1. Verify a pending remediation first.
@@ -906,7 +1106,8 @@ async fn main() -> anyhow::Result<()> {
             {
                 funnel.rejections.pop_front();
             }
-            match diagnose_stall(&funnel, now, cfg.auto_execute) {
+            let stalled = index_stalled(&index_path, "journal", now);
+            match diagnose_stall(&funnel, now, cfg.auto_execute, stalled) {
                 Some((class, detail)) => {
                     let key = format!("{class:?}");
                     if funnel_state.as_deref() != Some(key.as_str()) {
@@ -938,6 +1139,217 @@ async fn main() -> anyhow::Result<()> {
                         }));
                     }
                 }
+            }
+        }
+
+        // ---- Resource audit (§34.0): PM2 monit telemetry — restart
+        // loops, sustained CPU/RAM saturation, host load. Diagnosis and
+        // escalation: restarting doesn't fix algorithmic load.
+        if last_resource_audit.elapsed() >= RESOURCE_AUDIT_EVERY {
+            last_resource_audit = Instant::now();
+            for (name, m) in &managed {
+                if !m.online {
+                    continue;
+                }
+                // Restart loop: restart_time grows ⇒ PM2 keeps killing
+                // and respawning it (memory cap, crash loop) — the
+                // autorestart flag masks the underlying fault.
+                let prev = prev_restarts
+                    .insert(name.clone(), m.restart_time)
+                    .unwrap_or(m.restart_time);
+                if m.restart_time > prev {
+                    let warned = loop_warned
+                        .get(name)
+                        .map(|t| t.elapsed() < BUDGET_WINDOW)
+                        .unwrap_or(false);
+                    if !warned {
+                        loop_warned.insert(name.clone(), Instant::now());
+                        let _ = bus.publish(&Event::Failure(FailureEvent::new(
+                            Component::Sentinel,
+                            FailureClass::ResourceSaturation,
+                            "sentinel.resource",
+                            format!(
+                                "restart_loop:{name} restarts {prev}→{} — PM2 keep \
+                                 killing it (memory cap breach or crash-loop); autorestart \
+                                 was masking the fault",
+                                m.restart_time
+                            ),
+                        )));
+                    }
+                }
+                // Sustained CPU/RAM saturation.
+                let hot = m.cpu > CPU_HOT_PCT || m.mem_bytes > MEM_HOT_BYTES;
+                if hot {
+                    let t = hot_ticks.entry(name.clone()).or_default();
+                    *t += 1;
+                    if *t >= HOT_TICKS && !hot_emitted.contains(name.as_str()) {
+                        hot_emitted.insert(name.clone());
+                        let _ = bus.publish(&Event::Failure(FailureEvent::new(
+                            Component::Sentinel,
+                            FailureClass::ResourceSaturation,
+                            "sentinel.resource",
+                            format!(
+                                "resource_saturation:{name} cpu={:.0}% mem={:.0}MB \
+                                 sustained {t} audits — needs algorithmic diagnosis, \
+                                 not restart",
+                                m.cpu,
+                                m.mem_bytes as f64 / 1e6
+                            ),
+                        )));
+                    }
+                } else {
+                    hot_ticks.remove(name);
+                    if hot_emitted.remove(name.as_str()) {
+                        let _ = bus.publish(&Event::Heal(HealAction {
+                            target: name.clone(),
+                            action: "resource.recovered".into(),
+                            reason: format!(
+                                "cpu={:.0}% mem={:.0}MB within budget",
+                                m.cpu,
+                                m.mem_bytes as f64 / 1e6
+                            ),
+                            success: true,
+                            restarts_in_window: 0,
+                            ts_ms: now_ms(),
+                        }));
+                    }
+                }
+            }
+            // Host-level saturation + process attribution (foreign hogs
+            // are escalated, never killed — §34 remediation ordering).
+            if let Some(h) = host_cpu_pct().await {
+                if h > HOST_CPU_HOT {
+                    host_hot_ticks += 1;
+                    if host_hot_ticks >= HOT_TICKS && !hot_emitted.contains("host") {
+                        hot_emitted.insert("host".into());
+                        let top = top_cpu_processes(5).await;
+                        let _ = bus.publish(&Event::Failure(FailureEvent::new(
+                            Component::Sentinel,
+                            FailureClass::ResourceSaturation,
+                            "sentinel.resource",
+                            format!(
+                                "host_saturation:cpu={h:.0}% top=[{top}] — foreign \
+                                 processes escalated, never killed"
+                            ),
+                        )));
+                    }
+                } else {
+                    host_hot_ticks = 0;
+                    if hot_emitted.remove("host") {
+                        let _ = bus.publish(&Event::Heal(HealAction {
+                            target: "host".into(),
+                            action: "resource.recovered".into(),
+                            reason: format!("host cpu {h:.0}% within budget"),
+                            success: true,
+                            restarts_in_window: 0,
+                            ts_ms: now_ms(),
+                        }));
+                    }
+                }
+            }
+        }
+
+        // ---- Data-plane feed audit (§34.0): feed silence AND flood —
+        // the two faults invisible to every port probe this session.
+        if last_feed_audit.elapsed() >= FEED_AUDIT_EVERY {
+            last_feed_audit = Instant::now();
+            let (pc, cc, lp, lc) = {
+                let f = feed.lock().unwrap();
+                (f.pool_count, f.cex_count, f.last_pool, f.last_cex)
+            };
+            let pool_rate =
+                (pc - feed_prev.0) as f64 / FEED_AUDIT_EVERY.as_secs_f64();
+            feed_prev = (pc, cc);
+
+            let pool_age = lp.map(|t| t.elapsed());
+            let cex_age = lc.map(|t| t.elapsed());
+            let diagnosed: Option<(&'static str, Component, FailureClass, String)> =
+                if pool_age.map(|a| a > POOL_BLIND_AFTER).unwrap_or(false) {
+                    Some((
+                        "pool_silent",
+                        Component::EvmStream,
+                        FailureClass::StreamDrop,
+                        format!(
+                            "data_blindness: zero PoolUpdate for {pool_age:?} — ingest \
+                             pool feed silent (collectors dead); market state invisible, \
+                             NOT market absence"
+                        ),
+                    ))
+                } else if cex_age.map(|a| a > CEX_BLIND_AFTER).unwrap_or(false) {
+                    Some((
+                        "cex_silent",
+                        Component::CexStream,
+                        FailureClass::StreamDrop,
+                        format!(
+                            "data_blindness: zero CexTick for {cex_age:?} — Binance feed \
+                             silent (dead-socket symptom); native pricing on fallback → \
+                             gas economics distorted"
+                        ),
+                    ))
+                } else if pool_rate > POOL_FLOOD_PER_SEC {
+                    Some((
+                        "pool_flood",
+                        Component::Ingest,
+                        FailureClass::ResourceSaturation,
+                        format!(
+                            "event_flood: PoolUpdate {pool_rate:.0}/s starving \
+                             subscribers — low-rate events (CexTick) queue behind \
+                             identical-state republishes"
+                        ),
+                    ))
+                } else {
+                    None
+                };
+
+            match diagnosed {
+                Some((key, comp, class, detail)) if feed_state != Some(key) => {
+                    feed_state = Some(key);
+                    tracing::warn!(%detail, "data-plane fault diagnosed");
+                    let _ = bus.publish(&Event::Failure(FailureEvent::new(
+                        comp, class, "sentinel.feed_audit", detail.clone(),
+                    )));
+                    // Bounded remediation: silence means the collector
+                    // socket is wedged — restarting ingest re-establishes
+                    // it (H2 authority; budget-shared with the port
+                    // remediator). Flood is NOT restartable — it needs
+                    // the ingest dedup/algorithmic fix.
+                    if key != "pool_flood" {
+                        let svc = "allbright-ingest".to_string();
+                        let hist = actions.entry(svc.clone()).or_default();
+                        hist.retain(|t| t.elapsed() < BUDGET_WINDOW);
+                        if (hist.len() as u32) < RESTART_BUDGET {
+                            hist.push(Instant::now());
+                            let ok = pm2_restart(&svc).await;
+                            pending_verify.insert(
+                                svc.clone(),
+                                Instant::now() + VERIFY_DELAY,
+                            );
+                            heal!(
+                                bus, &svc,
+                                "pm2.restart(feed_silent)".to_string(),
+                                detail, ok, actions
+                            );
+                        } else {
+                            escalate!(
+                                bus, "sentinel.feed_audit",
+                                format!("ingest feed-silent remediation budget exhausted ({detail})")
+                            );
+                        }
+                    }
+                }
+                None => {
+                    if feed_state.take().is_some() {
+                        let _ = bus.publish(&Event::Heal(HealAction {
+                            target: "feed".into(),
+                            action: "feed.recovered".into(),
+                            reason: format!("pool {pool_rate:.0}/s, cex flowing"),
+                            success: true,
+                            restarts_in_window: 0,
+                            ts_ms: now_ms(),
+                        }));
+                    }
+                }
+                _ => {}
             }
         }
 

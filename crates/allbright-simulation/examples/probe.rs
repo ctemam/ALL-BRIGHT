@@ -25,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
         ],
         input_amount: 1.0,
         input_token: eth.into(),
+        strategy: "P01".into(),
         block: 0,
         ts_ms: now_ms(),
     };

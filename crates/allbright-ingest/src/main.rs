@@ -16,9 +16,16 @@ mod evm_stream;
 mod recorder;
 mod velora_stream;
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 
-use allbright_core::{bus::BusServer, chain, config::Config, events::Event};
+use allbright_core::{
+    bus::BusServer,
+    chain,
+    config::Config,
+    events::{Chain, Event},
+};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -86,7 +93,29 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let mut journal = recorder::Journal::new("journal")?;
+    // PoolUpdate dedup: collectors poll ~30 endpoints and republish
+    // identical reserves every cycle (~530 ev/s observed) — that flood
+    // starves every subscriber's inbound queue (CexTicks arrived minutes
+    // late → wrong gas pricing) and was the main driver of 28 GB/day
+    // journals. Publish only on state change, with a 10 s heartbeat so
+    // downstream staleness detection still sees a live pool.
+    let mut last_pub: HashMap<(Chain, String), (u64, Instant)> = HashMap::new();
     while let Some(ev) = rx.recv().await {
+        if let Event::PoolUpdate(p) = &ev {
+            let sig = p.reserve0.to_bits()
+                ^ p.reserve1.to_bits().rotate_left(32)
+                ^ p.sqrt_price_x96.unwrap_or(0.0).to_bits()
+                ^ p.liquidity.unwrap_or(0.0).to_bits();
+            let key = (p.chain, p.address.clone());
+            let (changed, heartbeat_due) = match last_pub.get(&key) {
+                Some((s, t)) => (*s != sig, t.elapsed() > Duration::from_secs(10)),
+                None => (true, true),
+            };
+            if !changed && !heartbeat_due {
+                continue;
+            }
+            last_pub.insert(key, (sig, Instant::now()));
+        }
         let _ = journal.record(&ev); // append-only journal for replay parity
         let _ = bus.publish(&ev);
     }

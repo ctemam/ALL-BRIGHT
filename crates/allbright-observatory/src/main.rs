@@ -19,7 +19,7 @@ use tracing::info;
 use allbright_core::{
     bus::{BusClient, BusServer},
     config::Config,
-    events::{now_ms, Event, ObservedOpportunity, PoolState, UniverseStats},
+    events::{now_ms, Event, ObservedOpportunity, PoolState, SystemEvent, UniverseStats},
 };
 
 /// Noise floor for a recorded spread — deliberately far below any
@@ -31,6 +31,9 @@ const EMIT_COOLDOWN_MS: u64 = 60_000;
 
 struct State {
     pools: HashMap<String, PoolState>,          // pool addr → state
+    /// (chain_id, pair key) → pool addrs — venue lookup is O(same-pair)
+    /// not O(universe); pair_key is computed once at insert, not per scan.
+    pair_index: HashMap<(u64, String), Vec<String>>,
     cex_usd: HashMap<String, f64>,              // "BTC" → usd mid
     last_emit: HashMap<String, u64>,            // dedupe key → ts
     spreads_emitted: u64,
@@ -80,9 +83,16 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = ([127, 0, 0, 1], cfg.ports.observatory).into();
     let bus = Arc::new(BusServer::bind(addr).await?);
     info!(%addr, "observatory bus listening");
+    let _ = bus.publish(&Event::System(SystemEvent {
+        component: "observatory".into(),
+        action: "startup".into(),
+        detail: "process boot".into(),
+        ts_ms: now_ms(),
+    }));
 
     let state = Arc::new(Mutex::new(State {
         pools: HashMap::new(),
+        pair_index: HashMap::new(),
         cex_usd: HashMap::new(),
         last_emit: HashMap::new(),
         spreads_emitted: 0,
@@ -147,16 +157,26 @@ async fn main() -> anyhow::Result<()> {
 /// On each pool update, recompute the pair's cross-venue spread.
 async fn observe(state: &Arc<Mutex<State>>, bus: &Arc<BusServer>, p: PoolState) {
     let mut s = state.lock().await;
-    s.pools.insert(p.address.clone(), p.clone());
     let chain = p.chain;
     let key = pair_key(&p);
+    if !s.pools.contains_key(&p.address) {
+        s.pair_index
+            .entry((chain.chain_id(), key.clone()))
+            .or_default()
+            .push(p.address.clone());
+    }
+    s.pools.insert(p.address.clone(), p.clone());
 
-    // All live venues quoting this pair on this chain — copied to owned
-    // values so the state lock can mutate counters afterwards.
-    let venues: Vec<(String, f64, f64)> = s
-        .pools
-        .values()
-        .filter(|x| x.chain == chain && pair_key(x) == key)
+    // All live venues quoting this pair on this chain — index lookup,
+    // not a full-universe scan.
+    let addrs = s
+        .pair_index
+        .get(&(chain.chain_id(), key.clone()))
+        .cloned()
+        .unwrap_or_default();
+    let venues: Vec<(String, f64, f64)> = addrs
+        .iter()
+        .filter_map(|a| s.pools.get(a))
         .map(|x| (x.venue.clone(), x.spot_price(), depth_usd(x, &s.cex_usd)))
         .filter(|(_, px, _)| *px > 0.0)
         .collect();

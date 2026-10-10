@@ -34,10 +34,23 @@ NETWORKS = {
  "scroll":("scroll",     "https://scroll-rpc.publicnode.com"),
  "blast":("blast",       "https://blast-rpc.publicnode.com"),
 }
-MAX_DEXES = 10          # venues enumerated per chain
-PAGES_PER_DEX = 2       # ~40 pools/venue raw candidates
-MAX_PAIRINGS = 45       # multi-instance pairs kept per chain
-MAX_CONNECTORS = 25     # extra single-venue pools for graph density
+MAX_DEXES = 14          # venues enumerated per chain
+PAGES_PER_DEX = 3       # ~60 pools/venue raw candidates
+MAX_PAIRINGS = 90       # multi-instance pairs kept per chain
+MAX_CONNECTORS = 40     # extra single-venue pools for graph density
+# Depth floor (AGENTS §28): a shallow universe structurally caps profit —
+# observed counterfactuals topped out at $0.03 net because the registry
+# held only overlap-pairs on thin pools. Always keep the deepest pools
+# per chain regardless of pair overlap; a deep single-venue pool still
+# serves triangular routes and divergence legs.
+DEEP_USD_FLOOR = 100_000   # pools below this never enter "deep" keep
+MAX_DEEP = 40              # deepest single-instance pools kept per chain
+# GT /networks/{net}/dexes ordering is NOT depth-sorted — on base it
+# returns dead venues (leetswap, kokonutswap) while aerodrome/uniswap-v3
+# never reach the top-14 → the dex enumeration was structurally blind.
+# /networks/{net}/pools IS depth-ordered; pull it as a second source so
+# deep venues enter the candidate set regardless of dex ranking.
+TOP_POOL_PAGES = 4         # ~80 top pools per network
 BATCH = 50              # eth_call batch size
 
 # ---- canonical selectors (self-tested at startup) --------------------
@@ -114,28 +127,50 @@ def to_str(h):
     except Exception:
         return None
 
+def _pool_cand(pool, venue):
+    """GT pool object → candidate record, or None."""
+    addr = pool["id"].rsplit("_",1)[-1].lower()
+    rel = pool.get("relationships",{})
+    bt = rel.get("base_token",{}).get("data",{}).get("id","")
+    qt = rel.get("quote_token",{}).get("data",{}).get("id","")
+    bt = bt.rsplit("_",1)[-1].lower() if "_" in bt else None
+    qt = qt.rsplit("_",1)[-1].lower() if "_" in qt else None
+    if not (addr.startswith("0x") and bt and qt):
+        return None
+    return {"addr":addr,"venue":venue,
+            "pair":frozenset((bt,qt)),
+            "reserve_usd":float(
+                pool["attributes"].get("reserve_in_usd") or 0)}
+
 # ---------- candidate collection ----------
 def collect_candidates(chain, net):
     d = gt(f"/networks/{net}/dexes")
     dexes = [x["id"] for x in (d or {}).get("data",[])][:MAX_DEXES]
     cands = {}   # addr -> {venue, pair}
+    top = {}   # addr -> reserve_usd, for the coverage audit
+    # Source 1: top pools network-wide (depth-ordered — catches deep
+    # venues the dex list misses).
+    for page in range(1, TOP_POOL_PAGES+1):
+        p = gt(f"/networks/{net}/pools?page={page}")
+        if not p or not p.get("data"): break
+        for pool in p["data"]:
+            dex = (pool.get("relationships",{}).get("dex",{})
+                   .get("data",{}).get("id","unknown"))
+            c = _pool_cand(pool, dex.replace("-","_"))
+            if c:
+                cands.setdefault(c["addr"], c)
+                top[c["addr"]] = c["reserve_usd"]
+        time.sleep(1.1)
+    # Source 2: per-dex enumeration (breadth — overlapping pairs).
     for dex in dexes:
         for page in range(1, PAGES_PER_DEX+1):
             p = gt(f"/networks/{net}/dexes/{dex}/pools?page={page}")
             if not p or not p.get("data"): break
             for pool in p["data"]:
-                addr = pool["id"].rsplit("_",1)[-1].lower()
-                rel = pool.get("relationships",{})
-                bt = rel.get("base_token",{}).get("data",{}).get("id","")
-                qt = rel.get("quote_token",{}).get("data",{}).get("id","")
-                bt = bt.rsplit("_",1)[-1].lower() if "_" in bt else None
-                qt = qt.rsplit("_",1)[-1].lower() if "_" in qt else None
-                if addr.startswith("0x") and bt and qt:
-                    cands.setdefault(addr, {
-                        "addr":addr,"venue":dex.split("_")[0].replace("-","_"),
-                        "pair":frozenset((bt,qt))})
+                c = _pool_cand(pool, dex.split("_")[0].replace("-","_"))
+                if c: cands.setdefault(c["addr"], c)
             time.sleep(1.1)
-    return cands
+    return cands, top
 
 def select(cands):
     """pair -> [pool addrs]; keep >=2-instance pairs + connector singles."""
@@ -144,6 +179,14 @@ def select(cands):
     pairs = sorted(((k,v) for k,v in by_pair.items() if len(v)>=2),
                    key=lambda kv:-len(kv[1]))[:MAX_PAIRINGS]
     keep = {a for _,addrs in pairs for a in addrs}
+    # Deep singles: the deepest pools per chain by GT reserve — kept
+    # regardless of pair overlap (triangular + divergence lanes need
+    # them; shallow-universe = dust-profit ceiling).
+    deep = sorted(
+        (a for a,c in cands.items()
+         if a not in keep and c["reserve_usd"] >= DEEP_USD_FLOOR),
+        key=lambda a:-cands[a]["reserve_usd"])[:MAX_DEEP]
+    keep |= set(deep)
     kept_tokens = set()
     for a in keep: kept_tokens |= set(cands[a]["pair"])
     conn = [a for a,c in cands.items()
@@ -205,13 +248,13 @@ def verify_chain(chain, rpc, addrs, cands):
 def process(chain):
     net, rpc = NETWORKS[chain]
     try:
-        cands = collect_candidates(chain, net)
+        cands, top = collect_candidates(chain, net)
         keep, n_pairs = select(cands)
         pools = verify_chain(chain, rpc, keep, cands)
-        return chain, pools, len(cands), n_pairs
+        return chain, pools, len(cands), n_pairs, top
     except Exception as e:
         print(f"{chain}: ERROR {e}", flush=True)
-        return chain, [], 0, 0
+        return chain, [], 0, 0, {}
 
 def main():
     sel_check()
@@ -220,10 +263,10 @@ def main():
     if "--chains" in sys.argv:
         only = set(sys.argv[sys.argv.index("--chains")+1].split(","))
     targets = {c:v for c,v in NETWORKS.items() if only is None or c in only}
-    results={}; stats={}
+    results={}; stats={}; tops={}
     with ThreadPoolExecutor(max_workers=2) as ex:
-        for chain,pools,ncand,npairs in ex.map(process, targets):
-            results[chain]=pools; stats[chain]=(ncand,npairs)
+        for chain,pools,ncand,npairs,top in ex.map(process, targets):
+            results[chain]=pools; stats[chain]=(ncand,npairs); tops[chain]=top
             print(f"{chain}: {len(pools)} verified "
                   f"({ncand} candidates, {npairs} multi-instance pairs)",
                   flush=True)
@@ -255,6 +298,23 @@ def main():
     os.replace(tmp,out)
     print("wrote",os.path.abspath(out),"TOTAL:",len(flat),
           "venues:",len({e["venue"] for e in flat}))
+    # Universe-coverage audit (AGENTS §28 blindness telemetry): of the
+    # deepest pools GT exposes per chain, how many did we verify and
+    # keep? Persistent evidence — never a silent gap.
+    cov = {}
+    for chain in targets:
+        ver = {p["address"] for p in results.get(chain,[])}
+        t = tops.get(chain,{})
+        missed = [{"pool":a,"reserve_usd":r} for a,r in t.items()
+                  if a not in ver and r >= DEEP_USD_FLOOR]
+        cov[chain] = {"top_pools":len(t),
+                      "tracked":sum(1 for a in t if a in ver),
+                      "deep_missed":missed}
+    cdir = os.path.join(os.path.dirname(out),"data")
+    os.makedirs(cdir,exist_ok=True)
+    with open(os.path.join(cdir,"universe_coverage.json"),"w") as f:
+        json.dump({"ts":time.time(),"chains":cov},f,indent=1)
+    print("coverage audit → data/universe_coverage.json")
 
 if __name__ == "__main__":
     main()

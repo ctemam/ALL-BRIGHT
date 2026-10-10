@@ -71,24 +71,41 @@ async fn handle_conn(
     let (mut sink, mut stream) = ws.split();
     let mut rx = tx.subscribe();
 
-    let writer = tokio::spawn(async move {
-        while let Ok(bytes) = rx.recv().await {
-            if sink.send(Message::binary(bytes)).await.is_err() {
-                break;
+    // Single select loop: a lagged or closed broadcast must TERMINATE the
+    // connection so the client sees a real disconnect and reconnects for
+    // a fresh stream. The previous split-writer design let a `Lagged`
+    // error silently kill only the write half — the socket stayed open
+    // and the client's `recv()` blocked forever (observed: dashboard
+    // index frozen ~10h while the journal kept appending).
+    loop {
+        tokio::select! {
+            msg = stream.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(b))) => {
+                        let _ = tx.send(b.to_vec());
+                    }
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(_) => {}
+                }
             }
-        }
-    });
-
-    while let Some(msg) = stream.next().await {
-        match msg {
-            Ok(Message::Binary(b)) => {
-                let _ = tx.send(b.to_vec());
+            bytes = rx.recv() => {
+                match bytes {
+                    Ok(b) => {
+                        if sink.send(Message::binary(b)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(lagged = n,
+                            "bus subscriber lagged — closing connection for resync");
+                        let _ = sink.send(Message::Close(None)).await;
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
             }
-            Ok(Message::Close(_)) | Err(_) => break,
-            _ => {}
         }
     }
-    writer.abort();
     Ok(())
 }
 

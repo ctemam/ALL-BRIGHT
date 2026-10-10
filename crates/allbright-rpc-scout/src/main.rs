@@ -19,7 +19,7 @@ use allbright_core::{
     bus::BusServer,
     chain,
     config::Config,
-    events::{Chain, DexKind, Event},
+    events::{now_ms, Chain, DexKind, Event, SystemEvent},
     lineage::{Component, FailureClass, FailureEvent},
     rpc_registry::*,
 };
@@ -403,6 +403,12 @@ async fn main() -> anyhow::Result<()> {
 
     let bus = BusServer::bind(SocketAddr::from(([127, 0, 0, 1], cfg.ports.scout))).await?;
     info!(port = cfg.ports.scout, "rpc-scout bus listening");
+    let _ = bus.publish(&Event::System(SystemEvent {
+        component: "rpc-scout".into(),
+        action: "startup".into(),
+        detail: "process boot".into(),
+        ts_ms: now_ms(),
+    }));
 
     let client = reqwest::Client::builder()
         .timeout(PROBE_TIMEOUT)
@@ -464,9 +470,19 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        if let Err(e) = registry.save(Path::new(&reg_path)) {
+        // Merge-on-save: the sweep loaded the registry minutes ago —
+        // anything written into the file meanwhile (external candidate
+        // injection, a concurrent writer) must not be clobbered. Reload,
+        // let this sweep's fresher records win on overlap, keep file-only
+        // records so the next sweep carries them forward.
+        let mut merged = RpcRegistry::load(Path::new(&reg_path));
+        for rec in registry.endpoints {
+            merged.upsert(rec);
+        }
+        if let Err(e) = merged.save(Path::new(&reg_path)) {
             warn!(error = %e, "registry save failed");
         }
+        let registry = merged;
         let summary = registry.summary();
         info!(total = summary.total, live = summary.live,
               qualified = summary.qualified, providers = summary.providers,

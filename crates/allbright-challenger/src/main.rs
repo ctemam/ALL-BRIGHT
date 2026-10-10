@@ -23,7 +23,7 @@ use tracing::info;
 use allbright_core::{
     bus::{BusClient, BusServer},
     config::Config,
-    events::{now_ms, Chain, Event, ChallengeVerdict},
+    events::{now_ms, Chain, Event, ChallengeVerdict, SystemEvent},
 };
 
 /// Aave V3 flash-loan premium fraction (0.05%).
@@ -51,8 +51,20 @@ fn token_usd(symbol: &str, cex: &HashMap<String, f64>) -> f64 {
         "USDC" | "USDT" | "DAI" | "FDUSD" | "BUSD" | "USDE" | "USDS" | "USD1" | "PYUSD" => 1.0,
         _ => {
             let base = s.strip_prefix('W').unwrap_or(&s).trim_end_matches(".E");
+            // MATIC→POL migration: Binance lists the asset as POL now.
+            let base = if base == "MATIC" { "POL" } else { base };
             cex.get(base).copied().unwrap_or(0.0)
         }
+    }
+}
+
+/// CEX base symbol pricing the chain's native gas token.
+fn native_cex_symbol(chain: Chain) -> &'static str {
+    match chain {
+        Chain::Bsc => "BNB",
+        Chain::Poly => "POL",
+        Chain::Avax => "AVAX",
+        _ => "ETH",
     }
 }
 
@@ -77,6 +89,12 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = ([127, 0, 0, 1], cfg.ports.challenger).into();
     let bus = BusServer::bind(addr).await?;
     info!(%addr, "challenger bus listening");
+    let _ = bus.publish(&Event::System(SystemEvent {
+        component: "challenger".into(),
+        action: "startup".into(),
+        detail: "process boot".into(),
+        ts_ms: now_ms(),
+    }));
 
     let state = Arc::new(Mutex::new(State {
         token_symbols: HashMap::new(),
@@ -161,7 +179,15 @@ async fn challenge(
         .cloned()
         .unwrap_or_default();
     let input_usd = r.input_amount * token_usd(&input_symbol, &s.cex_usd);
-    let native_usd = token_usd("WETH", &s.cex_usd).max(cfg.native_usd);
+    // Per-chain native price: live CEX tick when available, configured
+    // fallback only when the tick is missing — an ETH-priced floor on
+    // BNB/POL/AVAX chains inflates gas_usd and fabricates rejections.
+    let native_px = s
+        .cex_usd
+        .get(native_cex_symbol(r.chain))
+        .copied()
+        .unwrap_or(0.0);
+    let native_usd = if native_px > 0.0 { native_px } else { cfg.native_usd };
 
     let gas_wei = match s.gas_price.get(&r.chain) {
         Some((p, t)) if t.elapsed() < Duration::from_secs(60) => *p,

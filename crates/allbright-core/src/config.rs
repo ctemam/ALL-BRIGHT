@@ -17,9 +17,21 @@ pub struct Config {
     pub wss_urls: HashMap<Chain, String>,
     /// Ordered endpoint pool per chain (`<CHAIN>_RPC_URLS`,
     /// comma-separated; falls back to the single `<CHAIN>_RPC_URL`).
-    /// This is the failover substrate — a chain with len()==1 is
-    /// single-homed (AGENTS §32/§35 wiring gap).
+    /// Private provider templates (`<PROVIDER>_API_KEY`) are expanded
+    /// and prepended — private keyed capacity always outranks public
+    /// (§36.9).
     pub rpc_pools: HashMap<Chain, Vec<String>>,
+    /// Private-capable providers whose API key is NOT configured
+    /// (§36.9) — surfaced on the infra page as "awaiting keys".
+    pub pending_providers: Vec<String>,
+    /// Active production chains (`ACTIVE_CHAINS`, comma-separated names;
+    /// default = all). Collectors, solver scope and sentinel watch lists
+    /// restrict to this set; scout/discovery remain full-universe.
+    pub active_chains: Vec<Chain>,
+    /// Enabled strategy lanes (`STRATEGIES`, comma-separated IDs like
+    /// "P01,P02"; default = all five live lanes). Dispatch gates on it —
+    /// a disabled strategy's candidates are never simulated.
+    pub strategies: Vec<String>,
     pub velora_api_key: Option<SecretString>,
     pub flashbots_relay: String,
     pub flashbots_auth_key: Option<SecretString>,
@@ -108,10 +120,115 @@ impl Config {
             }
         }
 
+        // §36.9 — private free-tier providers: a single API key in ENV
+        // expands into a private endpoint on every chain the provider
+        // supports and is prepended to that chain's pool (private quota
+        // always outranks shared public capacity). URL shapes are the
+        // providers' documented formats; every expanded URL still passes
+        // the scout qualification ladder before production admission —
+        // a bad slug fails honestly to Quarantined, never enters silently.
+        // Keyed URLs live in rpc_pools in memory only; nothing logs or
+        // persists the key material.
+        const PRIVATE_PROVIDERS: &[(&str, &str, &[(&str, &str)])] = &[
+            (
+                "ALCHEMY_API_KEY",
+                "https://{slug}.g.alchemy.com/v2/{key}",
+                &[
+                    ("eth", "eth-mainnet"), ("arb", "arb-mainnet"),
+                    ("op", "opt-mainnet"), ("poly", "polygon-mainnet"),
+                    ("avax", "avax-mainnet"), ("base", "base-mainnet"),
+                    ("linea", "linea-mainnet"), ("scroll", "scroll-mainnet"),
+                    ("blast", "blast-mainnet"),
+                ],
+            ),
+            (
+                "INFURA_API_KEY",
+                "https://{slug}.infura.io/v3/{key}",
+                &[
+                    ("eth", "mainnet"), ("arb", "arbitrum-mainnet"),
+                    ("op", "optimism-mainnet"), ("poly", "polygon-mainnet"),
+                    ("avax", "avalanche-mainnet"), ("base", "base-mainnet"),
+                    ("linea", "linea-mainnet"), ("scroll", "scroll-mainnet"),
+                    ("blast", "blast-mainnet"),
+                ],
+            ),
+            (
+                "DRPC_API_KEY",
+                "https://lb.drpc.org/ogrpc?network={slug}&dkey={key}",
+                &[
+                    ("eth", "ethereum"), ("bsc", "bsc"), ("arb", "arbitrum"),
+                    ("op", "optimism"), ("poly", "polygon"), ("avax", "avalanche"),
+                    ("base", "base"), ("linea", "linea"), ("scroll", "scroll"),
+                    ("blast", "blast"),
+                ],
+            ),
+            (
+                "BLASTAPI_KEY",
+                "https://{slug}.blastapi.io/{key}",
+                &[
+                    ("eth", "eth-mainnet"), ("bsc", "bsc-mainnet"),
+                    ("arb", "arbitrum-one"), ("op", "optimism-mainnet"),
+                    ("poly", "polygon-mainnet"), ("avax", "avax-mainnet"),
+                    ("base", "base-mainnet"), ("linea", "linea-mainnet"),
+                    ("scroll", "scroll-mainnet"), ("blast", "blast-mainnet"),
+                ],
+            ),
+        ];
+        let mut pending_providers: Vec<String> = Vec::new();
+        for (env_key, tpl, nets) in PRIVATE_PROVIDERS {
+            let Some(key) = get(env_key).filter(|s| !s.is_empty()) else {
+                pending_providers
+                    .push(env_key.trim_end_matches("_API_KEY").trim_end_matches("_KEY").to_string());
+                continue;
+            };
+            for (cname, slug) in *nets {
+                if let Some(chain) = Chain::ALL.iter().find(|c| c.name() == *cname) {
+                    let url = tpl.replace("{slug}", slug).replace("{key}", &key);
+                    let pool = rpc_pools.entry(*chain).or_default();
+                    if !pool.contains(&url) {
+                        pool.insert(0, url);
+                    }
+                }
+            }
+        }
+
+        // Active-chain scope: `ACTIVE_CHAINS=bsc,arb,poly,base,avax`.
+        // Unknown names are dropped (logged downstream via the absence of
+        // a collector, never silently widening scope).
+        let active_chains: Vec<Chain> = get("ACTIVE_CHAINS")
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|n| {
+                        let n = n.trim().to_ascii_lowercase();
+                        Chain::ALL.iter().copied().find(|c| c.name() == n)
+                    })
+                    .collect()
+            })
+            .filter(|v: &Vec<Chain>| !v.is_empty())
+            .unwrap_or_else(|| Chain::ALL.to_vec());
+
+        let strategies = get("STRATEGIES")
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_uppercase())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<String>>()
+            })
+            .filter(|v: &Vec<String>| !v.is_empty())
+            .unwrap_or_else(|| {
+                ["P01", "P02", "P03", "P04", "P05"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            });
+
         Ok(Config {
             rpc_urls,
             wss_urls,
             rpc_pools,
+            pending_providers,
+            active_chains,
+            strategies,
             velora_api_key: secret("VELORA_API_KEY"),
             flashbots_relay: get("FLASHBOOTS_RELAY")
                 .unwrap_or_else(|| "https://relay.flashbots.net".into()),
@@ -157,6 +274,7 @@ impl Config {
     pub fn redacted_summary(&self) -> RedactedConfig {
         RedactedConfig {
             chains: self.rpc_urls.keys().map(|c| c.name().to_string()).collect(),
+            active: self.active_chains.iter().map(|c| c.name().to_string()).collect(),
             velora: self.velora_api_key.is_some(),
             flashbots_auth: self.flashbots_auth_key.is_some(),
             pimlico: self.pimlico_api_key.is_some(),
@@ -186,6 +304,7 @@ impl Config {
 #[derive(Debug, Serialize)]
 pub struct RedactedConfig {
     pub chains: Vec<String>,
+    pub active: Vec<String>,
     pub velora: bool,
     pub flashbots_auth: bool,
     pub pimlico: bool,

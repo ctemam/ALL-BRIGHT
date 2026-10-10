@@ -6,27 +6,36 @@
 <title>AllBright — Autonomous Wealth Engine</title>
 <style>
 :root{
-  --bg:#0a0f1e; --panel:#111a30; --panel2:#0d1526; --line:#1e2b47;
-  --txt:#dbe6ff; --dim:#7f8fb3; --blue:#4f8ff7; --blue2:#1e4fd8;
-  --ok:#2fd08c; --warn:#f5b942; --bad:#f45d6d; --mono:'Cascadia Code',Consolas,monospace;
+  /* Professional terminal palette (Grafana/Linear/GitHub-dark lineage):
+     near-neutral graphite, faint cool cast — elevation via lightness,
+     not saturation. Layers: inset < bg < panel < panel3.
+     --txt ~12:1 on --panel, --dim ~5.4:1 (WCAG AA). */
+  --bg:#0e1116; --panel:#161b24; --panel2:#10141c; --panel3:#1e2530;
+  --inset:#0b0e13; --line:#272f3e; --line2:#313b4d;
+  --txt:#d6dbe4; --dim:#8d99ab; --faint:#5d6b7f;
+  --blue:#38bdf8; --blue2:#0e8fd0;
+  --ok:#3fb97f; --warn:#d9a441; --bad:#dd5f68;
+  --mono:'Cascadia Code',Consolas,monospace;
 }
 [data-theme="light"]{
-  --bg:#f2f5fb; --panel:#ffffff; --panel2:#e9eef7; --line:#d5deee;
-  --txt:#16213a; --dim:#5c6b8c; --blue:#1e4fd8; --blue2:#4f8ff7;
+  --bg:#f2f5fb; --panel:#ffffff; --panel2:#eef2f9; --panel3:#f7f9fd;
+  --inset:#eef2f9; --line:#d5deee; --line2:#c3cde0;
+  --txt:#16213a; --dim:#5c6b8c; --faint:#8a97b0;
+  --blue:#0284c7; --blue2:#0e8fd0;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--txt);display:flex;min-height:100vh;font-size:13px}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--txt);display:flex;min-height:100vh;font-size:12.5px;letter-spacing:.01em}
 a{color:var(--blue)}
 /* ---------- sidebar ---------- */
-#side{width:200px;min-width:200px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;transition:width .2s}
+#side{width:200px;min-width:200px;background:var(--panel2);border-right:1px solid var(--line);display:flex;flex-direction:column;transition:width .2s}
 #side.closed{width:56px;min-width:56px}
 #side .logo{padding:14px 10px;border-bottom:1px solid var(--line)}
 #side .logo img{height:30px;max-width:180px}
-#side.closed .logo img{content:url('/logo.svg');width:36px;height:auto;clip-path:inset(0 78% 0 0)}
+#side.closed .logo img{content:url('/logo.png');width:36px;height:auto;clip-path:inset(0 74% 0 0)}
 #side nav{flex:1;padding:8px 0}
 #side nav a{display:flex;align-items:center;gap:10px;padding:11px 16px;color:var(--dim);text-decoration:none;border-left:3px solid transparent;white-space:nowrap;overflow:hidden}
-#side nav a:hover{color:var(--txt);background:var(--panel2)}
-#side nav a.active{color:var(--blue);border-left-color:var(--blue);background:var(--panel2)}
+#side nav a:hover{color:var(--txt);background:var(--panel3)}
+#side nav a.active{color:var(--blue);border-left-color:var(--blue);background:var(--panel3)}
 #side nav a .ic{width:18px;text-align:center;flex:none}
 #side.closed nav a span.lbl{display:none}
 #side .ks{margin:8px;padding:10px;border:1px solid var(--bad);border-radius:6px;text-align:center;cursor:pointer;color:var(--bad);font-weight:600}
@@ -35,15 +44,16 @@ a{color:var(--blue)}
 /* ---------- main ---------- */
 #main{flex:1;display:flex;flex-direction:column;min-width:0}
 header{display:flex;align-items:center;justify-content:space-between;padding:8px 20px;background:var(--panel);border-bottom:1px solid var(--line);gap:12px;flex-wrap:wrap}
-header .title{font-size:16px;font-weight:600}
+header .title{font-size:15px;font-weight:600;letter-spacing:.02em}
 header .motto{color:var(--dim);font-size:11px;font-style:italic;margin-left:8px}
 header .hd-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.pulse{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 12px;cursor:help}
+.pulse{background:var(--panel3);border:1px solid var(--line);border-radius:6px;padding:5px 12px;cursor:help}
 .pulse b{color:var(--ok);font-family:var(--mono)}
 .pulse .sub{display:block;font-size:10px;color:var(--dim)}
 .status-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px}
 .st-HEALTHY{background:var(--ok)} .st-DEGRADED{background:var(--warn)} .st-SAFE-HALT{background:var(--bad)}
-select,input[type=text],input[type=datetime-local]{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:5px;padding:5px 8px;font-size:12px}
+select,input[type=text],input[type=datetime-local]{background:var(--inset);color:var(--txt);border:1px solid var(--line);border-radius:5px;padding:5px 8px;font-size:12px}
+select:focus,input:focus{border-color:var(--blue);outline:none}
 button{background:var(--blue2);color:#fff;border:none;border-radius:5px;padding:6px 12px;cursor:pointer;font-size:12px}
 button.ghost{background:transparent;border:1px solid var(--line);color:var(--dim)}
 button:hover{filter:brightness(1.15)}
@@ -53,40 +63,85 @@ button:hover{filter:brightness(1.15)}
 .ctl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:14px}
 .ctl label{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;box-shadow:0 1px 2px rgba(0,0,0,.35)}
 .card .k{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px}
 .card .v{font-family:var(--mono);font-size:17px;margin-top:4px}
 .card .v.pos{color:var(--ok)} .card .v.neg{color:var(--bad)} .card .v.na{color:var(--dim);font-size:12px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px}
-.panel h3{font-size:13px;margin-bottom:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.35)}
+.panel h3{font-size:12px;margin-bottom:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
 /* ---------- table engine ---------- */
 .twrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
 table{border-collapse:collapse;width:100%;font-size:12px}
 th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
-thead th{background:var(--panel2);position:sticky;top:0;cursor:pointer;user-select:none}
+thead th{background:var(--panel3);position:sticky;top:0;cursor:pointer;user-select:none}
 thead tr.grp th{cursor:pointer;color:var(--blue);border-bottom:2px solid var(--line)}
 thead tr.cols th{color:var(--dim);font-weight:600}
 td.num,th.num{text-align:right;font-family:var(--mono)}
-tbody tr:hover{background:var(--panel2)}
+tbody tr:nth-child(even){background:rgba(255,255,255,.025)}
+tbody tr:hover{background:var(--panel3)}
 .tfoot{display:flex;align-items:center;gap:10px;padding:8px 6px;color:var(--dim);font-size:12px;flex-wrap:wrap}
 .tfoot .sp{flex:1}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:600}
-.b-ok{background:rgba(47,208,140,.15);color:var(--ok)}
-.b-warn{background:rgba(245,185,66,.15);color:var(--warn)}
-.b-bad{background:rgba(244,93,109,.15);color:var(--bad)}
-.b-na{background:rgba(127,143,179,.18);color:var(--dim)}
-canvas.viz{width:100%;height:340px;background:var(--panel2);border-radius:6px}
+.b-ok{background:rgba(63,185,127,.14);color:var(--ok)}
+.b-warn{background:rgba(217,164,65,.14);color:var(--warn)}
+.b-bad{background:rgba(221,95,104,.14);color:var(--bad)}
+.b-na{background:rgba(141,153,171,.16);color:var(--dim)}
+canvas.viz{width:100%;height:340px;background:var(--inset);border-radius:6px}
 .na{color:var(--dim);font-style:italic}
 .muted{color:var(--dim)}
 footer{padding:14px;text-align:center;color:var(--dim);border-top:1px solid var(--line);font-size:11.5px}
 footer img{height:22px;display:block;margin:0 auto 6px}
 .custom-range{display:none;gap:6px;align-items:center}
-.notice{padding:10px 14px;border:1px solid var(--warn);border-radius:6px;color:var(--warn);background:rgba(245,185,66,.06);margin-bottom:12px}
+.notice{padding:10px 14px;border:1px solid var(--warn);border-radius:6px;color:var(--warn);background:rgba(217,164,65,.07);margin-bottom:12px}
+
+/* ---------- agent copilot drawer (AGENTS §44 — read-only advisor) ---------- */
+#agent{position:fixed;top:0;right:0;width:360px;height:100vh;background:var(--panel2);
+  border-left:1px solid var(--line2);display:flex;flex-direction:column;z-index:500;
+  transform:translateX(100%);transition:transform .25s ease;box-shadow:-8px 0 24px rgba(0,0,0,.45)}
+#agent.open{transform:none}
+#agent .ag-hd{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;font-weight:650;letter-spacing:.5px;color:var(--blue)}
+#agent .ag-hd .x{margin-left:auto;cursor:pointer;color:var(--dim)}
+#agent .ag-hd .x:hover{color:var(--txt)}
+#agent .ag-sub{padding:4px 14px 8px;font-size:10.5px;color:var(--dim);border-bottom:1px solid var(--line)}
+#agent .ag-chips{display:flex;gap:6px;padding:10px 12px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+#agent .ag-chips button{background:var(--panel3);border:1px solid var(--line);color:var(--txt);font-size:11px;padding:5px 9px}
+#agent .ag-body{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:9px}
+.ag-msg{max-width:92%;padding:8px 11px;border-radius:9px;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.ag-msg.user{align-self:flex-end;background:var(--blue2);color:#fff;border-bottom-right-radius:3px}
+.ag-msg.bot{align-self:flex-start;background:var(--panel3);border:1px solid var(--line);border-bottom-left-radius:3px}
+.ag-msg.err{align-self:flex-start;border:1px solid var(--bad);color:var(--bad);background:rgba(221,95,104,.08)}
+#agent .ag-in{border-top:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+#agent .ag-in .row{display:flex;gap:6px}
+#agent .ag-in input{flex:1}
+#agent .ag-in select{flex:1}
+#agToggle{font-size:15px;line-height:1;padding:5px 9px}
+
+/* ---------- metallic / silver type ---------- */
+header .title,#pulseVal{background:linear-gradient(180deg,#f2f5fa 0%,#c3ccd9 55%,#8d99ab 100%);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;font-weight:650}
+[data-theme="light"] header .title,[data-theme="light"] #pulseVal{background:linear-gradient(180deg,#3a4453,#16213a);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+.card .k,.ctl label,.panel h3{letter-spacing:.7px}
+/* ---------- professional tooltip (boxed, replaces native title) ---------- */
+[data-tip]{position:relative}
+[data-tip]::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 7px);
+  transform:translateX(-50%) translateY(3px);background:var(--panel3);color:var(--txt);
+  border:1px solid var(--line2);border-radius:6px;padding:7px 11px;font-size:11.5px;
+  font-weight:400;font-style:normal;letter-spacing:.01em;line-height:1.45;text-align:left;
+  max-width:340px;min-width:120px;width:max-content;white-space:normal;z-index:999;
+  box-shadow:0 6px 18px rgba(0,0,0,.5);opacity:0;pointer-events:none;
+  transition:opacity .12s ease,transform .12s ease}
+[data-tip]::before{content:'';position:absolute;left:50%;bottom:calc(100% + 2px);
+  transform:translateX(-50%) translateY(3px);border:5px solid transparent;
+  border-top-color:var(--line2);z-index:999;opacity:0;pointer-events:none;
+  transition:opacity .12s ease,transform .12s ease}
+[data-tip]:hover::after,[data-tip]:hover::before{opacity:1;transform:translateX(-50%) translateY(0)}
 </style>
 </head>
 <body>
 <aside id="side">
-  <div class="logo"><img src="/logo.svg" alt="AllBright"></div>
+  <div class="logo"><img src="/logo.png" alt="AllBright"></div>
   <nav id="nav"></nav>
   <div class="ks" id="killswitch" title="Global Kill Switch — halts NEW execution activity">◉ KILL SWITCH</div>
   <div class="toggle" id="sideToggle" title="Expand / collapse">◀</div>
@@ -99,7 +154,9 @@ footer img{height:22px;display:block;margin:0 auto 6px}
       <select id="currency" title="Display currency"><option>USD</option><option>ETH</option></select>
       <select id="refresh" title="Refresh cadence"><option value="5">5s</option><option value="15" selected>15s</option><option value="60">60s</option><option value="0">manual</option></select>
       <span id="sysStatus" title="system status"><span class="status-dot st-DEGRADED"></span>—</span>
-      <button class="ghost" id="themeBtn" title="Day / night">◐</button>
+      <span id="capLight" title="Capacity — expansion headroom (worst dimension wins)" style="cursor:help"><span class="status-dot" id="capDot"></span><b id="capPct" style="font-family:var(--mono)">—%</b></span>
+      <button class="ghost" id="agToggle" title="Agent Copilot — read-only advisor">◉</button>
+      <button class="ghost" id="themeBtn" title="Toggle day / night" style="font-size:15px;line-height:1;padding:5px 9px">☾</button>
     </div>
   </header>
   <div id="content">
@@ -153,9 +210,29 @@ footer img{height:22px;display:block;margin:0 auto 6px}
     </section>
     <!-- ============ DEPLOYMENT ============ -->
     <section class="page" id="pg-deploy">
-      <div class="ctl"><label>Time</label><select id="dp-time"></select></div>
+      <div class="ctl"><label>Time</label><select id="dp-time"></select><span class="muted">deployment is a point-in-time record — range applies when pipeline history exists</span></div>
       <div class="panel"><h3>Deployment Register</h3><div id="dp-table"></div></div>
       <div class="panel"><h3>Pipeline</h3><div id="dp-pipeline" class="muted"></div></div>
+      <div class="panel"><h3>Deploy to Cloud <span class="muted">— READ-ONLY: plan + artifacts under deploy/ · live deploy is a gated Commander action (§27.5)</span></h3>
+        <div class="ctl" style="margin-bottom:10px">
+          <select id="dp-cloud-mode">
+            <option value="manual">Manual — any host (provider-agnostic)</option>
+            <option value="aws">AWS — EC2 + PM2 / ECS</option>
+            <option value="azure">Microsoft Azure — VM + PM2 / Container Apps</option>
+            <option value="gcp">Google Cloud — Compute Engine / GKE</option>
+            <option value="oci">Oracle Cloud — Compute (free tier)</option>
+            <option value="alibaba">Alibaba Cloud — ECS (APAC)</option>
+            <option value="ibm">IBM Cloud — Virtual Servers</option>
+            <option value="tencent">Tencent Cloud — CVM</option>
+            <option value="hetzner">Hetzner — dedicated bare metal (MEV norm)</option>
+            <option value="ovh">OVHcloud — bare metal EU</option>
+            <option value="digitalocean">DigitalOcean — Droplets</option>
+          </select>
+          <button id="dp-cloud-gen">Generate plan</button>
+          <span id="dp-cloud-msg" class="muted"></span>
+        </div>
+        <div id="dp-cloud-out"></div>
+      </div>
     </section>
     <!-- ============ INFRASTRUCTURE ============ -->
     <section class="page" id="pg-infra">
@@ -165,35 +242,98 @@ footer img{height:22px;display:block;margin:0 auto 6px}
       <div class="panel"><h3>Self-Diagnosis — recent failures</h3><div id="if-diag"></div></div>
       <div class="panel"><h3>Self-Healing — remediation records</h3><div id="if-heal"></div></div>
     </section>
+    <!-- ============ SECURITY ============ -->
+    <section class="page" id="pg-security">
+      <div class="panel"><h3>Defense Gates <span class="muted">— every status live-checked, never claimed</span></h3><div id="sec-gates"></div></div>
+      <div class="panel"><h3>Attack Surface <span class="muted">— front-running exposure telemetry</span></h3><div id="sec-surface"></div></div>
+      <div class="panel"><h3>Invisibility <span class="muted">— blindness = invisible opportunities</span></h3><div id="sec-blind"></div></div>
+      <div class="panel"><h3>Audit &amp; Hygiene <span class="muted">— recorded evidence, asof-dated</span></h3><div id="sec-audit"></div></div>
+    </section>
     <!-- ============ REPORTS ============ -->
     <section class="page" id="pg-reports">
-      <div class="ctl"><label>Range</label><select id="rp-time"></select></div>
+      <div class="ctl"><label>Range</label><select id="rp-time"></select>
+        <span style="flex:1"></span>
+        <button class="btn" onclick="downloadReport('doc')">Download Word</button>
+        <button class="btn" onclick="downloadReport('pdf')">Download PDF</button>
+      </div>
+      <div class="panel"><h3>Executive Scorecard <span class="muted">— §3 dimensions: measured metric vs benchmark anchor (deep × wide)</span></h3>
+        <div id="rp-score"></div></div>
       <div class="panel"><h3>Profit by Chain</h3><div id="rp-profit"></div></div>
       <div class="panel"><h3>Opportunity &amp; Infrastructure</h3><div id="rp-opp"></div></div>
+          <div class="panel"><h3>Doctrine Compliance &amp; Gaps <span class="muted" id="rp-compliance-sum">— agent mission: system vs AGENTS.md / SKILL.md / MASTER_BUILD_GUIDE.md</span></h3>
+        <div id="rp-compliance"></div>
+      </div>
     </section>
     <!-- ============ COMPETITIVE ANALYSIS (§27.1 Benchmark Register) ============ -->
     <section class="page" id="pg-competitive">
-      <div class="cards" id="cp-cards"></div>
-      <div class="panel"><h3>KPI Comparison — AllBright vs Benchmark Peers <span class="muted">(sortable; hover cells for evidence)</span></h3>
-        <div id="cp-table"></div>
-        <div id="cp-notice" class="muted" style="margin-top:8px"></div>
+      <div class="ctl">
+        <span class="muted">Evidence window</span>
+        <select id="cp-months" onchange="cpMonths=+this.value;loadCompetitive()">
+          <option value="1">1 month</option><option value="3">3 months</option>
+          <option value="6">6 months</option><option value="12" selected>12 months (max)</option>
+        </select>
       </div>
-      <div class="panel"><h3>Register Metadata</h3><div id="cp-meta" class="muted">—</div></div>
+      <div class="cards" id="cp-cards"></div>
+      <div class="panel"><h3>Leaderboard <span class="muted">— platforms ranked by composite score across all axes · ★ = AllBright (measured)</span></h3>
+        <div id="cp-board"></div>
+      </div>
+      <div class="panel"><h3>Axis Landscape <span class="muted">— every platform per axis; <span style="color:#38bdf8">●</span> = AllBright (measured)</span></h3>
+        <div id="cp-land"></div>
+      </div>
+      <div class="panel"><h3>Auto-Forging Gap Matrix <span class="muted">— measured AllBright rating vs best ACTIVE peer (no configuration)</span></h3>
+        <div id="cp-gaps"></div>
+      </div>
+      <div class="panel"><h3>Forge Tasks <span class="muted">— stateful gap workflows (§27.5): SAFE = running loop owns it · ESCALATE = inert proposal · MEASURED = closed by evidence</span></h3>
+        <div id="cp-forge"></div>
+      </div>
+      <div class="panel"><h3>Live Builder Share <span class="muted">— measured via MEV-Boost relay Data API (Ethereum; refreshes ~20 min)</span></h3>
+        <div id="cp-live"></div>
+      </div>
+      <div class="panel"><h3>KPI Comparison — AllBright vs Benchmark Peers <span class="muted">(hover = evidence)</span></h3>
+        <div id="cp-table"></div>
+      </div>
+      <div class="panel"><h3>Watchlist <span class="muted">— candidates; promote when evidence qualifies (§27.3)</span></h3>
+        <div id="cp-watch"></div>
+      </div>
+      <div class="panel"><h3>Track a Competitor</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <input id="cp-addname" placeholder="Competitor name" style="width:220px">
+          <input id="cp-addcat" placeholder="Category (e.g. block builder)" style="width:220px">
+          <button id="cp-addbtn" class="btn">Add to watchlist</button>
+          <span id="cp-addmsg" class="muted"></span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input id="cp-addr" placeholder="0x… competitor address" style="width:340px">
+          <select id="cp-addrchain"><option>eth</option><option>arb</option><option>op</option><option>poly</option><option>bsc</option><option>avax</option><option>base</option><option>linea</option><option>scroll</option><option>blast</option></select>
+          <input id="cp-addrlabel" placeholder="Label (optional)" style="width:160px">
+          <button id="cp-addrbtn" class="btn">Track address</button>
+          <span id="cp-addrmsg" class="muted"></span>
+        </div>
+        <div class="muted" style="margin-top:6px">Tracked addresses enter the observation pipeline (funding-graph / bytecode / nonce clustering) and become measured peers as evidence accumulates (§27.4).</div>
+      </div>
     </section>
     <!-- ============ WALLET ============ -->
     <section class="page" id="pg-wallet">
-      <div class="ctl">
-        <button id="mm-connect">Connect MetaMask</button>
-        <span id="mm-status" class="muted">not connected</span>
-      </div>
+      <div class="ctl"><label>Time</label><select id="wl-time"></select><span class="muted">balances are live state — range applies to transfer history when journaled</span></div>
       <div class="panel"><h3>Configured Profit Wallet</h3><div id="wl-table"></div></div>
+      <div class="panel"><h3>Connected Wallets <span class="muted">— activated rows are randomized auto-transfer destinations</span></h3>
+        <div style="margin-bottom:8px">
+          <button id="wl-detect" class="btn">Detect MetaMask</button>
+          <input id="wl-addaddr" placeholder="0x… wallet address" style="width:340px">
+          <button id="wl-add" class="btn">Add</button>
+          <span id="wl-msg" class="muted"></span>
+        </div>
+        <div id="wl-accounts"></div>
+      </div>
       <div class="panel"><h3>Auto-Transfer <span class="muted">(opening this page never initiates a transfer)</span></h3>
         <div id="wl-transfer" class="muted">—</div></div>
-      <div class="panel"><h3>Connected Wallet (MetaMask)</h3><div id="mm-table" class="muted">—</div></div>
+      <div class="panel"><h3>Profit Transfer Ledger <span class="muted">— append-only record of every profit movement (real-time)</span></h3>
+        <div id="wl-ledger"></div>
+      </div>
     </section>
   </div>
   <footer>
-    <img src="/logo.svg" alt="AllBright">
+    <img src="/logo.png" alt="AllBright">
     <div>AllBright DeFi Software Engineering Ltd. © 2026</div>
     <div class="muted">Autonomous Wealth Engine. 24/7. Like No One.</div>
   </footer>
@@ -252,13 +392,26 @@ const fmt$ = v => v==null?'<span class="na">NOT VERIFIED</span>':(v>=0?'+':'−'
 const fmtN = v => v==null?'<span class="na">—</span>':v.toLocaleString();
 const fmtT = ts => ts?new Date(ts).toLocaleTimeString():'—';
 const badge = (txt,cls)=>`<span class="badge b-${cls}">${txt}</span>`;
+/* Authenticated POST — carries x-ab-token (CSRF gate). On 401 the
+   operator is prompted once; token lives in localStorage, which
+   cross-site pages cannot read. */
+async function postJSON(url,body){
+  const go=()=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json','x-ab-token':localStorage.getItem('ab_token')||''},body:JSON.stringify(body)});
+  let r=await go();
+  if(r.status===401){
+    const t=prompt('Dashboard token required (ALLBRIGHT_DASH_TOKEN):');
+    if(t)localStorage.setItem('ab_token',t);
+    r=await go();
+  }
+  return r;
+}
 
 /* ---------- navigation ---------- */
 const PAGES = [
   ['profit','◈','Profit Metrics'], ['stream','⟶','Blockchain Stream'],
   ['strategy','◇','Strategy'], ['deploy','⛁','Deployment'],
-  ['infra','⌁','Infrastructure'], ['reports','≡','Reports'],
-  ['competitive','⚖','Competitive Analysis'], ['wallet','◍','Wallet'],
+  ['infra','⌁','Infrastructure'], ['security','⛨','Security'], ['reports','≡','Reports'],
+  ['competitive','⚖','Benchmark'], ['wallet','◍','Wallet'],
 ];
 $('#nav').innerHTML = PAGES.map(([id,ic,lbl])=>
   `<a href="#" data-pg="${id}"><span class="ic">${ic}</span><span class="lbl">${lbl}</span></a>`).join('');
@@ -275,9 +428,114 @@ document.querySelectorAll('#nav a').forEach(a=>a.onclick=e=>{
 $('#nav a').classList.add('active');
 $('#sideToggle').onclick=()=>{const s=$('#side');s.classList.toggle('closed');
   $('#sideToggle').textContent=s.classList.contains('closed')?'▶':'◀';};
-$('#themeBtn').onclick=()=>{const h=document.documentElement;
-  h.dataset.theme=h.dataset.theme==='dark'?'light':'dark';};
+{const h=document.documentElement,tb=$('#themeBtn');
+ const setT=t=>{h.dataset.theme=tb.dataset.theme=t;tb.textContent=t==='dark'?'☾':'☀';
+   localStorage.setItem('ab_theme',t);};
+ setT(localStorage.getItem('ab_theme')||'dark');
+ tb.onclick=()=>setT(h.dataset.theme==='dark'?'light':'dark');}
+/* ---------- professional tooltips: hoist title→data-tip (observer covers
+   dynamic tableEngine/panel renders) ---------- */
+{const hoist=r=>{(r.querySelectorAll?r.querySelectorAll('[title]'):[])
+   .forEach(e=>{e.dataset.tip=e.getAttribute('title');e.removeAttribute('title');});
+   if(r.nodeType===1&&r.hasAttribute&&r.hasAttribute('title')){
+     r.dataset.tip=r.getAttribute('title');r.removeAttribute('title');}};
+ hoist(document);
+ new MutationObserver(ms=>ms.forEach(m=>{
+   m.addedNodes.forEach(hoist);
+   if(m.type==='attributes'&&m.target.hasAttribute&&m.target.hasAttribute('title')){
+     m.target.dataset.tip=m.target.getAttribute('title');m.target.removeAttribute('title');}
+ })).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['title']});}
 
+/* ---------- Agent Copilot (§44 — read-only, journaled, fail-closed) ---------- */
+const agSay=(t,cls)=>{const d=document.createElement('div');d.className='ag-msg '+cls;
+  d.textContent=t;$('#ag-body').appendChild(d);$('#ag-body').scrollTop=1e9;};
+async function agSend(action,q){
+  const model=localStorage.getItem('ab_agent_model')||$('#ag-modelsel').value||'';
+  agSay(q||(action==='explain'?'Explain state':action==='digest'?'Incident digest':'Ops report'),'user');
+  const thinking=document.createElement('div');thinking.className='ag-msg bot';thinking.textContent='…';
+  $('#ag-body').appendChild(thinking);$('#ag-body').scrollTop=1e9;
+  const r=await (await postJSON('/api/agent/chat',{action,q,model})).json().catch(()=>({ok:false,error:'request failed'}));
+  thinking.remove();
+  r.ok?agSay(r.reply,'bot'):agSay('✗ '+r.error,'err');
+}
+async function agInit(){
+  const r=await (await fetch('/api/agent/models')).json().catch(()=>({ok:false}));
+  const sel=$('#ag-modelsel');sel.innerHTML='';
+  if(r.ok&&r.models&&r.models.length){r.models.forEach(m=>{const o=document.createElement('option');
+    o.value=o.textContent=m;if(m===r.model)o.selected=true;sel.appendChild(o);});
+    const saved=localStorage.getItem('ab_agent_model');
+    if(saved){let o=[...sel.options].find(o=>o.value===saved);if(!o){o=document.createElement('option');o.value=o.textContent=saved;sel.appendChild(o);}o.selected=true;}
+    $('#ag-sub').textContent='endpoint: '+r.base+' · '+(r.models.length)+' model(s)';
+  } else {
+    const o=document.createElement('option');o.value=o.textContent=r.model||'llama3.1';sel.appendChild(o);
+    $('#ag-sub').textContent='endpoint: '+(r.base||'—')+' · '+(r.error||'no models listed');
+  }
+}
+$('#agToggle').onclick=()=>{$('#agent').classList.toggle('open');if($('#agent').classList.contains('open'))agInit();};
+$('#agClose').onclick=()=>$('#agent').classList.remove('open');
+document.querySelectorAll('#agent .ag-chips button').forEach(b=>b.onclick=()=>agSend(b.dataset.act,''));
+$('#ag-send').onclick=()=>{const q=$('#ag-q').value.trim();if(q){agSend('chat',q);$('#ag-q').value='';}};
+$('#ag-q').addEventListener('keydown',e=>{if(e.key==='Enter')$('#ag-send').click();});
+$('#ag-addmodel').onclick=()=>{const m=$('#ag-newmodel').value.trim();if(!m)return;
+  const o=document.createElement('option');o.value=o.textContent=m;o.selected=true;
+  $('#ag-modelsel').appendChild(o);localStorage.setItem('ab_agent_model',m);$('#ag-newmodel').value='';};
+$('#ag-modelsel').onchange=e=>localStorage.setItem('ab_agent_model',e.target.value);
+
+/* ---------- Deploy to Cloud — READ-ONLY plan generator (§27.5) ---------- */
+$('#dp-cloud-gen').onclick=async()=>{
+  const mode=$('#dp-cloud-mode').value;
+  $('#dp-cloud-msg').textContent='generating…';
+  const r=await (await postJSON('/api/deploy/cloud',{mode})).json();
+  if(r.ok){$('#dp-cloud-msg').textContent='✓ READ-ONLY — '+r.written.length+' artifact(s)';
+    $('#dp-cloud-out').innerHTML='<pre style="font-family:var(--mono);font-size:11.5px;color:var(--txt);background:var(--inset);border:1px solid var(--line);border-radius:6px;padding:10px 12px;white-space:pre-wrap">'+r.plan+'</pre>'
+      +'<div class="muted" style="margin-top:6px">written: '+r.written.join(' · ')+'</div>';
+  } else $('#dp-cloud-msg').textContent='✗ '+(r.error||'failed');
+};
+
+/* ---------- Security posture (valid metrics only) ---------- */
+async function loadSecurity(){
+  const d=await (await fetch('/api/security')).json();
+  const onoff=v=>v==='ON'?'<span class="badge b-ok">ON</span>':'<span class="badge b-bad">OFF</span>';
+  tableEngine($('#sec-gates'),[
+    {key:'label',label:'Control'},
+    {key:'status',label:'Status',render:r=>onoff(r.status)},
+    {key:'basis',label:'Basis / evidence',render:r=>`<span class="muted">${r.basis||''}</span>`},
+  ],d.gates||[]);
+  const sf=d.surface||{};
+  $('#sec-surface').innerHTML='<div class="cards" style="margin-bottom:10px">'
+    +card('Exec submitted',sf.exec_submitted??'—')+card('Included',sf.exec_included??'—')
+    +card('Failed',sf.exec_failed??'—')+card('Front-run events 24h',sf.frontrun_events_24h??'—')+'</div>'
+    +'<div class="notice">'+(sf.private_orderflow||'')+'</div>'
+    +'<div class="muted">'+(sf.sandwich_detector||'')+'</div>';
+  const bl=d.blindness||{};
+  tableEngine($('#sec-blind'),[
+    {key:'class',label:'Blindness class (24h)'},{key:'count',label:'Events',num:true},
+  ],bl.events_24h||[]);
+  $('#sec-blind').innerHTML+='<div class="muted" style="margin-top:8px">unverified pools: '+(bl.unverified_pools??'—')
+    +' · active chains: '+(bl.active_chains??'—')+' · rpc chains: '+(bl.rpc_chains??'—')+' — '+(bl.note||'')+'</div>';
+  const a=d.audit||{};
+  $('#sec-audit').innerHTML=a.contract?('<pre style="font-family:var(--mono);font-size:11px;color:var(--dim);white-space:pre-wrap">'
+    +'contract: '+a.contract.callback_auth+' | '+a.contract.reentrancy+' | '+a.contract.transfers
+    +' | foundry: '+a.contract.foundry_tests.passed+'/'+(a.contract.foundry_tests.passed+a.contract.foundry_tests.failed)+' passed'
+    +' | slither: '+a.contract.slither.findings+' findings ('+a.contract.slither.critical_class+')'
+    +' | EXTERNAL AUDIT: '+a.contract.external_audit
+    +' | secrets scan: '+a.secrets_scan.findings+' findings ('+a.secrets_scan.tool+', '+a.secrets_scan.asof+')'
+    +' | DEPLOYED STATUS: '+a.deployed_status+'</pre>')
+    :'<div class="na">data/security_audit.json not found — DATA UNAVAILABLE</div>';
+}
+/* ---------- Doctrine compliance (agent mission §41) ---------- */
+async function loadCompliance(){
+  const d=await (await fetch('/api/compliance')).json();
+  const st=v=>v==='PASS'?'<span class="badge b-ok">PASS</span>':v==='GAP'?'<span class="badge b-bad">GAP</span>':'<span class="badge b-warn">UNVERIFIED</span>';
+  tableEngine($('#rp-compliance'),[
+    {key:'doc',label:'Doctrine'},
+    {key:'requirement',label:'Requirement'},
+    {key:'status',label:'Status',render:r=>st(r.status)},
+    {key:'evidence',label:'Evidence',render:r=>`<span class="muted">${r.evidence||''}</span>`},
+  ],d.checks||[]);
+  const el=$('#rp-compliance-sum');
+  if(el)el.textContent=`${d.pass} pass · ${d.gaps} gaps · ${d.unverified} unverified`;
+}
 /* ---------- universal table engine (§38.4) ----------
    cols: [{key,label,num?,group,render?}]  groups render as an expandable
    header row; sort/search/pagination all client-side over the fetched page. */
@@ -335,20 +593,20 @@ function drawViz(cv, buckets, mode){
   if(mode==='chart'){ // cumulative net
     let cum=0;const pts=vals.map(v=>cum+=v);
     const mx=Math.max(1e-9,...pts.map(Math.abs));
-    ctx.strokeStyle='#4f8ff7';ctx.lineWidth=1.8;ctx.beginPath();
+    ctx.strokeStyle='#38bdf8';ctx.lineWidth=1.8;ctx.beginPath();
     pts.forEach((v,i)=>{const x=20+i/(pts.length-1)*(w-40),y=h-20-(v/mx)*(h-50)*0.5-(h-50)*0.5;
       i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
     ctx.stroke();
-    ctx.strokeStyle='#2a3a5c';ctx.beginPath();ctx.moveTo(20,h/2);ctx.lineTo(w-20,h/2);ctx.stroke();
+    ctx.strokeStyle='#232b3a';ctx.beginPath();ctx.moveTo(20,h/2);ctx.lineTo(w-20,h/2);ctx.stroke();
   } else { // bar per bucket
     const mx=Math.max(1e-9,...vals.map(Math.abs)),bw=(w-40)/vals.length;
     vals.forEach((v,i)=>{const x=20+i*bw,bh=(v/mx)*(h-60)*0.5;
-      ctx.fillStyle=v>=0?'#2fd08c':'#f45d6d';
+      ctx.fillStyle=v>=0?'#3fb97f':'#dd5f68';
       const zero=h/2;
       ctx.fillRect(x+1,v>=0?zero-bh:zero,bw-2,Math.abs(bh)||1);});
-    ctx.strokeStyle='#2a3a5c';ctx.beginPath();ctx.moveTo(20,h/2);ctx.lineTo(w-20,h/2);ctx.stroke();
+    ctx.strokeStyle='#232b3a';ctx.beginPath();ctx.moveTo(20,h/2);ctx.lineTo(w-20,h/2);ctx.stroke();
   }
-  ctx.fillStyle='#7f8fb3';ctx.font='11px sans-serif';
+  ctx.fillStyle='#8d99ab';ctx.font='11px sans-serif';
   ctx.fillText(mode==='chart'?'cumulative expected profit (USD) — basis: solver OpportunitySignal':'net P&L per bucket (USD)',24,16);
 }
 
@@ -452,14 +710,15 @@ async function loadInfra(){
       const m={'V4+resilient':'b-ok','V4':'b-ok','V2-single-homed':'b-warn','V0-blind':'b-bad'};
       return badge(r.visibility,m[r.visibility]||'b-na');}},
   ], d.chains);
-  const dg=await (await fetch('/api/diagnoses?size=100')).json();
+  const rp=rangeParams('#if-time');
+  const dg=await (await fetch('/api/diagnoses?size=100&'+rp)).json();
   tableEngine($('#if-diag'),[
     {key:'ts',label:'Time',render:r=>fmtT(r.ts)},
     {key:'component',label:'Component'},{key:'class',label:'Class'},
     {key:'chain',label:'Chain',render:r=>r.chain||'—'},
     {key:'stage',label:'Stage'},{key:'detail',label:'Detail',render:r=>`<span style="white-space:normal">${r.detail.slice(0,140)}</span>`},
   ], dg.rows);
-  const hl=await (await fetch('/api/healing')).json();
+  const hl=await (await fetch('/api/healing?'+rp)).json();
   tableEngine($('#if-heal'),[
     {key:'ts',label:'Detection',render:r=>fmtT(r.ts)},
     {key:'target',label:'Target'},{key:'action',label:'Remediation'},
@@ -468,9 +727,22 @@ async function loadInfra(){
   ], hl.rows);
 }
 
+let lastReport=null,lastRangeLabel='';
 async function loadReports(){
+  loadCompliance();
   const p=rangeParams('#rp-time');
   const d=await (await fetch('/api/reports?'+p)).json();
+  lastReport=d;
+  lastRangeLabel=$('#rp-time').selectedOptions?.[0]?.textContent||p;
+  // Executive scorecard — deep×wide: measured metric vs benchmark anchor.
+  tableEngine($('#rp-score'),[
+    {key:'dimension',label:'§3 Dimension'},
+    {key:'metric',label:'AllBright (measured)',render:r=>`<span title="${r.axis}">${r.metric}</span>`},
+    {key:'rating',label:'Rating',render:r=>heatCell({rating:r.rating,confidence:'HIGH'})},
+    {key:'benchmark',label:'Benchmark anchor',render:r=>r.benchmark&&r.benchmark.id?`<span class="muted">${r.benchmark.id}</span> `+badge(r.benchmark.rating,'b-ok'):'<span class="na">—</span>'},
+    {key:'gap',label:'Gap',num:true,render:r=>svgGapBar(r.gap||0)+` <span class="muted">${r.gap||0}</span>`},
+    {key:'source_page',label:'Evidence page',render:r=>`<span class="muted">${r.source_page}</span>`},
+  ], d.scorecard||[]);
   const rows=Object.entries(d.profit).map(([chain,v])=>({chain,...v}));
   tableEngine($('#rp-profit'),[
     {key:'chain',label:'Chain'},
@@ -479,21 +751,141 @@ async function loadReports(){
     {key:'exec',label:'Executions',num:true},
     {key:'realized',label:'Realized $',num:true,render:r=>fmt$(r.realized)},
   ], rows);
-  $('#rp-opp').innerHTML=`<pre style="white-space:pre-wrap;font-size:12px">`+
-    JSON.stringify({opportunity:d.opportunity,infrastructure:d.infrastructure,risk:d.risk},null,1)+`</pre>`;
+  const o=d.opportunity||{},i=d.infrastructure||{},rk=d.risk||{};
+  tableEngine($('#rp-opp'),[
+    {key:'k',label:'Metric'},{key:'v',label:'Value',num:true},
+  ],[
+    {k:'Opportunities detected',v:o.detected??'—'},{k:'Rejected (funnel)',v:o.rejected??'—'},
+    {k:'Executed',v:o.executed??'—'},{k:'Failures',v:i.rpc_failures??'—'},
+    {k:'Heal actions',v:i.heal_actions??'—'},{k:'Qualified RPCs',v:i.qualified_rpcs??'—'},
+    {k:'RPC candidates',v:i.candidates??'—'},
+  ]);
+  if(rk.note)$('#rp-opp').insertAdjacentHTML('beforeend',`<div class="muted" style="margin-top:4px">${rk.note}</div>`);
+}
+
+/* --- Report download: composes a clean document from the last loaded
+   reports payload. 'doc' = Word-openable HTML blob; 'pdf' = print
+   window (browser Save-as-PDF). Zero external deps. --- */
+function reportHtml(d){
+  const esc=s=>String(s??'').replace(/</g,'&lt;');
+  const css='body{font-family:Segoe UI,Arial,sans-serif;color:#111}h1{font-size:20px}h2{font-size:15px;margin-top:18px}table{border-collapse:collapse;margin:8px 0}td,th{border:1px solid #999;padding:4px 10px;font-size:12px;text-align:left}.m{color:#666;font-size:12px}';
+  const sc=(d.scorecard||[]).map(r=>`<tr><td>${esc(r.dimension)}</td><td>${esc(r.metric)}</td><td>${esc(r.rating)}</td><td>${esc(r.benchmark?.id||'—')} ${esc(r.benchmark?.rating||'')}</td><td>${r.gap??'—'}</td></tr>`).join('');
+  const prof=Object.entries(d.profit||{}).map(([c,v])=>`<tr><td>${esc(c)}</td><td>${v.opps}</td><td>$${(+v.expected).toFixed(2)}</td><td>${v.exec}</td><td>$${(+v.realized).toFixed(2)}</td></tr>`).join('')||'<tr><td colspan="5">no data</td></tr>';
+  const o=d.opportunity||{},i=d.infrastructure||{};
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>AllBright Report</title><style>${css}</style></head><body>
+  <h1>AllBright — Executive Report</h1>
+  <div class="m">Generated ${new Date().toLocaleString()} · Range: ${esc(lastRangeLabel)} · Data since ${d.data_since_ms?new Date(d.data_since_ms).toLocaleString():'—'}</div>
+  <h2>Executive Scorecard — AllBright vs Benchmarks</h2>
+  <table><tr><th>Dimension</th><th>AllBright (measured)</th><th>Rating</th><th>Benchmark anchor</th><th>Gap</th></tr>${sc}</table>
+  <h2>Profit by Chain</h2>
+  <table><tr><th>Chain</th><th>Opportunities</th><th>Expected $</th><th>Executions</th><th>Realized $</th></tr>${prof}</table>
+  <h2>Operations</h2>
+  <table><tr><th>Metric</th><th>Value</th></tr>
+    <tr><td>Opportunities detected</td><td>${o.detected??'—'}</td></tr>
+    <tr><td>Rejected (funnel)</td><td>${o.rejected??'—'}</td></tr>
+    <tr><td>Executed</td><td>${o.executed??'—'}</td></tr>
+    <tr><td>Failures</td><td>${i.rpc_failures??'—'}</td></tr>
+    <tr><td>Heal actions</td><td>${i.heal_actions??'—'}</td></tr>
+    <tr><td>Qualified RPCs</td><td>${i.qualified_rpcs??'—'} / ${i.candidates??'—'}</td></tr></table>
+  <div class="m">AllBright DeFi Software Engineering Ltd. — measured telemetry only; peer benchmarks are confidence-tagged public evidence.</div>
+  <aside id="agent">
+  <div class="ag-hd">◉ AGENT COPILOT <span class="x" id="agClose">✕</span></div>
+  <div class="ag-sub" id="ag-sub">endpoint: checking…</div>
+  <div class="ag-chips">
+    <button data-act="explain">Explain state</button>
+    <button data-act="digest">Incident digest</button>
+    <button data-act="report">Ops report</button>
+    <button data-act="gaps">Doctrine gaps</button>
+  </div>
+  <div class="ag-body" id="ag-body">
+    <div class="ag-msg bot">Read-only advisor over live AllBright telemetry (AGENTS §44). I monitor compliance vs AGENTS.md / SKILL.md / MASTER_BUILD_GUIDE.md, explain state, digest incidents, and surface gaps in real-time — read-only, never mutating.</div>
+  </div>
+  <div class="ag-in">
+    <div class="row">
+      <select id="ag-modelsel" title="Model"></select>
+      <input id="ag-newmodel" type="text" placeholder="add model id…" title="Add model" style="width:110px">
+      <button id="ag-addmodel" class="ghost" title="Add model">＋</button>
+    </div>
+    <div class="row">
+      <input id="ag-q" type="text" placeholder="ask the data…">
+      <button id="ag-send">Ask</button>
+    </div>
+  </div>
+</aside>
+</body></html>`;
+}
+function downloadReport(fmt){
+  if(!lastReport){alert('Load a range first');return;}
+  const html=reportHtml(lastReport);
+  if(fmt==='pdf'){
+    const w=window.open('','_blank');
+    w.document.write(html);w.document.close();w.focus();
+    setTimeout(()=>w.print(),400);
+  }else{
+    const blob=new Blob(['\ufeff'+html],{type:'application/msword'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=`allbright-report-${new Date().toISOString().slice(0,10)}.doc`;
+    a.click();URL.revokeObjectURL(a.href);
+  }
 }
 
 /* ---------- Competitive Analysis (§27.1 — Benchmark Register) ---------- */
 const RATING_RANK={LEADING:5,STRONG:4,PARTIAL:3,EARLY:2,UNVERIFIED:1,'N/A':0};
+const RATING_INV={5:'LEADING',4:'STRONG',3:'PARTIAL',2:'EARLY',1:'UNVERIFIED',0:'N/A'};
+const RANK_COL={5:'#3fb97f',4:'#6fbf73',3:'#d9a441',2:'#d97a3a',1:'#dd5f68',0:'#454e5e'};
+// --- pure-SVG chart helpers (zero deps, offline-safe) ---
+function svgSpark(vals){
+  if(!vals||vals.length<2)return '<span class="na">—</span>';
+  const w=76,h=18,n=vals.length,x=i=>(i/(n-1)*w).toFixed(1),y=v=>(h-2-(v/5)*(h-4)).toFixed(1);
+  const pts=vals.map((v,i)=>`${x(i)},${y(v)}`).join(' ');
+  const col=vals[n-1]>=vals[0]?'#3fb97f':'#dd5f68';
+  return `<svg width="${w}" height="${h}" style="vertical-align:middle"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5"/></svg>`;
+}
+function svgGapBar(gap){
+  const w=130,h=14,mid=w/2,u=(mid-6)/4,len=Math.min(4,Math.abs(gap))*u;
+  const x=gap>0?mid-len:mid, col=gap>0?'#dd5f68':gap<0?'#3fb97f':'#454e5e';
+  return `<svg width="${w}" height="${h}" style="vertical-align:middle"><line x1="${mid}" y1="1" x2="${mid}" y2="${h-1}" stroke="#3a4250"/><rect x="${x}" y="3" width="${Math.max(1,len)}" height="${h-6}" rx="2" fill="${col}"/></svg>`;
+}
+function svgDots(dots){ // dots:[{id,rank,self}]
+  const w=400,h=20,x=r=>16+r/5*(w-32);
+  const ticks=[0,1,2,3,4,5].map(r=>`<line x1="${x(r)}" y1="8" x2="${x(r)}" y2="12" stroke="#3a4250"/>`).join('');
+  const ds=dots.map(c=>`<circle cx="${x(c.rank)}" cy="10" r="${c.self?6:4}" fill="${c.self?'#38bdf8':RANK_COL[c.rank]||'#888'}"${c.self?' stroke="#cdd6e4" stroke-width="1.2"':''}><title>${c.id}: ${RATING_INV[c.rank]||'?'}</title></circle>`).join('');
+  return `<svg width="${w}" height="${h}" style="vertical-align:middle"><line x1="16" y1="10" x2="${w-16}" y2="10" stroke="#2e3644"/>${ticks}${ds}</svg>`;
+}
+function svgShare(builders){
+  const w=560,h=20;let x=0;
+  const seg=builders.slice(0,8).map((b,i)=>{
+    const bw=b.share*w,col=`hsl(${i*43%360},50%,42%)`;
+    const r=`<rect x="${x.toFixed(1)}" y="0" width="${Math.max(0,bw).toFixed(1)}" height="${h}" fill="${col}"><title>${b.id} ${(b.share*100).toFixed(1)}%</title></rect>`;
+    x+=bw;return r;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" style="display:block">${seg}</svg>`;
+}
+function heatCell(c){
+  if(!c)return '<span class="na">—</span>';
+  const r=RATING_RANK[c.rating]??0;
+  const conf={HIGH:'measured/verified',MED:'public docs',LOW:'low confidence'}[c.confidence]||c.confidence||'';
+  return `<div style="background:${RANK_COL[r]}33;border-left:3px solid ${RANK_COL[r]};padding:2px 6px;border-radius:3px" title="${conf}${c.note?' — '+String(c.note).replace(/"/g,'&quot;'):''}${c.citation?' · '+c.citation:''}">${c.rating||'?'}</div>`;
+}
 const RATING_CLS={LEADING:'b-ok',STRONG:'b-ok',PARTIAL:'b-warn',EARLY:'b-warn',UNVERIFIED:'b-na','N/A':'b-na'};
 function cellBadge(c){
-  if(!c)return '<span class="na">NOT DISCLOSED</span>';
+  if(!c)return '<span class="na">—</span>';
   const conf={HIGH:'measured/verified',MED:'public docs',LOW:'low confidence'}[c.confidence]||c.confidence;
   return `<span title="${conf}${c.note?' — '+c.note.replace(/"/g,'&quot;'):''}${c.citation?' · '+c.citation:''}">`
     +badge(c.rating,RATING_CLS[c.rating]||'b-na')+`</span>`;
 }
+let cpMonths=12;
+async function ackForge(axis){
+  await postJSON('/api/forge/ack',{axis});
+  loadCompetitive();
+}
+async function promotePeer(id){
+  const r=await (await postJSON('/api/competitive/promote',{platform_id:id})).json();
+  if(!r.ok)alert(r.error||'promotion failed'); else loadCompetitive();
+}
 async function loadCompetitive(){
-  const d=await (await fetch('/api/competitive')).json();
+  const d=await (await fetch('/api/competitive?months='+cpMonths)).json();
   if(!d.register){$('#cp-table').innerHTML='<div class="notice">benchmark_register.json not found — DATA UNAVAILABLE</div>';return;}
   const m=d.allbright_measured;
   $('#cp-cards').innerHTML=[
@@ -503,24 +895,101 @@ async function loadCompetitive(){
     ['Exec Submitted',fmtN(m.exec_submitted)],['Exec Included',fmtN(m.exec_included)],
     ['Realized P&L',fmt$(m.realized_profit_usd)],
   ].map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
-  // AllBright column is the live measured baseline (highlighted).
-  const plats=d.register.platforms;
-  const cols=[{key:'axis',label:'KPI Axis',group:'Comparison'},
-              {key:'dimension',label:'Dimension',group:'Comparison'}]
+  // Leaderboard — platform rows, axis columns, ranked by composite score.
+  const AXIS_SHORT={'Data speed & state freshness':'Freshness','Simulation accuracy':'Sim',
+    'Route optimization':'Routes','Execution reliability / inclusion':'Inclusion',
+    'MEV protection / private orderflow':'Orderflow','Strategy diversity':'Strategies',
+    'Research / replay / auditability':'Audit','Adaptive / learning loop':'Learning',
+    'Multi-chain breadth':'Chains','Gas economics':'Gas','Security / risk governance':'Security'};
+  const axes=d.register.axes||[];
+  const platsAll=(d.register.platforms||[]).filter(p=>(p.standing?.status||'ACTIVE')!=='DEMOTED');
+  const brows=platsAll.map(p=>{
+    const cells=axes.map(a=>p.self?(d.axis_ratings?.[a.axis]||a.cells[p.id]):a.cells[p.id]);
+    const ranks=cells.map(c=>c?(RATING_RANK[c.rating]??0):0);
+    const score=ranks.length?ranks.reduce((s,v)=>s+v,0)/ranks.length:0;
+    const r={name:p.name,website:p.website,self:!!p.self,score:+score.toFixed(2)};
+    axes.forEach((a,i)=>{r['a'+i]=cells[i];r['a'+i+'_r']=ranks[i];});
+    return r;
+  }).sort((a,b)=>b.score-a.score);
+  brows.forEach((r,i)=>r.rank=i+1);
+  tableEngine($('#cp-board'),[
+    {key:'rank',label:'#',num:true},
+    {key:'name',label:'Competitor',render:r=>r.self?`<b style="color:#00b4f0"><span style="display:inline-block;background:rgba(0,180,240,.10);border-radius:4px;padding:1px 7px;margin:-1px -7px">★ ${r.name}</span></b>`:r.name},
+    {key:'website',label:'Website',render:r=>r.website?`<a href="${r.website}" target="_blank" rel="noopener" style="color:var(--blue)">${r.website.replace(/^https?:\/\//,'').replace(/\/$/,'')}</a>`:'<span class="na">—</span>'},
+    {key:'score',label:'Score',num:true,render:r=>`<b>${r.score}</b>`},
+    ...axes.map((a,i)=>({key:'a'+i+'_r',label:AXIS_SHORT[a.axis]||a.axis,num:true,
+      render:r=>heatCell(r['a'+i])})),
+  ],brows);
+  // Axis Landscape — dumbbell plot: every platform per axis on the
+  // 0-5 scale, AllBright highlighted. The 3-second answer.
+  $('#cp-land').innerHTML=(d.register.axes||[]).map(a=>{
+    const dots=platsAll.map(p=>{
+      const c=p.self?(d.axis_ratings?.[a.axis]):a.cells[p.id];
+      return {id:p.id,rank:c?(RATING_RANK[c.rating]??0):0,self:!!p.self};
+    });
+    return `<div style="display:grid;grid-template-columns:230px 1fr;align-items:center;padding:2px 0"><span class="muted" style="font-size:12px">${a.axis}</span>${svgDots(dots)}</div>`;
+  }).join('');
+  // Gap matrix — measured self-ratings vs best ACTIVE peer, sorted worst-first.
+  const trend=d.axis_trend||{}, series=d.axis_series||{};
+  const gaps=(d.gap_matrix||[]).slice().sort((a,b)=>(b.gap||0)-(a.gap||0));
+  tableEngine($('#cp-gaps'),[
+    {key:'axis',label:'Axis'},
+    {key:'allbright',label:'AllBright (measured)',render:r=>heatCell(d.axis_ratings?.[r.axis]||{rating:r.allbright})},
+    {key:'best_peer',label:'Best ACTIVE peer',render:r=>r.best_peer?`<span class="muted">${r.best_peer.id}</span> `+badge(RATING_INV?.[r.best_peer.rank]||r.best_peer.rank,'b-ok'):'<span class="na">—</span>'},
+    {key:'gap',label:'Gap',num:true,render:r=>svgGapBar(r.gap||0)+` <span class="muted">${r.gap||0}</span>`},
+    {key:'trend',label:'Trajectory',render:r=>svgSpark(series[r.axis])},
+  ],gaps);
+  // Forge tasks — the autonomous loop's stateful workflows.
+  const ft=await (await fetch('/api/forge/tasks')).json().catch(()=>({tasks:[]}));
+  const tasks=(ft.tasks||[]).slice().sort((a,b)=>(b.gap||0)-(a.gap||0));
+  tableEngine($('#cp-forge'),[
+    {key:'axis',label:'Axis'},
+    {key:'status',label:'Status',render:r=>badge(r.status,{OPEN:'b-warn',IN_FLIGHT:'b-ok',ESCALATED:'b-warn',MEASURED:'b-ok',ACKED:'b-na'}[r.status]||'b-na')},
+    {key:'action_class',label:'Class',render:r=>badge(r.action_class,r.action_class==='SAFE'?'b-ok':'b-warn')},
+    {key:'owner',label:'Owner',render:r=>`<span class="muted">${r.owner}</span>`},
+    {key:'gap',label:'Gap',num:true,render:r=>svgGapBar(r.gap||0)},
+    {key:'peer',label:'Peer',render:r=>`<span class="muted">${r.peer||'—'}</span>`},
+    {key:'priority',label:'',render:r=>(r.status==='ESCALATED'&&r.priority==='HIGH')?badge('REGRESSED','b-warn'):r.status==='ESCALATED'?`<button class="btn" onclick="ackForge('${r.axis}')">Acknowledge</button>`:''},
+  ],tasks);
+  // Live builder share — stacked share bar + table (measured, not hand-set).
+  const pl=d.peer_live;
+  $('#cp-live').innerHTML=(pl&&pl.builders&&pl.builders.length)
+    ?(svgShare(pl.builders)
+      +'<table style="margin-top:6px"><thead><tr><th>Builder</th><th>Share</th><th>Payloads</th><th>Value (ETH)</th></tr></thead><tbody>'
+      +pl.builders.slice(0,12).map(b=>`<tr><td>${b.id}</td><td>${(b.share*100).toFixed(1)}%</td><td>${fmtN(b.payloads)}</td><td>${b.value_eth.toFixed(3)}</td></tr>`).join('')
+      +'</tbody></table>'
+      +`<div class="muted" style="margin-top:4px">${pl.slots_seen} slots · as of ${pl.asof_ms?new Date(pl.asof_ms).toLocaleTimeString():'?'} · sources: ${(pl.sources_ok||[]).join(', ')}${pl.fetch_errors?' · '+pl.fetch_errors.length+' relay(s) unreachable':''}</div>`)
+    :'<div class="notice">peer_metrics.json not yet populated — collector runs on dashboard start · DATA UNAVAILABLE</div>';
+  // Peer comparison matrix — heatmap cells; AllBright = measured ratings.
+  const plats=d.register.platforms.filter(p=>(p.standing?.status||'ACTIVE')!=='DEMOTED');
+  const cols=[{key:'axis',label:'KPI Axis',group:'Comparison'}]
     .concat(plats.map(p=>({
-      key:p.id+'_r',label:p.name+(p.self?' ★':''),num:true,group:'Platforms',
-      render:r=>cellBadge(r[p.id]),
+      key:p.id+'_r',label:p.name+(p.self?' ★':'')+(p.standing?.status==='WATCH'?' 👁':''),
+      num:true,group:'Platforms',
+      render:r=>heatCell(p.self?(d.axis_ratings?.[r.axis]||r[p.id]):r[p.id]),
     })));
   const rows=d.register.axes.map(a=>{
-    const r={axis:a.axis,dimension:a.dimension};
-    plats.forEach(p=>{const c=a.cells[p.id];r[p.id]=c;r[p.id+'_r']=c?(RATING_RANK[c.rating]??1):1;});
+    const r={axis:a.axis};
+    plats.forEach(p=>{const c=p.self?(d.axis_ratings?.[a.axis]||a.cells[p.id]):a.cells[p.id];r[p.id]=c;r[p.id+'_r']=c?(RATING_RANK[c.rating]??1):1;});
     return r;
   });
   tableEngine($('#cp-table'),cols,rows);
-  const meta=d.register.meta;
-  $('#cp-meta').textContent=`v${meta.version} · reviewed ${meta.last_reviewed} · next source review ${meta.next_source_review} · next gap review ${meta.next_gap_review} — ${meta.note}`;
-  $('#cp-notice').textContent=d.notice;
+  // Watchlist — promote when evidence qualifies.
+  const w=d.register.watchlist||[];
+  $('#cp-watch').innerHTML=w.length?('<table><thead><tr><th>Candidate</th><th>Category</th><th>Signal</th><th></th></tr></thead><tbody>'
+    +w.map(x=>`<tr><td>${x.name||x.id}</td><td class="muted">${x.category||'—'}</td><td class="muted">${x.note||x.signal||'—'}</td><td><button class="btn" onclick="promotePeer('${x.id}')">Promote</button></td></tr>`).join('')
+    +'</tbody></table>'):'<div class="notice">Watchlist empty</div>';
 }
+$('#cp-addbtn').onclick=async()=>{
+  const r=await (await postJSON('/api/competitive/add',{name:$('#cp-addname').value,category:$('#cp-addcat').value})).json();
+  $('#cp-addmsg').textContent=r.ok?`Watchlisted ✓`:(r.error||'failed');
+  if(r.ok){$('#cp-addname').value='';$('#cp-addcat').value='';loadCompetitive();}
+};
+$('#cp-addrbtn').onclick=async()=>{
+  const r=await (await postJSON('/api/competitive/address',{address:$('#cp-addr').value,chain:$('#cp-addrchain').value,label:$('#cp-addrlabel').value})).json();
+  $('#cp-addrmsg').textContent=r.ok?`Tracking ✓ (${r.queued} queued)`:(r.error||'failed');
+  if(r.ok)$('#cp-addr').value='';
+};
 
 async function loadWallet(){
   const d=await (await fetch('/api/wallet')).json();
@@ -538,22 +1007,85 @@ async function loadWallet(){
     `Manual transfer remains a separate explicit action.`;
 }
 
-/* ---------- MetaMask (§38.10 — read-only, never keys/seed) ---------- */
-$('#mm-connect').onclick=async()=>{
-  if(!window.ethereum){$('#mm-status').textContent='MetaMask not detected — DATA UNAVAILABLE';return;}
+/* ---- Connected Wallets: MetaMask detect + activate toggles ----
+   EIP-6963 multi-provider discovery selects MetaMask specifically —
+   fixes injected-provider confusion (Trust Wallet answering first).
+   MetaMask exposes only PERMITTED accounts; others are added manually. */
+async function detectMetaMask(){
+  const providers=[];
+  const h=e=>providers.push(e.detail);
+  window.addEventListener('eip6963:announceProvider',h);
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+  await new Promise(r=>setTimeout(r,400));
+  window.removeEventListener('eip6963:announceProvider',h);
+  const mm=providers.find(p=>p.info&&(/metamask/i.test(p.info.name)||p.info.rdns==='io.metamask'))
+    ||(window.ethereum&&window.ethereum.isMetaMask?{provider:window.ethereum}:null);
+  if(!mm){$('#wl-msg').textContent='MetaMask not detected — install the extension or add addresses manually.';return;}
+  let accounts=[];
   try{
-    const accts=await window.ethereum.request({method:'eth_requestAccounts'});
-    const chainId=await window.ethereum.request({method:'eth_chainId'});
-    const bal=await window.ethereum.request({method:'eth_getBalance',params:[accts[0],'latest']});
-    $('#mm-status').textContent='connected';
-    $('#mm-table').innerHTML='';
-    tableEngine($('#mm-table'),[
-      {key:'address',label:'Account'},
-      {key:'chain',label:'Chain ID'},
-      {key:'balance',label:'Balance (native)',num:true},
-    ],[{address:accts[0],chain:parseInt(chainId,16),balance:(parseInt(bal,16)/1e18).toFixed(5)}]);
-  }catch(e){$('#mm-status').textContent='connection rejected';}
-};
+    // wallet_requestPermissions opens the multi-account picker — the user
+    // can permit EVERY account in one shot (not just the selected one).
+    const perm=await mm.provider.request({method:'wallet_requestPermissions',params:[{eth_accounts:{}}]});
+    accounts=(perm&&perm[0]&&perm[0].caveats?perm[0].caveats.flatMap(c=>c.value||[]):null)||await mm.provider.request({method:'eth_accounts'});
+    if(!accounts.length)accounts=await mm.provider.request({method:'eth_accounts'});
+  }catch(e){
+    try{accounts=await mm.provider.request({method:'eth_requestAccounts'});}
+    catch(e2){$('#wl-msg').textContent='MetaMask request rejected: '+(e2.message||e.message);return;}
+  }
+  if(!accounts.length){$('#wl-msg').textContent='MetaMask returned no permitted accounts.';return;}
+  // MetaMask exposes NO account names via provider API — names are
+  // label-by-index (MM default convention) and IMMUTABLE once stored.
+  const res=await (await postJSON('/api/wallets',{wallets:accounts.map((a,i)=>({address:a,name:'Account '+(i+1),source:'metamask'}))})).json();
+  $('#wl-msg').textContent=res.ok
+    ?`Registered ${accounts.length} permitted account(s) — names are write-once (MM exposes no custom names via API); toggle ON to make a row a transfer destination.`
+    :'Registry write failed: '+(res.error||'');
+  loadWallets2();
+}
+
+async function addWalletManual(){
+  const a=$('#wl-addaddr').value.trim();
+  if(!/^0x[0-9a-fA-F]{40}$/.test(a)){$('#wl-msg').textContent='Enter a valid 0x address (40 hex chars).';return;}
+  const res=await (await postJSON('/api/wallets',{wallets:[{address:a,source:'manual'}]})).json();
+  $('#wl-msg').textContent=res.ok?'Address registered — toggle ON to activate.':'Failed: '+(res.error||'');
+  $('#wl-addaddr').value='';
+  loadWallets2();
+}
+
+async function toggleWallet(addr,on){
+  await postJSON('/api/wallets',{wallets:[{address:addr,active:on}]});
+}
+
+async function loadWallets2(){
+  const d=await (await fetch('/api/wallets')).json();
+  const rows=[];
+  for(const w of (d.wallets||[]))
+    for(const r of (w.rows||[]))
+      rows.push({address:w.address,name:w.name,active:w.active,source:w.source,chain:r.chain,
+        balance_native:r.balance_native,balance_usd:r.balance_usd,status:r.status});
+  if(!rows.length){
+    $('#wl-accounts').innerHTML='<div class="notice">No wallets registered — Detect MetaMask or add an address manually.</div>';
+    return;}
+  tableEngine($('#wl-accounts'),[
+    {key:'name',label:'Account',render:r=>`<b>${r.name||'—'}</b> <span class="muted" title="write-once, immutable">⛨</span>`},
+    {key:'address',label:'Address',render:r=>r.address.slice(0,12)+'…'+r.address.slice(-6)},
+    {key:'chain',label:'Chain'},
+    {key:'balance_native',label:'Native Balance',num:true,render:r=>r.balance_native==null?'<span class="na">DATA UNAVAILABLE</span>':r.balance_native.toFixed(5)},
+    {key:'balance_usd',label:'USD',num:true,render:r=>r.balance_usd==null?'<span class="na">—</span>':'$'+r.balance_usd.toFixed(2)},
+    {key:'source',label:'Source',render:r=>`<span class="muted">${r.source}</span>`},
+    {key:'active',label:'Active',render:r=>`<input type="checkbox" ${r.active?'checked':''} onchange="toggleWallet('${r.address}',this.checked)">`},
+  ],rows);
+  const lt=await (await fetch('/api/transfers')).json();
+  tableEngine($('#wl-ledger'),[
+    {key:'ts',label:'Time',render:r=>r.ts?new Date(r.ts).toLocaleString():'—'},
+    {key:'to',label:'To',render:r=>r.to?r.to.slice(0,12)+'…'+r.to.slice(-6):'—'},
+    {key:'amount_usd',label:'USD',num:true,render:r=>r.amount_usd==null?'<span class="na">—</span>':'$'+(+r.amount_usd).toFixed(2)},
+    {key:'chain',label:'Chain'},
+    {key:'tx',label:'Tx',render:r=>r.tx?`<a href="#" style="color:var(--blue)">${r.tx.slice(0,14)}…</a>`:'—'},
+    {key:'status',label:'Status',render:r=>badge(r.status,'b-ok')},
+  ],lt.transfers||[]);
+}
+$('#wl-detect').onclick=detectMetaMask;
+$('#wl-add').onclick=addWalletManual;
 
 /* ---------- Blockchain Stream (§38.15) ---------- */
 const STAGES=['detected','qualified','simulated','defended','executed','confirmed','settled'];
@@ -584,7 +1116,7 @@ async function loadStream(){
     <div style="display:flex;gap:2px;margin-top:7px;align-items:center;flex-wrap:wrap">
       ${STAGES.map((s,i)=>{
         const on=o.stages[s];
-        const col=on===true?'var(--ok)':(s==='defended'&&o.blocked)?'var(--warn)':'#33415e';
+        const col=on===true?'var(--ok)':(s==='defended'&&o.blocked)?'var(--warn)':'#333d4f';
         return `${i?'<span class="muted" style="font-size:9px">→</span>':''}
           <span title="${STAGE_LBL}${on?'':' — UNVERIFIED'}"
             style="font-size:9.5px;letter-spacing:.4px;color:${col};border:1px solid ${col};border-radius:3px;padding:1px 5px">${STAGE_LBL}${on?'':'?'}</span>`;}).join('')}
@@ -618,14 +1150,21 @@ async function loadStream(){
 /* ---------- kill switch & status ---------- */
 $('#killswitch').onclick=async()=>{
   const cur=$('#killswitch').classList.contains('halted');
-  const d=await (await fetch('/api/killswitch',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action:cur?'resume':'halt'})})).json();
+  const d=await (await postJSON('/api/killswitch',{action:cur?'resume':'halt'})).json();
   $('#killswitch').classList.toggle('halted',d.state==='HALTED');
   $('#killswitch').textContent=d.state==='HALTED'?'◉ HALTED':'◉ KILL SWITCH';
   refresh();
 };
 async function loadStatus(){
   const d=await (await fetch('/api/status')).json();
+  fetch('/api/capacity').then(r=>r.json()).then(c=>{
+    const col=c.level==='green'?'var(--ok)':c.level==='yellow'?'var(--warn)':'var(--bad)';
+    $('#capDot').style.background=col;
+    $('#capDot').style.boxShadow='0 0 6px '+col;
+    $('#capPct').textContent=(c.pct??'—')+'%';
+    $('#capPct').style.color=col;
+    $('#capLight').dataset.tip='CAPACITY '+String(c.level||'?').toUpperCase()+' :: '+(c.verdict||'')+' | '+(c.dims||[]).map(d=>d.dim+'='+String(d.level).toUpperCase()+' ('+d.detail+')').join(' | ');
+  })
   const el=$('#sysStatus');
   el.innerHTML=`<span class="status-dot st-${d.status}"></span>${d.status}`;
   el.title=`RPC qualified: ${d.qualified_rpcs} · index rows: ${d.index_rows} · kill: ${d.kill_switch}`;
@@ -650,7 +1189,7 @@ async function init(){
   for(const id of ['pnl-variant','st-variant','bs-variant'])$(id).innerHTML=varOpts;
   fillTime($('#pnl-time'),'profit');fillTime($('#st-time'),'strategy');
   fillTime($('#dp-time'),'deploy');fillTime($('#if-time'),'infra');fillTime($('#rp-time'),'reports');
-  fillTime($('#bs-time'),'stream');
+  fillTime($('#bs-time'),'stream');fillTime($('#wl-time'),'wallet');
   for(const id of ['pnl-chain','pnl-variant','pnl-mode','st-chain','st-variant','bs-chain','bs-variant'])
     $(id).onchange=refresh;
   $('#pnl-apply').onclick=refresh;
@@ -659,7 +1198,8 @@ async function init(){
 function refresh(){
   loadStatus();
   ({profit:loadProfit,stream:loadStream,strategy:loadStrategy,deploy:loadDeploy,
-    infra:loadInfra,reports:loadReports,competitive:loadCompetitive,wallet:loadWallet}[state.page]||(()=>{}))();
+    infra:loadInfra,security:loadSecurity,reports:loadReports,competitive:loadCompetitive,
+    wallet:()=>{loadWallet();loadWallets2();}}[state.page]||(()=>{}))();
 }
 $('#refresh').onchange=setupTimer;let timer=null;
 function setupTimer(){clearInterval(timer);const s=+$('#refresh').value;if(s)timer=setInterval(refresh,s*1000);}
