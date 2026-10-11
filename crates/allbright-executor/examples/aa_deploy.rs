@@ -1,13 +1,15 @@
-//! LIVE: deploy `AllbrightExecutor` on BSC through the Kernel smart
-//! account via a sponsored (gasless) UserOperation.
+//! Gasless executor deploy: the Kernel smart account CREATE2-deploys
+//! `AllbrightExecutor` through the deterministic-deployment proxy
+//! (0x4e59…956C — same address on virtually every EVM chain) inside a
+//! Pimlico-sponsored UserOp. Zero native balance needed anywhere.
+//! Contract invariant: owner = the Kernel account (only it can execute).
 //!
-//! Path: smart account → Safe Singleton Factory (EIP-2470,
-//! 0x914d7Fec…43d7, verified live on BSC) → CREATE2 deploy of
-//! `bytecode ‖ abi.encode(owner=smart account)`.
+//!   cargo run --release --example aa_deploy -- bsc          # dry-run
+//!   cargo run --release --example aa_deploy -- bsc --send   # deploys
 
 use alloy::primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy::signers::local::PrivateKeySigner;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use secrecy::ExposeSecret;
 
 use allbright_core::config::Config;
@@ -15,38 +17,13 @@ use allbright_core::config::Config;
 #[path = "../src/aa.rs"]
 mod aa;
 
-const SINGLETON_FACTORY: &str = "0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7";
-
-fn read_initcode(owner: Address) -> Result<Bytes> {
-    let artifact: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            "contracts/out/AllbrightExecutor.sol/AllbrightExecutor.json",
-        )
-        .context("run `forge build` in contracts/ first")?,
-    )?;
-    let hex_code = artifact["bytecode"]["object"]
-        .as_str()
-        .context("bytecode.object missing")?
-        .trim_start_matches("0x");
-    let mut init = alloy::primitives::hex::decode(hex_code)?;
-    // constructor(address _owner) — abi-encoded arg appended.
-    let mut arg = [0u8; 32];
-    arg[12..].copy_from_slice(owner.as_slice());
-    init.extend_from_slice(&arg);
-    Ok(init.into())
-}
-
-fn create2_address(factory: Address, salt: B256, initcode: &[u8]) -> Address {
-    let mut buf = Vec::with_capacity(1 + 20 + 32 + 32);
-    buf.push(0xff);
-    buf.extend_from_slice(factory.as_slice());
-    buf.extend_from_slice(salt.as_slice());
-    buf.extend_from_slice(keccak256(initcode).as_slice());
-    Address::from_slice(&keccak256(&buf)[12..])
-}
+/// Universal CREATE2 deployer (Nick's deterministic-deployment-proxy).
+const DEPLOYER: &str = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let chain = std::env::args().nth(1).unwrap_or_else(|| "bsc".into());
+    let send = std::env::args().any(|a| a == "--send");
     let cfg = Config::load()?;
     let key = cfg
         .pimlico_api_key
@@ -59,64 +36,71 @@ async fn main() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("PRIVATE_KEY unset"))?
         .parse()?;
 
+    let artifact: serde_json::Value = serde_json::from_slice(&std::fs::read(
+        "contracts/out/AllbrightExecutor.sol/AllbrightExecutor.json",
+    )?)?;
+    let creation = artifact["bytecode"]["object"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("no bytecode in artifact"))?;
+    let mut initcode = alloy::primitives::hex::decode(creation.trim_start_matches("0x"))?;
+
+    let c = allbright_core::events::Chain::ALL
+        .into_iter()
+        .find(|c| c.name() == chain)
+        .ok_or_else(|| anyhow::anyhow!("unknown chain {chain}"))?;
+    let rpcs = cfg
+        .rpc_pools
+        .get(&c)
+        .cloned()
+        .filter(|v| !v.is_empty())
+        .or_else(|| cfg.rpc_urls.get(&c).cloned().map(|u| vec![u]))
+        .ok_or_else(|| anyhow::anyhow!("no rpc for {chain}"))?;
+    let chain_id = c.chain_id();
+
     let pim = aa::PimlicoClient::new(key);
-    let bsc_rpc = "https://bsc-rpc.publicnode.com";
-    let rpcs = vec![bsc_rpc.to_string()];
-
     let acct = pim.account_address(&rpcs, signer.address()).await?;
-    println!("smart account: {acct:?}");
+    println!("kernel account: {acct:?} (owner of the deployed executor)");
 
-    let initcode = read_initcode(acct)?;
-    let factory: Address = SINGLETON_FACTORY.parse()?;
-    let salt = B256::ZERO;
-    let predicted = create2_address(factory, salt, &initcode);
-    println!("initcode: {}B  predicted executor: {predicted:?}", initcode.len());
+    // initCode = creation bytecode ‖ abi.encode(owner) — constructor(address).
+    let mut owner_word = [0u8; 32];
+    owner_word[12..].copy_from_slice(acct.as_slice());
+    initcode.extend_from_slice(&owner_word);
 
-    // Guard: refuse to redeploy over existing code.
+    // Deployer presence check.
+    let deployer: Address = DEPLOYER.parse()?;
     let client = reqwest::Client::new();
-    let code: serde_json::Value = client.post(bsc_rpc).json(
-        &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"eth_getCode",
-            "params":[format!("{predicted:?}"),"latest"]})
-    ).send().await?.json().await?;
-    if code["result"].as_str().unwrap_or("0x").len() > 4 {
-        println!("ALREADY DEPLOYED at {predicted:?} — nothing sent");
-        return Ok(());
-    }
+    let code: serde_json::Value = client
+        .post(&rpcs[0])
+        .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"eth_getCode",
+            "params":[DEPLOYER,"latest"]}))
+        .send().await?.json().await?;
+    let present = code["result"].as_str().map(|s| s.len() > 4).unwrap_or(false);
+    anyhow::ensure!(present, "deterministic deployer absent on {chain}");
 
-    // calldata to factory = salt ‖ initcode (Safe Singleton Factory ABI).
-    let mut cd = Vec::with_capacity(32 + initcode.len());
-    cd.extend_from_slice(salt.as_slice());
-    cd.extend_from_slice(&initcode);
-    let call = aa::kernel_execute_calldata(factory, U256::ZERO, Bytes::from(cd));
+    let salt = B256::ZERO;
+    let mut deploy_input = salt.to_vec();
+    deploy_input.extend_from_slice(&initcode);
+
+    // Predicted address = last20(keccak256(0xff ‖ deployer ‖ salt ‖ keccak(initCode))).
+    let mut pre = vec![0xffu8];
+    pre.extend_from_slice(deployer.as_slice());
+    pre.extend_from_slice(salt.as_slice());
+    pre.extend_from_slice(keccak256(&initcode).as_slice());
+    let predicted = Address::from_slice(&keccak256(&pre)[12..]);
+    println!("predicted executor: {predicted:?}");
+
+    let call = aa::kernel_execute_calldata(
+        deployer,
+        U256::ZERO,
+        Bytes::from(deploy_input),
+    );
 
     let res = pim
-        .sponsored_user_op("bsc", 56, &rpcs, &signer, call, false)
+        .sponsored_user_op(&chain, chain_id, &rpcs, &signer, call, !send)
         .await?;
-    println!("userOpHash: {res}");
-
-    // Wait for inclusion, then verify owner() == smart account.
-    let url = format!("https://api.pimlico.io/v2/bsc/rpc?apikey={}",
-        cfg.pimlico_api_key.as_ref().unwrap().expose_secret());
-    for _ in 0..30 {
-        let v: serde_json::Value = client.post(&url).json(
-            &serde_json::json!({"jsonrpc":"2.0","id":1,
-                "method":"eth_getUserOperationReceipt","params":[res]})
-        ).send().await?.json().await?;
-        if let Some(r) = v.get("result").filter(|r| !r.is_null()) {
-            println!("success={} gasUsed={} tx={}",
-                r["success"], r["actualGasUsed"],
-                r["receipt"]["transactionHash"]);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    println!("{res}");
+    if send {
+        println!("ALLBRIGHT_EXECUTOR_{}={predicted:?}", chain.to_uppercase());
     }
-    // owner() selector 0x8da5cb5b
-    let owner_call: serde_json::Value = client.post(bsc_rpc).json(
-        &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"eth_call",
-            "params":[{"to":format!("{predicted:?}"),"data":"0x8da5cb5b"},"latest"]})
-    ).send().await?.json().await?;
-    let raw = owner_call["result"].as_str().unwrap_or("0x");
-    let onchain_owner = raw.get(26..).map(|s| format!("0x{s}")).unwrap_or_default();
-    println!("executor at {predicted:?} owner()={onchain_owner} expected={acct:?}");
     Ok(())
 }
