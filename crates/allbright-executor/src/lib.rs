@@ -6,5 +6,6 @@
 
 pub mod aa;
 pub mod calldata;
+pub mod evm_dry;
 pub mod relay;
 pub mod simgate;

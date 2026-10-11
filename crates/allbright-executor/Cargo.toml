@@ -17,5 +17,7 @@ alloy.workspace = true
 # `alloy = "full"` does not enable the provider crate's erc4337-api feature.
 alloy-provider = { version = "1", features = ["erc4337-api", "reqwest"] }
 reqwest.workspace = true
+# U11: local EVM dry-run engine (alloy-1.x aligned version).
+revm = { version = "28", default-features = false, features = ["std"] }
 secrecy.workspace = true
 futures-util.workspace = true

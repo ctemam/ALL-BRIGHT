@@ -203,6 +203,22 @@ enum DryRunErr {
 }
 
 async fn eth_call_from(rpcs: &[String], from: Address, to: Address, data: Bytes) -> std::result::Result<Bytes, DryRunErr> {
+    // U11: when REVM_DRYRUN is set, run the identical call in the local
+    // EVM first — zero remote eth_call quota. A `Db` miss falls through
+    // to the remote call (fail-closed, never guessed state).
+    if crate::evm_dry::enabled() {
+        if let Some(url) = rpcs.first() {
+            match crate::evm_dry::dry_run(url.clone(), from, to, data.clone()).await {
+                crate::evm_dry::DryVerdict::Ok(out) => return Ok(out),
+                crate::evm_dry::DryVerdict::Revert(d) => {
+                    return Err(DryRunErr::Evm(format!("revm: {d}")));
+                }
+                crate::evm_dry::DryVerdict::Db(e) => {
+                    tracing::debug!(err = %e, "revm dry-run db miss — remote eth_call");
+                }
+            }
+        }
+    }
     let params = json!([{"from":format!("{from:?}"),"to":format!("{to:?}"),
         "data":format!("0x{}",alloy::primitives::hex::encode(&data))},"latest"]);
     match race_rpc(rpcs, "eth_call", params).await {
