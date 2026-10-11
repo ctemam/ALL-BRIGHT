@@ -83,7 +83,7 @@ Changed `crates/allbright-rpc-scout`, `crates/allbright-core`, `crates/allbright
 | U11 | Compute | Pool-math-only sim | Tier-1 math, blind to token behavior | revm replay on indexed state, zero network | new |
 | U12 | Compute | Ternary sizing only | Iterative; dies on state drift | Closed-form `x*` (Quarry); on-chain `amountOut` recompute | new |
 | U13 | Compute | State+sim ~15–30ms | Multicall RPC round-trips | In-process state via Tycho stream; bounded by public-RPC constraint | new |
-| U14 | Execute | Public bundler only | Pimlico→public mempool; slowest + route leak | `blxr_submit_bundle`/`bsc_private_tx` (48club/blockrazor/jetbldr/nodereal); Puissant; FastLane | GAP-35 |
+| U14 | Execute | ~~Public bundler only~~ **Implemented v1 (Eth)** | `submit_flashbots` is real: `eth_sendPrivateTransaction`→rpc.flashbots.net fast mode (free/keyless) or `eth_sendBundle`→relay with `FLASHBOTS_AUTH_KEY`; EOA-signed EIP-1559, priority fee = ordering bid (`ETH_PRIORITY_WEI`) | `blxr_submit_bundle`/`bsc_private_tx` (48club/blockrazor/jetbldr/nodereal); Puissant; FastLane — non-Eth chains still Pimlico public | GAP-35 |
 | U15 | Execute | Aave-only flash | Hard-coded 5bps premium eats EV band | Morpho 0% / UniV3 flash-swap / Maker DSS; EIP-3156 provider picker | new |
 | U16 | Execute | No flash-swap-as-loan | Borrows where it could flash-swap | First leg via `swap()` callback = 0% (MEV_V2 pattern) | new |
 | U17 | Execute | ABI-encoded calldata | Large payloads | Packed u64/u128 + command-byte dispatcher (pawurb/MEV_V2) | new |
