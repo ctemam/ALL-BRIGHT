@@ -508,6 +508,32 @@ async fn quote_token_usd(
     };
     let mut tn_cands: Vec<Cand> = Vec::new(); // token↔wnative
     let mut ns_cands: Vec<Cand> = Vec::new(); // wnative↔stable
+    // Route legs first — a leg pairing token↔wnative is a live pool the
+    // solver already simmed. token0/token1 ordering comes from the
+    // Phase-A multicall results (leg swap direction is not the pool
+    // ordering), so `is0` stays truthful.
+    for (k, i) in leg_ix.iter().enumerate() {
+        if tn_cands.len() >= 4 {
+            break;
+        }
+        let leg = &route[*i];
+        let t0 = res_a.get(2 * k).and_then(|r| r.as_ref()).and_then(addr_from_ret);
+        let t1 = res_a.get(2 * k + 1).and_then(|r| r.as_ref()).and_then(addr_from_ret);
+        let (Some(t0), Some(t1), Ok(pool)) =
+            (t0, t1, leg.pool_address.parse::<Address>())
+        else {
+            continue;
+        };
+        let (t0s, t1s) = (
+            format!("{t0:?}").to_lowercase(),
+            format!("{t1:?}").to_lowercase(),
+        );
+        if t0s == t && t1s == wn {
+            tn_cands.push(Cand { pool, stable: wn_addr, is0: true, dex: leg.dex });
+        } else if t1s == t && t0s == wn {
+            tn_cands.push(Cand { pool, stable: wn_addr, is0: false, dex: leg.dex });
+        }
+    }
     for p in allbright_core::chain::load_pools() {
         if p.chain != chain {
             continue;
