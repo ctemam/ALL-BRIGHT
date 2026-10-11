@@ -786,24 +786,45 @@ async fn prepare_execute(cfg: &Config, req: &ExecutionRequest) -> Result<Prepare
         anyhow::bail!("no flash provider for {}", chain.name());
     }
     let mut calls: Vec<(Address, Bytes)> = Vec::new();
-    let mut probe_meta: Vec<(Address, u64)> = Vec::new();
+    // (provider addr, kind, batch-index of its vault-balance probe)
+    // Balancer flash loans revert when the Vault's token balance <
+    // amount (BAL#528 observed live) — probe `token.balanceOf(vault)`
+    // and require balance ≥ amount_in before choosing.
+    let mut probe_meta: Vec<(Address, u64, Option<usize>)> = Vec::new();
+    let bal_of_sel = keccak256(b"balanceOf(address)")[..4].to_vec();
     for (addr_str, kind) in providers {
         let (Ok(addr), Some(probe)) = (addr_str.parse::<Address>(), provider_probe(*kind))
         else {
             continue;
         };
         calls.push((addr, probe));
-        probe_meta.push((addr, *kind));
+        let bal_ix = if *kind == KIND_BALANCER_V2 {
+            calls.push((
+                token_in,
+                Bytes::from([bal_of_sel.clone(), vec![0u8; 12], addr.to_vec()].concat()),
+            ));
+            Some(calls.len() - 1)
+        } else {
+            None
+        };
+        probe_meta.push((addr, *kind, bal_ix));
     }
     calls.push((
         token_in,
         Bytes::from(keccak256(b"decimals()")[..4].to_vec()),
     ));
     let batch = batch_calls(&rpcs, &calls).await;
-    let chosen: Option<(Address, u64)> = probe_meta
-        .iter()
-        .zip(batch.iter())
-        .find_map(|((addr, kind), r)| probe_verified(r.as_ref()).then_some((*addr, *kind)));
+    // probe results sit at even strides only when every provider carries
+    // the extra call — resolve each provider's probe index explicitly.
+    let mut probe_results: Vec<(Address, u64, Option<usize>, Option<Bytes>)> =
+        Vec::with_capacity(probe_meta.len());
+    {
+        let mut ix = 0usize;
+        for (addr, kind, bal_ix) in &probe_meta {
+            probe_results.push((*addr, *kind, *bal_ix, batch.get(ix).cloned().flatten()));
+            ix += 1 + usize::from(bal_ix.is_some());
+        }
+    }
     let decimals = batch
         .last()
         .and_then(|r| r.as_ref())
@@ -813,6 +834,23 @@ async fn prepare_execute(cfg: &Config, req: &ExecutionRequest) -> Result<Prepare
 
     let unit = 10f64.powi(decimals as i32);
     let amount_in = U256::from((req.signal.input_amount * unit).max(0.0) as u128);
+    let chosen: Option<(Address, u64)> = probe_results
+        .iter()
+        .find_map(|(addr, kind, bal_ix, r)| {
+            if !probe_verified(r.as_ref()) {
+                return None;
+            }
+            if let Some(bi) = bal_ix {
+                let bal = batch
+                    .get(*bi)
+                    .and_then(|r| r.as_ref())
+                    .and_then(u256_from_ret)?;
+                if bal < amount_in {
+                    return None;
+                }
+            }
+            Some((*addr, *kind))
+        });
     let min_profit = if stable_addr(chain, token_in) {
         U256::from((req.signal.min_profit_usd * unit).max(0.0) as u128)
     } else {
