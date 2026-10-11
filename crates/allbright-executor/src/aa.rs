@@ -23,10 +23,9 @@
 use alloy::dyn_abi::DynSolValue;
 use alloy::eips::BlockNumberOrTag;
 use alloy::primitives::{hex, keccak256, Address, Bytes, FixedBytes, B256, U256};
-use alloy::providers::ext::Erc4337Api;
 use alloy::providers::{Provider, ProviderBuilder, RootProvider};
 use alloy::rpc::types::{
-    Log as RpcLog, PackedUserOperation, SendUserOperation, UserOperationReceipt,
+    Log as RpcLog, PackedUserOperation, UserOperationReceipt,
 };
 use alloy::signers::local::PrivateKeySigner;
 use alloy::signers::Signer;
@@ -1009,16 +1008,24 @@ impl PimlicoClient {
             &signature,
         );
 
-        // Standard ERC-4337 submission via alloy's typed API (GAP-18).
-        let bundler = self.provider_for(&self.endpoint(chain))?;
-        let entry_point: Address = ENTRYPOINT_V07.parse()?;
-        let sent = bundler
-            .send_user_operation(SendUserOperation::EntryPointV07(final_op), entry_point)
+        // Standard ERC-4337 submission (GAP-18). Raw-RPC — Pimlico answers
+        // `eth_sendUserOperation` with the bare hash string, which the
+        // typed `SendUserOperationResponse` struct fails to deserialize
+        // (the op lands either way; the error path was lying).
+        let sent = self
+            .rpc(
+                chain,
+                "eth_sendUserOperation",
+                json!([serde_json::to_value(&final_op)?, ENTRYPOINT_V07]),
+            )
             .await
             .map_err(|e| {
                 anyhow::anyhow!("eth_sendUserOperation: {}", self.redact(e.to_string()))
             })?;
-        let hash = format!("0x{}", hex::encode(&sent.user_op_hash));
+        let hash = sent
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("sendUserOperation: non-string result {sent}"))?
+            .to_string();
         // Register so the outcome poller can resync the nonce allocator.
         pending_op_insert(&hash, chain_id, account, nonce);
         Ok(hash)

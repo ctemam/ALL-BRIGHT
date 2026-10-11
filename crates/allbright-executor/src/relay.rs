@@ -13,19 +13,22 @@ use crate::calldata;
 use allbright_core::{config::Config, events::*};
 
 /// Submit the encoded executor call.
-/// Ethereum → Flashbots `eth_sendBundle` (auth key required).
-/// Chains with a deployed executor → sponsored UserOp through the Kernel
-/// smart account (the only caller `AllbrightExecutor` accepts).
+/// Chains with a deployed executor + sponsorship → gasless UserOp through
+/// the Kernel smart account (the only caller `AllbrightExecutor` accepts).
+/// Ethereum without sponsorship → Flashbots `eth_sendBundle` (EOA gas).
 /// Anything else → refuse rather than leak orderflow.
 pub async fn submit(cfg: &Config, req: &ExecutionRequest, _calldata: &[u8]) -> Result<String> {
     match req.signal.chain {
-        Chain::Eth => submit_flashbots(cfg, req).await,
+        // Any chain with a deployed executor + Pimlico sponsorship →
+        // gasless sponsored UserOp (Eth included — the EOA-only Flashbots
+        // path can't pay gas on a zero-balance wallet).
         c if cfg.executor_address(c).is_some()
             && cfg.pimlico_api_key.is_some()
             && cfg.signing_key().is_some() =>
         {
             submit_via_aa(cfg, req).await
         }
+        Chain::Eth => submit_flashbots(cfg, req).await,
         other => anyhow::bail!("no verified relay adapter for {}", other.name()),
     }
 }
