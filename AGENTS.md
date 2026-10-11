@@ -182,7 +182,7 @@ Allbright MUST support an extensible strategy registry keyed on `OppKind`. The p
 | P06 | Long-Tail Liquidity Arbitrage | In progress — new-pool monitor + token-risk layer |
 | P07 | Concentrated-Liquidity / Fee-Tier Optimization | Partial (in-range V3 math; tick-walk pending) |
 | P08 | Protocol Liquidation Arbitrage | In progress — Aave V3 liquidation adapter |
-| P09 | Short-Horizon Divergence Prediction | Not started |
+| P09 | Short-Horizon Divergence Prediction | **Live** (v1 — stale-quote strike loop: gap-based fair-value scan on every CexTick, direction-validated vs CEX mid; whack-a-mole pattern) |
 | P10 | Statistical Convergence | Not started |
 | P11 | Liquidity-Imbalance / Flow Prediction | Not started |
 | P12 | Adaptive Strategy Portfolio Allocation | Not started — blocked on P01–P04 outcome data |

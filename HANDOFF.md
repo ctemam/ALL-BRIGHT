@@ -70,7 +70,7 @@ Changed `crates/allbright-rpc-scout`, `crates/allbright-core`, `crates/allbright
 
 | U# | Layer | Gap | Before | After — import / fix | GAP |
 |---|---|---|---|---|---|
-| U1 | Detect | No pending-tx trigger | Settled-state polling; post-settlement residue only | Base Flashblocks `newFlashblockTransactions`/`pendingLogs` (free, public RPC); bloXroute `arbOnlyMEV`/`pendingTxs` (BSC/Base/Poly); Puissant (48Club, gated) | GAP-33 |
+| U1 | Detect | ~~No pending-tx trigger~~ **Implemented v1** | `pending_watch_loop` (ingest): `eth_subscribe` full pendingTxs per chain → `PendingSwap` → solver pre-inclusion rescan. Honest limit: chains without a public mempool (Arb/Base/OP sequenced) expose nothing — watcher fails closed there; value lands on ETH/BSC/Poly when keyed WSS is provisioned | Base Flashblocks `newFlashblockTransactions`/`pendingLogs` (free, public RPC); bloXroute `arbOnlyMEV`/`pendingTxs` (BSC/Base/Poly); Puissant (48Club, gated) | GAP-33 |
 | U2 | Detect | Shallow pool universe | 1,145 curated pools / 10 chains | Tycho Indexer stream — full-protocol reorg-aware state, auto-discovery | GAP-38 |
 | U3 | Detect | WSS endpoint derivation | Blind `https→wss` broke AVAX (`/rpc` vs `/ws`) | Registry OVS + explicit `*_WSS_URL` overrides | — |
 | U4 | Detect | Single ordering model | "submit tx" for all chains | Per-chain matrix: FCFS / PGA / Timeboost / bundle-builders | new |
