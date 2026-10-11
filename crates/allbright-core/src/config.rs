@@ -247,6 +247,103 @@ pub const PASTE_IN_PROVIDERS: &[(&str, &str, &str)] = &[
     ("1RPC", "1rpc.io", "keyless"),
 ];
 
+/// Keyless-premium endpoints — no signup, no API key — every URL
+/// live-verified by `eth_chainId` probe (2026-10-11). Baked into the
+/// pool BELOW `<CHAIN>_RPC_URLS` and keyed `*_API_KEY` expansions:
+/// per-IP shared quota is the floor tier, never outranking configured
+/// capacity. Each URL still passes the scout qualification ladder
+/// before production admission — a dead endpoint fails honestly to
+/// Quarantined, it is never trusted by presence alone.
+/// (chain_name, &[endpoint])
+pub const KEYLESS_PREMIUM_ENDPOINTS: &[(&str, &[&str])] = &[
+    ("eth", &[
+        "https://eth.drpc.org",
+        "https://ethereum-rpc.blockreq.com/v1/rpc/public",
+        "https://eth-mainnet.public.blastapi.io",
+        "https://ethereum-rpc.publicnode.com",
+        "https://eth-pokt.nodies.app",
+        "https://uk.rpc.blxrbdn.com",
+        "https://virginia.rpc.blxrbdn.com",
+        "https://mainnet.gateway.tenderly.co",
+    ]),
+    ("bsc", &[
+        "https://bsc-rpc.publicnode.com",
+        "https://bsc-rpc.blockreq.com/v1/rpc/public",
+        "https://bsc-mainnet.public.blastapi.io",
+        "https://bsc-dataseed.bnbchain.org",
+        "https://bsc-dataseed3.bnbchain.org",
+    ]),
+    ("arb", &[
+        "https://arb1.arbitrum.io/rpc",
+        "https://arbitrum-one.public.blastapi.io",
+        "https://arbitrum-one-rpc.publicnode.com",
+        "https://arb.drpc.org",
+        "https://arbitrum.api.onfinality.io/public",
+    ]),
+    ("op", &[
+        "https://optimism.drpc.org",
+        "https://optimism-rpc.publicnode.com",
+        "https://optimism-rpc.blockreq.com/v1/rpc/public",
+        "https://optimism.gateway.tenderly.co",
+        "https://optimism.api.onfinality.io/public",
+    ]),
+    ("poly", &[
+        "https://polygon.drpc.org",
+        "https://polygon-bor-rpc.publicnode.com",
+        "https://polygon-bor-rpc.blockreq.com/v1/rpc/public",
+        "https://polygon.gateway.tenderly.co",
+    ]),
+    ("avax", &[
+        "https://avalanche.drpc.org",
+        "https://api.avax.network/ext/bc/C/rpc",
+        "https://avalanche-c-chain-rpc.publicnode.com",
+        "https://avalanche-rpc.blockreq.com/v1/rpc/public",
+        "https://avalanche.api.onfinality.io/public/ext/bc/C/rpc",
+    ]),
+    ("base", &[
+        "https://base.drpc.org",
+        "https://mainnet.base.org",
+        "https://base-rpc.publicnode.com",
+        "https://base-mainnet.public.blastapi.io",
+        "https://base-rpc.blockreq.com/v1/rpc/public",
+        "https://base.gateway.tenderly.co",
+    ]),
+    ("linea", &[
+        "https://linea.drpc.org",
+        "https://rpc.linea.build",
+        "https://linea-rpc.publicnode.com",
+        "https://linea-rpc.blockreq.com/v1/rpc/public",
+        "https://linea.gateway.tenderly.co",
+    ]),
+    ("scroll", &[
+        "https://scroll.drpc.org",
+        "https://scroll-rpc.publicnode.com",
+        "https://scroll-rpc.blockreq.com/v1/rpc/public",
+        "https://rpc.scroll.io",
+    ]),
+    ("blast", &[
+        "https://blast.drpc.org",
+        "https://blast-rpc.publicnode.com",
+        "https://rpc.blast.io",
+    ]),
+];
+
+/// Keyless WSS defaults — used ONLY when `<CHAIN>_WSS_URL` is unset.
+/// Base seeds Flashblocks: the free ~200ms pre-confirmation feed (U1).
+/// (chain_name, wss_url)
+pub const KEYLESS_PREMIUM_WSS: &[(&str, &str)] = &[
+    ("eth", "wss://ethereum-rpc.publicnode.com"),
+    ("bsc", "wss://bsc-rpc.publicnode.com"),
+    ("arb", "wss://arbitrum-one-rpc.publicnode.com"),
+    ("op", "wss://optimism-rpc.publicnode.com"),
+    ("poly", "wss://polygon-bor-rpc.publicnode.com"),
+    ("avax", "wss://avalanche-c-chain-rpc.publicnode.com"),
+    ("base", "wss://mainnet.flashblocks.base.org/ws"),
+    ("linea", "wss://linea-rpc.publicnode.com"),
+    ("scroll", "wss://scroll-rpc.publicnode.com"),
+    ("blast", "wss://blast-rpc.publicnode.com"),
+];
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub rpc_urls: HashMap<Chain, String>,
@@ -588,6 +685,24 @@ impl Config {
         // Unknown names are dropped (logged downstream via the absence of
         // a collector, never silently widening scope).
         // Hoisted before any `spec` field moves — `get` borrows spec.
+        // Keyless-premium floor tier: appended below env/keyed capacity;
+        // WSS seeded only where the operator set no `<CHAIN>_WSS_URL`.
+        for (cname, eps) in KEYLESS_PREMIUM_ENDPOINTS {
+            if let Some(chain) = Chain::ALL.iter().find(|c| c.name() == *cname) {
+                let pool = rpc_pools.entry(*chain).or_default();
+                for u in *eps {
+                    if !pool.iter().any(|e| e == u) {
+                        pool.push((*u).to_string());
+                    }
+                }
+            }
+        }
+        for (cname, w) in KEYLESS_PREMIUM_WSS {
+            if let Some(chain) = Chain::ALL.iter().find(|c| c.name() == *cname) {
+                wss_urls.entry(*chain).or_insert_with(|| (*w).to_string());
+            }
+        }
+
         let ev_chains_raw = get("EV_CHAINS");
         let ev_floor_raw = get("EV_FLOOR_USD");
         let ev_emit_raw = get("EV_EMIT_SECS");
@@ -815,6 +930,24 @@ mod tests {
                         pool.insert(0, url);
                     }
                 }
+            }
+        }
+
+        // Keyless-premium floor tier: appended below env/keyed capacity;
+        // WSS seeded only where the operator set no `<CHAIN>_WSS_URL`.
+        for (cname, eps) in KEYLESS_PREMIUM_ENDPOINTS {
+            if let Some(chain) = Chain::ALL.iter().find(|c| c.name() == *cname) {
+                let pool = rpc_pools.entry(*chain).or_default();
+                for u in *eps {
+                    if !pool.iter().any(|e| e == u) {
+                        pool.push((*u).to_string());
+                    }
+                }
+            }
+        }
+        for (cname, w) in KEYLESS_PREMIUM_WSS {
+            if let Some(chain) = Chain::ALL.iter().find(|c| c.name() == *cname) {
+                wss_urls.entry(*chain).or_insert_with(|| (*w).to_string());
             }
         }
 
@@ -1062,7 +1195,7 @@ mod tests {
         // Comma-separated pool, trimmed, empty entries dropped.
         assert_eq!(
             cfg.rpc_pools.get(&Chain::Eth).map(|v| v.len()),
-            Some(4) // 3 listed + alchemy-expanded prepend
+            Some(12) // 3 listed + alchemy prepend + 8 keyless floor
         );
         // Alchemy key expands a private endpoint and PREPENDS it (§36.9).
         assert!(
@@ -1070,9 +1203,20 @@ mod tests {
                 .starts_with("https://eth-mainnet.g.alchemy.com/v2/"),
             "private keyed endpoint must outrank public pool entries"
         );
+        // Keyless-premium URLs fill the floor tier BELOW env/keyed capacity.
+        assert!(
+            cfg.rpc_pools[&Chain::Eth]
+                .last()
+                .unwrap()
+                .contains("gateway.tenderly.co")
+                || cfg.rpc_pools[&Chain::Eth]
+                    .iter()
+                    .any(|u| u.contains("blockreq.com")),
+            "keyless-premium floor must be present and last"
+        );
         // Arb had no <CHAIN>_RPC_URLS → pool falls back to <CHAIN>_RPC_URL,
-        // then alchemy prepends.
-        assert_eq!(cfg.rpc_pools[&Chain::Arb].len(), 2);
+        // then alchemy prepends, then the keyless floor appends.
+        assert_eq!(cfg.rpc_pools[&Chain::Arb].len(), 2 + 5);
         // Providers without keys surface as pending.
         assert!(cfg.pending_providers.contains(&"INFURA".to_string()));
         assert!(cfg.pending_providers.contains(&"DRPC".to_string()));
