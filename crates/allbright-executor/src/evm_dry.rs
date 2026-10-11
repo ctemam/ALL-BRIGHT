@@ -202,7 +202,7 @@ pub async fn dry_run(
     data: Bytes,
 ) -> DryVerdict {
     let out = tokio::task::spawn_blocking(move || {
-        let mut db = LazyRpcDb::new(rpc_url);
+        let db = LazyRpcDb::new(rpc_url);
 
         // Latest block context — timestamp/number/basefee matter to
         // any code path that reads them.

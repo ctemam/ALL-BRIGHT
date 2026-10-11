@@ -30,14 +30,38 @@ pub async fn run(tx: mpsc::Sender<Event>) {
         .map(|s| format!("{s}@bookTicker"))
         .collect::<Vec<_>>()
         .join("/");
-    let url = format!("wss://stream.binance.com:9443/stream?streams={streams}");
-
+    // Primary: the global book. Fallback: binance.us — same stream
+    // schema, smaller book — for regions where stream.binance.com is
+    // geo-blocked (HTTP 451, seen live). Venue tag follows the source
+    // so downstream attribution stays honest.
+    let urls = [
+        (
+            format!("wss://stream.binance.com:9443/stream?streams={streams}"),
+            "binance",
+        ),
+        (
+            format!("wss://stream.binance.us:9443/stream?streams={streams}"),
+            "binance.us",
+        ),
+    ];
+    let mut idx = 0usize;
+    let mut fails = 0u32;
     loop {
-        let (detail, res) = match run_once(&url, &tx).await {
+        let (ref url, venue) = urls[idx];
+        let (detail, res) = match run_once(url, venue, &tx).await {
             Ok(_) => ("stream closed".to_string(), Ok(())),
             Err(e) => (e.to_string(), Err(())),
         };
-        tracing::warn!("binance stream ended: {detail}; reconnecting");
+        tracing::warn!(source = venue, "binance stream ended: {detail}; reconnecting");
+        // Geo-block is permanent for this process lifetime — switch
+        // source immediately; generic drops retry the same source twice
+        // before rotating (a flaky regional endpoint shouldn't win).
+        fails += 1;
+        if detail.contains("451") || fails >= 3 {
+            idx = (idx + 1) % urls.len();
+            fails = 0;
+            tracing::warn!(source = urls[idx].1, "cex stream rotating source");
+        }
         let _ = res;
         let _ = tx
             .send(Event::Failure(
@@ -48,9 +72,13 @@ pub async fn run(tx: mpsc::Sender<Event>) {
     }
 }
 
-async fn run_once(url: &str, tx: &mpsc::Sender<Event>) -> anyhow::Result<()> {
+async fn run_once(
+    url: &str,
+    venue: &'static str,
+    tx: &mpsc::Sender<Event>,
+) -> anyhow::Result<()> {
     let (ws, _) = tokio_tungstenite::connect_async(url).await?;
-    tracing::info!("binance bookTicker connected");
+    tracing::info!(source = venue, "bookTicker connected");
     let (_, mut stream) = ws.split();
 
     // A half-dead TCP socket can sit connected-but-silent forever —
@@ -76,7 +104,7 @@ async fn run_once(url: &str, tx: &mpsc::Sender<Event>) -> anyhow::Result<()> {
                     {
                         let _ = tx
                             .send(Event::CexTick(CexTick {
-                                venue: "binance".into(),
+                                venue: venue.into(),
                                 symbol: c.data.s,
                                 bid,
                                 ask,

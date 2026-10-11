@@ -329,7 +329,9 @@ pub const KEYLESS_PREMIUM_ENDPOINTS: &[(&str, &[&str])] = &[
 ];
 
 /// Keyless WSS defaults — used ONLY when `<CHAIN>_WSS_URL` is unset.
-/// Base seeds Flashblocks: the free ~200ms pre-confirmation feed (U1).
+/// Standard `eth_subscribe` endpoints only: Flashblocks on Base is NOT
+/// one (custom preconfirmation schema) — it needs a dedicated consumer,
+/// not the generic newHeads watcher.
 /// (chain_name, wss_url)
 pub const KEYLESS_PREMIUM_WSS: &[(&str, &str)] = &[
     ("eth", "wss://ethereum-rpc.publicnode.com"),
@@ -338,7 +340,7 @@ pub const KEYLESS_PREMIUM_WSS: &[(&str, &str)] = &[
     ("op", "wss://optimism-rpc.publicnode.com"),
     ("poly", "wss://polygon-bor-rpc.publicnode.com"),
     ("avax", "wss://avalanche-c-chain-rpc.publicnode.com"),
-    ("base", "wss://mainnet.flashblocks.base.org/ws"),
+    ("base", "wss://base-rpc.publicnode.com"),
     ("linea", "wss://linea-rpc.publicnode.com"),
     ("scroll", "wss://scroll-rpc.publicnode.com"),
     ("blast", "wss://blast-rpc.publicnode.com"),

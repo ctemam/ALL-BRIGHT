@@ -1279,8 +1279,10 @@ fn decode_v2(
             address: p.token1.address.clone(),
             decimals: p.token1.decimals,
         },
-        reserve0: res.reserve0.to::<u128>() as f64 / dec0,
-        reserve1: res.reserve1.to::<u128>() as f64 / dec1,
+        // Reserves beyond u128 can't be priced in f64 honestly — skip
+        // the pool rather than clamp into a wrong reserve.
+        reserve0: u128::try_from(res.reserve0).ok()? as f64 / dec0,
+        reserve1: u128::try_from(res.reserve1).ok()? as f64 / dec1,
         sqrt_price_x96: None,
         liquidity: None,
         fee_bps: p.fee_bps,
@@ -1301,6 +1303,10 @@ fn decode_v3(
     }
     let slot0 = IV3PoolCalls::slot0Call::abi_decode_returns(&s.returnData).ok()?;
     let liq = IV3PoolCalls::liquidityCall::abi_decode_returns(&l.returnData).ok()?;
+    // sqrtPriceX96 is Uint<160> — extreme-ratio pools exceed u128 and
+    // panicked the decode task (live: 3.3e38 overflow). Skip the pool
+    // honestly; never clamp it into a wrong price.
+    let sqrt_p: u128 = slot0.sqrtPriceX96.try_into().ok()?;
     Some(PoolState {
         chain,
         dex: p.dex,
@@ -1318,7 +1324,7 @@ fn decode_v3(
         },
         reserve0: 0.0,
         reserve1: 0.0,
-        sqrt_price_x96: Some(slot0.sqrtPriceX96.to::<u128>() as f64),
+        sqrt_price_x96: Some(sqrt_p as f64),
         liquidity: Some(liq as f64),
         fee_bps: p.fee_bps,
         block,
