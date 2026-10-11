@@ -79,7 +79,7 @@ Changed `crates/allbright-rpc-scout`, `crates/allbright-core`, `crates/allbright
 | U7 | Filter | No bytecode-hash denylist | Address-level conviction only | Hash-level denylist catches CREATE2 re-deploys (Gemba) | new |
 | U8 | Filter | Event-derived state trust | Salmonella surface — logs lie | revm/tycho-simulation on real state, real sender | new |
 | U9 | Filter | Conviction-only defense | Reactive quarantine only | Layered: Tycho blocklist → probe → hash denylist → conviction → simgate | new |
-| U10 | Compute | Route search ≤3-hop | Brute-force enumeration | Bellman-Ford-Moore negative cycles (DeFiPoser, MMBF, RICH; tycho-searcher `bellman_ford.rs`) | GAP-25 |
+| U10 | Compute | ~~Route search ≤3-hop~~ **Implemented v1** | Bellman-Ford-Moore negative cycles live in solver (`negative_cycles`): `-ln(rate×(1-fee))` edges, ≤4 legs, ≤8 cycles/scan, deduped vs brute force; catches 4-hop paths enumeration missed | Bellman-Ford-Moore negative cycles (DeFiPoser, MMBF, RICH; tycho-searcher `bellman_ford.rs`) | GAP-25 |
 | U11 | Compute | Pool-math-only sim | Tier-1 math, blind to token behavior | revm replay on indexed state, zero network | new |
 | U12 | Compute | Ternary sizing only | Iterative; dies on state drift | Closed-form `x*` (Quarry); on-chain `amountOut` recompute | new |
 | U13 | Compute | State+sim ~15–30ms | Multicall RPC round-trips | In-process state via Tycho stream; bounded by public-RPC constraint | new |
