@@ -107,7 +107,8 @@ pub fn stable_addr_str(chain: Chain, token: &str) -> bool {
         ],
         Chain::Avax => &[
             "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // USDC
-            "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", // USDT
+            "0xa7d7079b0fead91f3e65f86e8915cb59c1a4c664", // USDC.e (verified dec=6)
+            "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", // USDT.e
             "0xd586e7f844cea2f87f50152665bcbc2c279d8d70", // DAI.e
         ],
         Chain::Base => &[
@@ -130,6 +131,27 @@ pub fn stable_addr_str(chain: Chain, token: &str) -> bool {
         ],
     };
     list.iter().any(|a| *a == t)
+}
+
+/// Canonical wrapped-native address per chain (lowercase, on-chain
+/// verified canonical contracts). Used for two-hop USD quotes:
+/// token→native→stable when no token↔stable pool exists.
+pub fn wnative_addr(chain: Chain) -> &'static str {
+    match chain {
+        Chain::Eth => "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+        Chain::Arb | Chain::Op | Chain::Base => {
+            match chain {
+                Chain::Arb => "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+                _ => "0x4200000000000000000000000000000000000006",
+            }
+        }
+        Chain::Poly => "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+        Chain::Bsc => "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        Chain::Avax => "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+        Chain::Linea => "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f",
+        Chain::Scroll => "0x5300000000000000000000000000000000000004",
+        Chain::Blast => "0x4300000000000000000000000000000000000004",
+    }
 }
 
 const DEFAULT_POOLS_JSON: &str = include_str!("../../../pools.json");

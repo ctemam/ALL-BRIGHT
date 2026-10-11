@@ -488,7 +488,133 @@ async fn quote_token_usd(
             best = Some(best.map_or(price, |b: f64| b.min(price)));
         }
     }
-    best
+    if best.is_some() {
+        return best;
+    }
+
+    // Phase D — two-hop quote: no token↔stable pool exists anywhere.
+    // Price token→wrapped-native in one registry pool against a
+    // wrapped-native→stable price in another. Both legs live-read;
+    // min() over candidates keeps the conservative direction and the
+    // same $100 stable-side floor filters bait quotes. A corrupt or
+    // thin token/native pool can't inflate the result because a wrong
+    // quote only makes the candidate LESS likely to be the minimum.
+    let wn = allbright_core::chain::wnative_addr(chain);
+    if wn.is_empty() || wn == t.as_str() {
+        return None;
+    }
+    let Ok(wn_addr) = wn.parse::<Address>() else {
+        return None;
+    };
+    let mut tn_cands: Vec<Cand> = Vec::new(); // token↔wnative
+    let mut ns_cands: Vec<Cand> = Vec::new(); // wnative↔stable
+    for p in allbright_core::chain::load_pools() {
+        if p.chain != chain {
+            continue;
+        }
+        let (t0, t1) = (p.token0.address.to_lowercase(), p.token1.address.to_lowercase());
+        let (Ok(pool), Ok(a0), Ok(a1)) = (
+            p.address.parse::<Address>(),
+            t0.parse::<Address>(),
+            t1.parse::<Address>(),
+        ) else {
+            continue;
+        };
+        if tn_cands.len() < 12 {
+            if t0 == t && t1 == wn {
+                tn_cands.push(Cand { pool, stable: wn_addr, is0: true, dex: p.dex });
+            } else if t1 == t && t0 == wn {
+                tn_cands.push(Cand { pool, stable: wn_addr, is0: false, dex: p.dex });
+            }
+        }
+        if ns_cands.len() < 6 {
+            if t0 == wn && stable_addr(chain, a1) {
+                ns_cands.push(Cand { pool, stable: a1, is0: true, dex: p.dex });
+            } else if t1 == wn && stable_addr(chain, a0) {
+                ns_cands.push(Cand { pool, stable: a0, is0: false, dex: p.dex });
+            }
+        }
+    }
+    if tn_cands.is_empty() || ns_cands.is_empty() {
+        return None;
+    }
+    let mut calls_d: Vec<(Address, Bytes)> = Vec::new();
+    calls_d.push((token, sel_dec.clone()));
+    calls_d.push((wn_addr, sel_dec.clone()));
+    for c in tn_cands.iter().chain(ns_cands.iter()) {
+        calls_d.push((c.stable, sel_dec.clone()));
+        calls_d.push((
+            c.pool,
+            if c.dex == DexKind::V3 { sel_slot0.clone() } else { sel_res.clone() },
+        ));
+    }
+    let res_d = batch_calls(rpcs, &calls_d).await;
+    let read_dec = |i: usize| {
+        res_d
+            .get(i)
+            .and_then(|r| r.as_ref())
+            .and_then(|b| b.last().copied())
+            .filter(|d| *d > 0 && *d <= 36)
+    };
+    let (Some(d_tok), Some(d_wn)) = (read_dec(0), read_dec(1)) else {
+        return None;
+    };
+    // shared price reader: returns (token-in-terms-of-quote-asset,
+    // quote-asset liquidity) for candidate k at result offset base
+    let px = |base: usize, d_base: u8, d_q: u8, is0: bool, dex: DexKind| -> Option<(f64, f64)> {
+        let data = res_d.get(base + 1).and_then(|r| r.as_ref())?;
+        match dex {
+            DexKind::V3 => {
+                let sqrt = u256_from_ret(data)?;
+                let s: f64 = sqrt.to_string().parse().ok()?;
+                let p_raw = (s / 18446744073709551616.0).powi(2);
+                let (d0, d1) = if is0 { (d_base, d_q) } else { (d_q, d_base) };
+                let p01 = p_raw * 10f64.powi(d0 as i32 - d1 as i32);
+                let p = if is0 { p01 } else { 1.0 / p01 };
+                if p.is_finite() && p > 0.0 { Some((p, f64::INFINITY)) } else { None }
+            }
+            _ => {
+                if data.len() < 64 {
+                    return None;
+                }
+                let r0 = U256::from_be_slice(&data[0..32]);
+                let r1 = U256::from_be_slice(&data[32..64]);
+                let (r_t, r_q) = if is0 { (r0, r1) } else { (r1, r0) };
+                let rt: f64 = r_t.to_string().parse().ok()?;
+                let rq: f64 = r_q.to_string().parse().ok()?;
+                if rt <= 0.0 {
+                    return None;
+                }
+                let q_liq = rq / 10f64.powi(d_q as i32);
+                Some(((q_liq) / (rt / 10f64.powi(d_base as i32)), q_liq))
+            }
+        }
+    };
+    // native→USD: max quote-asset liquidity is honest (deep pool = best
+    // price discovery); stable-side floor applies here too.
+    let mut wn_usd: Option<f64> = None;
+    for (k, c) in ns_cands.iter().enumerate() {
+        let base = 2 + 2 * (tn_cands.len() + k);
+        let Some(d_st) = read_dec(base) else { continue };
+        if let Some((p, liq)) = px(base, d_wn, d_st, c.is0, c.dex) {
+            if p > 0.0 && liq >= 100.0 {
+                wn_usd = Some(wn_usd.map_or(p, |b: f64| b.min(p)));
+            }
+        }
+    }
+    let wn_usd = wn_usd?;
+    let mut best2: Option<f64> = None;
+    for (k, c) in tn_cands.iter().enumerate() {
+        let base = 2 + 2 * k;
+        let Some(d_q) = read_dec(base) else { continue };
+        if let Some((p, _)) = px(base, d_tok, d_q, c.is0, c.dex) {
+            let usd = p * wn_usd;
+            if usd.is_finite() && usd > 0.0 {
+                best2 = Some(best2.map_or(usd, |b: f64| b.min(usd)));
+            }
+        }
+    }
+    best2
 }
 
 async fn max_flash_loan(rpcs: &[String], lender: Address, token: Address) -> Option<U256> {
