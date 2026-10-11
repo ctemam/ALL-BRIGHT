@@ -207,6 +207,7 @@ body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
         <label>Chain</label><select id="st-chain"></select>
         <label>Variant</label><select id="st-variant"></select></div>
       <div class="panel"><h3>Strategy Variant Comparison</h3><div id="st-table"></div></div>
+      <div class="panel"><h3>Fleet Capacity <span class="muted">— live expansion headroom (RPC fleet, not strategy profitability) · green=safe to expand · yellow=caution · red=do not expand</span></h3><div id="st-cap"></div></div>
     </section>
     <!-- ============ DEPLOYMENT ============ -->
     <section class="page" id="pg-deploy">
@@ -239,6 +240,7 @@ body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
       <div class="ctl"><label>Time</label><select id="if-time"></select></div>
       <div class="cards" id="if-cards"></div>
       <div class="panel"><h3>RPC per Chain — visibility &amp; capacity</h3><div id="if-rpc"></div></div>
+      <div class="panel"><h3>Private RPC Providers — key slots &amp; advertised free-tier quota <span class="muted">(provider-published, not measured — measured capacity is the registry's verified rps)</span></h3><div id="if-prov"></div></div>
       <div class="panel"><h3>Self-Diagnosis — recent failures</h3><div id="if-diag"></div></div>
       <div class="panel"><h3>Self-Healing — remediation records</h3><div id="if-heal"></div></div>
     </section>
@@ -668,6 +670,19 @@ async function loadStrategy(){
     {key:'realized_usd',label:'Net $',num:true,group:'Economic',render:r=>fmt$(r.realized_usd)},
     {key:'health',label:'Health',group:'Adaptation',render:()=>badge('UNVERIFIED','b-na')},
   ], rows);
+  // Fleet capacity — same /api/capacity feed as the header light, rendered
+  // here so expansion decisions live beside the strategy table.
+  try{
+    const c=await (await fetch('/api/capacity')).json();
+    const esc=s=>String(s??'').replace(/</g,'&lt;');
+    const lb=l=>`<span class="badge b-${l==='green'?'ok':l==='yellow'?'warn':'bad'}">${String(l).toUpperCase()}</span>`;
+    const dims=(c.dims||[]).map(d=>`<tr><td>${esc(d.dim)}</td><td>${lb(d.level)}</td><td class="muted">${esc(d.detail)}</td></tr>`).join('')||'<tr><td colspan="3" class="na">NO DIMENSIONS REPORTED</td></tr>';
+    const chains=(c.chains||[]).map(ch=>`<tr><td>${esc(ch.chain).toUpperCase()}</td><td>${ch.qualified??'—'}</td><td>${lb((ch.qualified??0)>=3?'green':(ch.qualified??0)>=1?'yellow':'red')}</td></tr>`).join('')||'<tr><td colspan="3" class="na">NO CHAIN FLEET DATA</td></tr>';
+    $('#st-cap').innerHTML=
+      `<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">${lb(c.level)}<b>${c.pct??'—'}%</b><span class="muted">${esc(c.verdict||'')}</span><span style="flex:1"></span><span class="muted" style="font-size:10.5px">asof ${c.asof?new Date(c.asof).toLocaleTimeString():'—'} · ${c.pools??'—'} pools</span></div>`
+      +`<div style="display:grid;grid-template-columns:1.6fr 1fr;gap:14px"><div><div class="muted" style="margin-bottom:4px">Capacity dimensions</div><table><thead><tr><th>Dimension</th><th>State</th><th>Measured detail</th></tr></thead><tbody>${dims}</tbody></table></div>`
+      +`<div><div class="muted" style="margin-bottom:4px">Qualified RPC endpoints per chain</div><table><thead><tr><th>Chain</th><th>Qualified</th><th>Fleet state</th></tr></thead><tbody>${chains}</tbody></table></div></div>`;
+  }catch(e){$('#st-cap').innerHTML='<span class="na">DATA UNAVAILABLE</span>';}
 }
 
 async function loadDeploy(){
@@ -702,6 +717,11 @@ async function loadInfra(){
     {key:'qualified',label:'Qualified',num:true},
     {key:'healthy',label:'Healthy',num:true},
     {key:'providers',label:'Providers',num:true},
+    {key:'private',label:'Private',num:true,render:r=>`<span title="${r.private_qualified||0} qualified">${r.private||0}/${r.endpoints||0}</span>`},
+    {key:'pool_size',label:'Pool',num:true},
+    {key:'capacity_rps',label:'Cap rps',num:true,render:r=>r.capacity_rps==null?'<span class="na">—</span>':r.capacity_rps.toFixed(1)},
+    {key:'budget_rps',label:'Budget rps',num:true,render:r=>r.budget_rps==null?'<span class="na">—</span>':r.budget_rps.toFixed(1)},
+    {key:'budget_day',label:'Budget/day',num:true,render:r=>r.budget_day==null?'<span class="na">—</span>':fmtN(Math.round(r.budget_day))},
     {key:'p50_ms',label:'p50 ms',num:true,render:r=>r.p50_ms==null?'<span class="na">—</span>':r.p50_ms},
     {key:'p95_ms',label:'p95 ms',num:true,render:r=>r.p95_ms==null?'<span class="na">—</span>':r.p95_ms},
     {key:'p99_ms',label:'p99 ms',num:true,render:r=>r.p99_ms==null?'<span class="na">—</span>':r.p99_ms},
@@ -710,6 +730,14 @@ async function loadInfra(){
       const m={'V4+resilient':'b-ok','V4':'b-ok','V2-single-homed':'b-warn','V0-blind':'b-bad'};
       return badge(r.visibility,m[r.visibility]||'b-na');}},
   ], d.chains);
+  tableEngine($('#if-prov'),[
+    {key:'provider',label:'Provider'},
+    {key:'configured',label:'Key',render:r=>r.configured?badge('SET','b-ok'):badge('missing','b-warn')},
+    {key:'key_env',label:'ENV key',render:r=>r.key_env?`<span class="muted">${r.key_env}</span>`:'<span class="na">—</span>'},
+    {key:'chains',label:'Chains',num:true,render:r=>r.chains==null?'<span class="na">—</span>':r.chains},
+    {key:'quota_advertised',label:'Advertised free tier'},
+    {key:'mode',label:'Source',render:r=>`<span class="muted">${r.mode}</span>`},
+  ], d.providers||[]);
   const rp=rangeParams('#if-time');
   const dg=await (await fetch('/api/diagnoses?size=100&'+rp)).json();
   tableEngine($('#if-diag'),[

@@ -68,11 +68,41 @@ fn native_cex_symbol(chain: Chain) -> &'static str {
     }
 }
 
-/// Live `eth_gasPrice` on the chain's free public RPC, cached 60 s.
+/// Live gas estimate in wei, cached 60 s (GAP-24): on fee-market chains
+/// the honest estimate is `baseFee + maxPriorityFee` — legacy
+/// `eth_gasPrice` systematically overestimates there (and is retained
+/// only as the fallback for chains without EIP-1559, e.g. BSC).
 async fn gas_price_wei(client: &reqwest::Client, rpc: &str) -> Option<u128> {
-    let body = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"eth_gasPrice","params":[]});
+    let prio = rpc_result(client, rpc, "eth_maxPriorityFeePerGas", serde_json::json!([]))
+        .await
+        .and_then(|v| hex_u128(&v));
+    let base = rpc_result(client, rpc, "eth_getBlockByNumber", serde_json::json!(["latest", false]))
+        .await
+        .and_then(|v| hex_u128(&v["baseFeePerGas"]));
+    match (base, prio) {
+        (Some(b), Some(p)) => Some(b + p),
+        _ => rpc_result(client, rpc, "eth_gasPrice", serde_json::json!([]))
+            .await
+            .and_then(|v| hex_u128(&v)),
+    }
+}
+
+async fn rpc_result(
+    client: &reqwest::Client,
+    rpc: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Option<serde_json::Value> {
+    let body = serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params});
     let v: serde_json::Value = client.post(rpc).json(&body).send().await.ok()?.json().await.ok()?;
-    u128::from_str_radix(v["result"].as_str()?.trim_start_matches("0x"), 16).ok()
+    if v.get("error").is_some() {
+        return None;
+    }
+    Some(v["result"].clone())
+}
+
+fn hex_u128(v: &serde_json::Value) -> Option<u128> {
+    u128::from_str_radix(v.as_str()?.trim_start_matches("0x"), 16).ok()
 }
 
 #[tokio::main]

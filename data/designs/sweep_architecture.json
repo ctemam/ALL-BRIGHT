@@ -1,0 +1,80 @@
+{
+  "gap": "GAP-20",
+  "title": "Per-chain multi-token sweep → Safe multisig + Zodiac Roles Modifier v2",
+  "status": "design-ready",
+  "current_defects": {
+    "native_only": "aa.rs:519 encodes sweepNativeCall only; contract also has sweep(token,to) (AllbrightExecutor.sol:342)",
+    "first_chain_only": "aa.rs:504-508 Chain::ALL.find(executor).next() — other chains' profit stranded",
+    "raw_eoa_destination": "config.rs:239 PROFIT_WALLET / data/profit_wallets.json registry — hot destinations",
+    "no_ledger_writer": "GAP-21 dependency: data/transfers.jsonl has no writer; last_swept advances on submission, not receipt"
+  },
+  "profit_token_derivation": "relay.rs:379-381 refuses token_in outside stable_addr(chain) → routes only settle in the per-chain stable set; native dust also accrues. Sweep set = stable_addr(chain) ∪ native. Blast caveat: USDB is a rebasing token — sweep it, but consolidate promptly.",
+  "sweep_set_per_chain": {
+    "eth":  {"native": "ETH",  "tokens": {"USDC": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "USDT": "0xdac17f958d2ee523a2206206994597c13d831ec7", "DAI": "0x6b175474e89094c44da98b954eedeac495271d0f"}},
+    "arb":  {"native": "ETH",  "tokens": {"USDC": "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "USDC.e": "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8", "USDt0": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", "DAI": "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1"}},
+    "op":   {"native": "ETH",  "tokens": {"USDC": "0x0b2c639c533813f4aa9d7837caf62653d097ff85", "USDT": "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", "DAI": "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1"}},
+    "poly": {"native": "POL",  "tokens": {"USDC": "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", "USDC.e": "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", "USDT": "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", "DAI": "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063"}},
+    "bsc":  {"native": "BNB",  "tokens": {"USDT": "0x55d398326f99059ff775485246999027b3197955", "USDC": "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", "FDUSD": "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409", "DAI": "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3", "USD1": "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d"}},
+    "avax": {"native": "AVAX", "tokens": {"USDC": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", "USDT": "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", "DAI.e": "0xd586e7f844cea2f87f50152665bcbc2c279d8d70"}},
+    "base": {"native": "ETH",  "tokens": {"USDC": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "USDT": "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", "DAI": "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"}},
+    "linea":{"native": "ETH",  "tokens": {"USDC": "0x176211869ca2b568f2a7d4ee941e073a821ee1ff", "USDT": "0xa219439258ca9da29e9cc4ce5596924745e12b93", "DAI": "0x4af15ec2a0bd43db75dd04e62faa3b8ef36b00d5"}},
+    "scroll":{"native": "ETH", "tokens": {"USDC": "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4", "USDT": "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", "DAI": "0xca77eb3fefe3725dc33bccb54edefc3d9f764f97"}},
+    "blast":{"native": "ETH",  "tokens": {"USDB": "0x4300000000000000000000000000000000000003"}}
+  },
+  "sweep_loop_spec": {
+    "replace": "aa.rs send_gasless_sweep first-chain logic",
+    "new_behavior": "for each chain in cfg.active_chains where executor_address(c).is_some() && rpc present: (1) eth_call balanceOf per listed token + executor eth balance; (2) for each nonzero token → UserOp execute → sweep(token, CHAIN_SAFE); (3) nonzero native → sweepNative(CHAIN_SAFE); (4) batch as one Kernel op per chain if CALLTYPE_BATCH is permitted, else sequential ops (note GAP-31 nonce allocator); (5) poll user_op_outcome → on 'included' decode Swept(token,to,amount) logs from receipt → append data/transfers.jsonl {ts,chain,token,amount,to,tx,userop_hash,status} (GAP-21); advance last_swept only on confirmed receipt",
+    "dust_gate": "skip tokens whose USD value < SWEEP_DUST_USD (~$1) to avoid sponsored-op spam",
+    "cadence": "keep existing jitter model; evaluate each chain independently"
+  },
+  "destination_safe": {
+    "design": "ONE Safe address on every chain — SafeProxyFactory.createProxyWithNonce(singleton, initializer, saltNonce) is cross-chain deterministic (NOT createChainSpecificProxyWithNonce)",
+    "verified_addresses": {
+      "safe_singleton_factory": "0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7",
+      "safe_proxy_factory_v141": "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67",
+      "safe_v141": "0x41675C099F32341bf84BFc5382aF534df5C7461a",
+      "safeL2_v141": "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762"
+    },
+    "sources": "github.com/safe-fndn/safe-singleton-factory README; safe-global/safe-contracts v1.4.1 CHANGELOG; docs.safe.global — re-verify via safe-deployments package at deploy time",
+    "config": "threshold 2-of-3 Commander cold keys (recommend); SafeL2 singleton on L2s, Safe on L1-style chains — same proxy address either way",
+    "fallback_handler": "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99 (canonical v1.4.1 CompatibilityFallbackHandler)"
+  },
+  "zodiac_roles_v2": {
+    "mastercopy": "0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5 (v2.1.1 — docs.zodiac.eco/developers/roles; SDK zodiac-roles-sdk v4 targets v2 contracts)",
+    "topology": "Roles mod instance per chain deployed as a MODULE on the chain Safe; owner=avatar=target=the Safe (constellation quickstart pattern)",
+    "why": "kernel CallPolicy pins sweep `to`=Safe (GAP-8); the Roles mod then governs ONWARD movement out of the Safe without full multisig ceremony — a compromised sweep/consolidation path cannot redirect funds because role conditions are checked on-chain per call",
+    "role_conveyor": {
+      "member": "<conveyor signer — Turnkey-scoped key, or the Kernel account itself>",
+      "permissions": [
+        "scopeTarget(SWEEPER_ROLE, <each stable token addr>) → scopeFunction approve(spender) with spender ONE_OF [LIFI_DIAMOND 0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE] + withinAllowance(USD budget)",
+        "scopeTarget(SWEEPER_ROLE, LIFI_DIAMOND) → scopeFunction on LI.FI call selectors, c.withinAllowance for value moved, ExecutionOptions.Send required for native legs",
+        "allowFunction(SWEEPER_ROLE, <each stable token>, transfer.selector, args[to] EQUAL TREASURY_SAFE, options=Send) — direct consolidation rail",
+        "setAllowance(key, balance, maxRefill, refill, period=86400, timestamp) — rolling daily USD budget (docs.zodiac.eco/developers/roles/permissions + quickstart-roles)"
+      ],
+      "exec_path": "execTransactionWithRole(to, value, data, op, roleKey, shouldRevert) — member-signed; on-chain condition tree enforced",
+      "revocation": "Safe threshold tx → assignRoles(member, [role], [false]) or disableModule — instant, no key trust needed"
+    }
+  },
+  "preconditions": [
+    "GAP-8 permission enabled (the 'to'-pin is what makes compromised-key sweeps non-redirectable)",
+    "Chain Safe deployed + Roles mod enabled + role assigned before AUTO mode",
+    "each executor's owner == Kernel account (already enforced by contract constructor)"
+  ],
+  "rollback": [
+    "PROFIT_TRANSFER_MODE=MANUAL reverts to current dormant behavior",
+    "Safe: disableModule(RolesMod) via threshold tx removes the conveyor path; funds stay in Safe",
+    "sweep 'to' can only change via Safe-threshold action on the Kernel permission (or root rotation) — no hot path"
+  ],
+  "implementation_split": {
+    "pure_rust": [
+      "aa.rs/main.rs: per-chain sweep loop + per-token balance probes (balanceOf selector keccak256('balanceOf(address)')[..4] pattern already in relay.rs:244)",
+      "receipt decode of Swept events + transfers.jsonl writer (GAP-21 pairing)",
+      "optional CALLTYPE_BATCH packing for multi-call ops (verify CallPolicy mode coverage first)"
+    ],
+    "commander_actions": [
+      "deploy the same-address Safe on every active chain (SafeProxyFactory tx per chain — needs deployer gas or sponsored op via CREATE2_PROXY pattern already in aa.rs:462)",
+      "deploy Roles mod + configure role via Zodiac app/SDK (owner-signed Safe txs)",
+      "choose Safe owners/threshold; fund conveyor signer a small gas budget if it is an EOA"
+    ]
+  }
+}

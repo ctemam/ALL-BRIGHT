@@ -30,15 +30,16 @@ async fn main() -> Result<()> {
 
     let pim = aa::PimlicoClient::new(key);
     let bsc_rpc = "https://bsc-rpc.publicnode.com";
+    let rpcs = vec![bsc_rpc.to_string()];
 
-    let acct = pim.account_address(bsc_rpc, signer.address()).await?;
+    let acct = pim.account_address(&rpcs, signer.address()).await?;
     println!("smart account (Kernel v3.1, salt=0): {acct:?}");
 
     // execute(mode=single, dest=0, value=0, func=∅) — no-op proving the
     // account controls itself; deployment + execution happen atomically.
     let call = aa::kernel_execute_calldata(Address::ZERO, U256::ZERO, Bytes::new());
     let res = pim
-        .sponsored_user_op("bsc", 56, bsc_rpc, &signer, call, false)
+        .sponsored_user_op("bsc", 56, &rpcs, &signer, call, false)
         .await?;
     println!("userOpHash: {res}");
 

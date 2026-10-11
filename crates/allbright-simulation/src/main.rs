@@ -62,6 +62,15 @@ async fn main() -> anyhow::Result<()> {
                         Event::PoolUpdate(p) => {
                             cache.write().await.insert(p.address.clone(), p);
                         }
+                        Event::PoolHeartbeat(h) => {
+                            let mut c = cache.write().await;
+                            for addr in &h.pools {
+                                if let Some(p) = c.get_mut(addr) {
+                                    p.block = h.block;
+                                    p.ts_ms = h.ts_ms;
+                                }
+                            }
+                        }
                         Event::SimRequest(req) => {
                             // In case solver posts requests on the ingest bus.
                             let c = cache.read().await;

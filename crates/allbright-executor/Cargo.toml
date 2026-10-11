@@ -13,5 +13,9 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 alloy.workspace = true
+# GAP-18: alloy's typed ERC-4337 API (Erc4337Api + PackedUserOperation);
+# `alloy = "full"` does not enable the provider crate's erc4337-api feature.
+alloy-provider = { version = "1", features = ["erc4337-api", "reqwest"] }
 reqwest.workspace = true
 secrecy.workspace = true
+futures-util.workspace = true

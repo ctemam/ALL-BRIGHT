@@ -36,8 +36,9 @@ async fn main() -> Result<()> {
 
     let pim = aa::PimlicoClient::new(key);
     let bsc_rpc = "https://bsc-rpc.publicnode.com";
+    let rpcs = vec![bsc_rpc.to_string()];
 
-    let acct = pim.account_address(bsc_rpc, signer.address()).await?;
+    let acct = pim.account_address(&rpcs, signer.address()).await?;
     println!("smart account (Kernel v3.1, salt=0): {acct:?}");
 
     // Replay createAccount via eth_call to confirm the deploy simulates.
@@ -52,7 +53,7 @@ async fn main() -> Result<()> {
     // execute(address(0), 0, "") — a no-op self-call, gasless-sponsored.
     let call = aa::kernel_execute_calldata(Address::ZERO, U256::ZERO, Bytes::new());
     let res = pim
-        .sponsored_user_op("bsc", 56, bsc_rpc, &signer, call, true)
+        .sponsored_user_op("bsc", 56, &rpcs, &signer, call, true)
         .await?;
     println!("{res}");
     Ok(())

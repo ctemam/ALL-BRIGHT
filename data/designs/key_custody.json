@@ -1,0 +1,109 @@
+{
+  "gap": "GAP-8",
+  "title": "Kernel v3 Permissions (ZeroDev session key) + Turnkey enclave custody for the hot signer",
+  "status": "design-ready",
+  "verified_onchain_constants": {
+    "entrypoint_v07": { "address": "0x0000000071727De22E5E9d8BAf0edAc6f37da032", "source": "aa.rs:28; canonical ERC-4337 v0.7 EP" },
+    "kernel_factory_v31": { "address": "0xaac5D4240AF87249B3f71BC8E4A2cae074A3E419", "source": "aa.rs:29; matches github.com/zerodevapp/kernel v3.1 table" },
+    "kernel_impl_v31": { "address": "0xBAC849bB641841b44E965fB01A4Bf5F074f84b4D", "source": "aa.rs:32; same table" },
+    "ecdsa_validator_v31": { "address": "0x845ADb2C711129d4f3966735eD98a9F09fC4cE57", "source": "aa.rs:30; same table" },
+    "call_policy_v3": { "address": "0x67fa43ca2d689bea4d10b9f2c96828828a2ab275", "source": "codeslaw.app kernel_v3 CallPolicy; deployed via CREATE2 proxy 0x4e59b44847b379578588920cA78FbF26c0B4956C → deterministic on all chains. VERIFY eth_getCode per chain before use." },
+    "rate_limit_policy_scheduled": { "address": "0xf63d4139B25c836334edD76641356c6b74C86873", "source": "@zerodev/permissions RATE_LIMIT_POLICY_CONTRACT" },
+    "rate_limit_policy_with_reset": { "address": "0x6a06358e6b283921deceabe7e8a3741d506cca9b", "source": "@zerodev/permissions RATE_LIMIT_POLICY_WITH_RESET_CONTRACT; docs note it needs block.timestamp (minor ERC-4337 storage-rule bend) but is known to work with Pimlico" },
+    "gas_policy": { "address": "resolve from @zerodev/permissions GAS_POLICY_CONTRACT; verify via eth_getCode", "source": "docs.zerodev.app/smart-accounts/permissions/policies/gas" },
+    "permission_validator": { "address": "resolve via toPermissionValidator / @zerodev/permissions constants for KERNEL_V3_1; verify via eth_getCode", "source": "docs.zerodev.app/sdk/v5_3_x/permissions/intro" }
+  },
+  "function_selectors": {
+    "kernel_execute(bytes32,bytes)": { "selector": "0xe9ae5c53", "confidence": "verified-x3 (solady LibERC7579; docs.rs predict_sdk; eip.web3wagmi ERC-7579 table)" },
+    "sweep(address,address)": { "selector": "0xb8dc491b", "confidence": "verified-x2 (docs.rs alloy binding ISweepable; codeslaw listing)" },
+    "sweepNative(address)": { "selector": "0x78c093cf", "confidence": "verified-x1 explorer decode (snowscan tx 0x0f8efb…244); re-assert at build via alloy sweepNativeCall::SELECTOR" },
+    "setPaused(bool)": { "selector": "0x16c38b3c", "confidence": "verified-x2 (moonscan + uniscan decodes)", "note": "EXCLUDED from scoped permission" },
+    "executor_execute": {
+      "canonical_signature": "execute((address,address,address,uint8,uint24)[],uint256,uint256,address,bytes)",
+      "selector": "DERIVE-AT-BUILD — never hardcode",
+      "derivation": "cast sig \"execute((address,address,address,uint8,uint24)[],uint256,uint256,address,bytes)\" OR emit calldata::executeCall::SELECTOR from a probe binary (calldata.rs:18-24 generates it from the same ABI; contracts/src/AllbrightExecutor.sol:127-133 is the ground truth)",
+      "confidence": "signature verified; literal intentionally not guessed per AGENTS.md"
+    }
+  },
+  "layer1_kernel_permission": {
+    "model": "1 signer + N policies + 1 action (docs.zerodev.app/sdk/v5_3_x/permissions/intro)",
+    "signer": { "type": "ECDSA", "key": "new 'ops key' generated inside Turnkey sub-org; never on host. Existing PRIVATE_KEY stays ROOT validator until Commander rotates it cold." },
+    "action": { "selector": "0xe9ae5c53", "meaning": "ERC-7579 execute(bytes32,bytes) single-call mode only. Verify during impl that CALLTYPE_BATCH/DELEGATECALL payloads are rejected (Kernel v3 mode-word + policy inspection)." },
+    "policies": [
+      {
+        "type": "CallPolicy",
+        "contract": "0x67fa43ca2d689bea4d10b9f2c96828828a2ab275",
+        "sdk": "toCallPolicy({ policyVersion: CallPolicyVersion.V0_0_4, permissions: [...] }) — per chain, one entry per ALLBRIGHT_EXECUTOR_<CHAIN>",
+        "permissions_spec": [
+          { "target": "<executor_addr>", "valueLimit": "0", "functionName": "execute", "args": [
+            {"arg": "legs", "condition": "null — dynamic tuple array, unbounded by CallPolicy arg rules; bounded instead by on-chain minProfit + flashProvider ONE_OF"},
+            {"arg": "amountIn", "condition": "LESS_THAN_OR_EQUAL", "value": "<MAX_BORROW raw units, e.g. 25_000_000e6 — caps flash-loan size>"},
+            {"arg": "minProfit", "condition": "null"},
+            {"arg": "flashProvider", "condition": "ONE_OF", "value": "<relay.rs:44-96 verified list for the chain>"},
+            {"arg": "flashData", "condition": "null"}
+          ]},
+          { "target": "<executor_addr>", "valueLimit": "0", "functionName": "sweep", "args": [
+            {"arg": "token", "condition": "ONE_OF", "value": "<stable_addr(chain) list — sweep_architecture.json>"},
+            {"arg": "to", "condition": "EQUAL", "value": "<CHAIN_PROFIT_SAFE — pinned; key cannot redirect profit>"}
+          ]},
+          { "target": "<executor_addr>", "valueLimit": "0", "functionName": "sweepNative", "args": [
+            {"arg": "to", "condition": "EQUAL", "value": "<CHAIN_PROFIT_SAFE>"}
+          ]}
+        ],
+        "excluded": "setPaused (0x16c38b3c), all callback selectors, every other target — not granted = on-chain revert"
+      },
+      { "type": "GasPolicy", "sdk": "toGasPolicy({ allowed: 0n, enforcePaymaster: true })", "effect": "key may ONLY send paymaster-sponsored UserOps; zero native spend possible. Optionally allowedPaymaster=<Pimlico PM addr>." },
+      { "type": "RateLimitPolicy", "contract": "0x6a06358e6b283921deceabe7e8a3741d506cca9b", "sdk": "toRateLimitPolicy({ count: 60, interval: 3600 }) with RATE_LIMIT_POLICY_WITH_RESET_CONTRACT", "effect": "≤60 UserOps/hour — bounds spam/blast radius", "fallback": "0xf63d4139B25c836334edD76641356c6b74C86873 scheduled variant if a bundler rejects the reset contract" }
+    ],
+    "enable_flow": {
+      "summary": "Permission validator is registered on the EXISTING Kernel account via ONE enable-mode UserOp. Kernel v3 picks the validator from the userOp.nonce key field (validation type + validator id packed in high nonce bits — exact packing in zerodevapp/kernel v3.1 src/ValidationManager.sol). enableData is authorized by a ROOT-validator signature (current PRIVATE_KEY). After enable, every op uses the permission nonce-key signed by the ops key alone.",
+      "signature_format": "enable op: signature = root-signed approval of (signer+policies+action) ‖ session-key sig over userOpHash; later ops: session-key sig only. Confirm packing vs ValidationManager.sol + SDK serializeEnableSignature.",
+      "commander_action": "one-time root signature on the enable approval (scripted; offline box preferred)"
+    }
+  },
+  "layer2_turnkey": {
+    "custody": "ops key = Turnkey secp256k1 private key in a sub-org. Host holds only a Turnkey API credential. Signing = POST /public/v1/submit/sign_raw_payload (ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2) on the 32-byte userOpHash — wire-identical to today's owner.sign_message output.",
+    "honest_limitation": "raw-payload signing exposes NO eth.tx.* context — Turnkey cannot see the calldata inside a userOpHash. Semantic confinement is enforced ON-CHAIN by Layer 1 (CallPolicy reverts disallowed calls). Turnkey adds: actor scoping, consensus, instant revocation, non-exportable key, immutable audit.",
+    "policies": [
+      { "policyName": "ops-key-signs-raw-userops-only", "effect": "EFFECT_ALLOW", "consensus": "approvers.any(user, user.id == '<AUTOMATION_API_USER_ID>')", "condition": "activity.type == 'ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2' && private_key.id == '<OPS_KEY_ID>'" },
+      { "policyName": "deny-ops-key-tx-signing", "effect": "EFFECT_DENY", "consensus": "", "condition": "private_key.id == '<OPS_KEY_ID>' && activity.type == 'ACTIVITY_TYPE_SIGN_TRANSACTION_V2'" },
+      { "policyName": "quorum-for-policy-or-export", "effect": "EFFECT_ALLOW", "consensus": "approvers.count(user, user.id in ['<CMDR_1>','<CMDR_2>']) >= 2", "condition": "activity.type in [<CREATE_POLICY|EXPORT_PRIVATE_KEY|DELETE_PRIVATE_KEYS|UPDATE_USER activity enums — finalize against live enum at setup>]" }
+    ],
+    "tx_signing_variant_for_conveyor": {
+      "note": "if a Turnkey key ever signs real txs (GAP-28 conveyor), eth.tx.* becomes available:",
+      "example": { "policyName": "conveyor-allowlist", "effect": "EFFECT_ALLOW", "consensus": "approvers.any(user, user.id == '<CONVEYOR_API_USER>')", "condition": "eth.tx.chain_id in ['1','10','56','137','42161','43114','8453','59144','534352','81457'] && eth.tx.value < 10000000000000000 && eth.tx.to in ['<ROLES_MOD>','0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE']" },
+      "abi_route": "upload Roles/executor ABI → eth.tx.function_name == 'sweepNative' style conditions, or raw eth.tx.data[0..10] == '0x78c093cf' (docs.turnkey.com/features/policies/smart-contract-interfaces + /examples/ethereum)"
+    }
+  },
+  "defense_in_depth": {
+    "host_RCE_reads_ENV": "no PRIVATE_KEY in ENV; Turnkey API cred alone is scoped to raw-payload signing on one key id",
+    "turnkey_api_key_leak": "attacker can only REQUEST sigs → org policy + on-chain CallPolicy still bind output to executor calls; anomaly audit + instant API-user revoke",
+    "ops_key_fully_extracted": "key can ONLY yield UserOps the permission validator accepts: execute/sweep/sweepNative on deployed executors, sweep-to == Safe, flashProvider whitelisted, sponsored-gas-only, ≤60 ops/hr; cannot move account funds, change validators, or redirect sweeps",
+    "root_key_compromise": "root stays god-mode → rotate root validator to cold/Turnkey custody post-enable (Commander action)"
+  },
+  "preconditions": [
+    "Kernel account derivable per chain (aa.rs account_address already does this)",
+    "ALLBRIGHT_EXECUTOR_<CHAIN> deployed+verified (allowlist needs real targets)",
+    "CHAIN_PROFIT_SAFE deployed (GAP-20 dep — 'to' pinning needs the address)",
+    "Pimlico sponsorship live (GasPolicy is paymaster-only)"
+  ],
+  "rollback": [
+    "owner-signed op to setValidation/installValidation reverting to pure-ECDSA root (document Kernel v3.1 uninstall path before executing)",
+    "kill ops key: Turnkey delete key or policy — session ops stop validating instantly; on-chain permission remains registered but inert",
+    "time-boxed alternative: configure validUntil on the permission — on-chain expiry, no action needed"
+  ],
+  "implementation_split": {
+    "pure_rust": [
+      "aa.rs: enable-mode UserOp encoding (nonce-key packing, enableData, dual signature) — ValidationManager.sol parity",
+      "aa.rs: permission-mode ops (permission nonce key; session sig only)",
+      "signer trait: PrivateKeySigner | TurnkeyRawPayloadSigner (reqwest, API-key auth, zero key material on host)",
+      "probe binary: print executeCall::SELECTOR literal + eth_call assert on each executor"
+    ],
+    "commander_actions": [
+      "Turnkey org/sub-org, ops key, automation API user, 3 policies",
+      "one root-signed enable approval (scripted, offline)",
+      "deploy CHAIN_PROFIT_SAFEs (GAP-20) BEFORE freezing CallPolicy args",
+      "rotate root validator to cold after enable confirmed on every chain"
+    ]
+  }
+}

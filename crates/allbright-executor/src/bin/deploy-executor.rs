@@ -57,14 +57,17 @@ async fn deploy_chain(
     chain: Chain,
     broadcast: bool,
 ) -> Result<()> {
-    let rpc = cfg
-        .rpc_urls
+    let rpcs = cfg
+        .rpc_pools
         .get(&chain)
-        .with_context(|| format!("no RPC configured for {}", chain.name()))?
-        .clone();
+        .cloned()
+        .filter(|v| !v.is_empty())
+        .or_else(|| cfg.rpc_urls.get(&chain).cloned().map(|u| vec![u]))
+        .with_context(|| format!("no RPC configured for {}", chain.name()))?;
+    let rpc = rpcs[0].clone();
 
     // Executor owner = the Kernel account on this chain (deterministic).
-    let account = pim.account_address(&rpc, signer.address()).await?;
+    let account = pim.account_address(&rpcs, signer.address()).await?;
     let initcode = initcode_with_owner(account)?;
     let predicted = aa::create2_address(alloy::primitives::B256::ZERO, &initcode);
 
@@ -81,7 +84,7 @@ async fn deploy_chain(
         .deploy_via_sponsored_userop(
             chain.name(),
             chain.chain_id(),
-            &rpc,
+            &rpcs,
             signer,
             initcode,
             !broadcast,

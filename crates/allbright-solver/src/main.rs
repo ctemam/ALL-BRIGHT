@@ -56,6 +56,9 @@ struct State {
     /// excluded from the graph entirely; reloaded every 30 s.
     bait: HashMap<Chain, allbright_core::bait::BaitRegistry>,
     bait_checked: Instant,
+    /// Per-chain rate cap on EV-class ExecRequests (GAP-37) — bounds
+    /// bundler/quota burn while keeping the class journaled.
+    ev_last_emit: HashMap<Chain, Instant>,
 }
 
 /// Minimum interval between candidate regenerations per chain.
@@ -151,6 +154,7 @@ async fn main() -> anyhow::Result<()> {
         last_regen: HashMap::new(),
         bait: HashMap::new(),
         bait_checked: Instant::now() - std::time::Duration::from_secs(60),
+        ev_last_emit: HashMap::new(),
     }));
 
     // Own bus :3103 — publishes Opportunity/ExecRequest/Telemetry.
@@ -299,6 +303,19 @@ async fn main() -> anyhow::Result<()> {
                             }
                             if incoh > 0 {
                                 s.funnel.incoherent.fetch_add(incoh, Ordering::Relaxed);
+                            }
+                        }
+                        Event::PoolHeartbeat(h) => {
+                            // Post-dedup freshness: unchanged pools keep
+                            // their state but get honest "verified-at"
+                            // stamps — the coherence filter must see the
+                            // read block, not the last-change block.
+                            let mut s = state.lock().await;
+                            for addr in &h.pools {
+                                if let Some(p) = s.pools.get_mut(addr) {
+                                    p.block = h.block;
+                                    p.ts_ms = h.ts_ms;
+                                }
                             }
                         }
                         Event::PoolUpdate(p) => {
@@ -514,12 +531,54 @@ async fn handle_sim_result(
         let _ = bus.publish(&ev);
         return;
     }
+    // In-flight bait re-check: a conviction may have landed between sim
+    // dispatch and result. A convicted pool means the quoted edge was
+    // faked — drop the candidate, never let it reach the exec path.
+    if p.route.iter().any(|leg| {
+        s.bait
+            .get(&p.chain)
+            .map(|b| b.is_convicted(&leg.pool_address))
+            .unwrap_or(false)
+    }) {
+        let ev = reject(OppState::Simulated, RejectReason::BaitPool, &p, 0.0, &res);
+        drop(s);
+        let _ = bus.publish(&ev);
+        return;
+    }
     let gross = res.output_amount - p.input_amount;
     if gross <= 0.0 {
         let ev = reject(OppState::Simulated, RejectReason::NegativeEdge, &p, 0.0, &res);
         drop(s);
         let _ = bus.publish(&ev);
         return;
+    }
+    // Reserve-bound sanity (MATH_ARTIFACT): the route's final leg must
+    // pay out in the input token, and no pool can pay more than it
+    // holds. output_amount above that reserve means the sim ran on
+    // corrupt/incoherent state — reject as artifact before any USD
+    // conversion turns it into a phantom nine-figure "profit".
+    if let Some(last) = p.route.last() {
+        let st = s
+            .pools
+            .get(&last.pool_address)
+            .or_else(|| s.pools.get(&last.pool_address.to_lowercase()));
+        if let Some(st) = st {
+            let out_reserve = if st.token0.address.eq_ignore_ascii_case(&p.input_token) {
+                st.reserve0
+            } else if st.token1.address.eq_ignore_ascii_case(&p.input_token) {
+                st.reserve1
+            } else {
+                // input token isn't a constituent of the paying pool —
+                // route is malformed; bound on the smaller reserve
+                st.reserve0.min(st.reserve1)
+            };
+            if res.output_amount > out_reserve && out_reserve > 0.0 {
+                let ev = reject(OppState::Simulated, RejectReason::MathArtifact, &p, 0.0, &res);
+                drop(s);
+                let _ = bus.publish(&ev);
+                return;
+            }
+        }
     }
     // Convert to USD: cyclic arb ends in the input token. If the CEX/
     // stable map can't price it, fall back to the solver's own pool
@@ -542,14 +601,15 @@ async fn handle_sim_result(
         return;
     }
     let gross_usd = gross * usd_per_unit;
-    // NET gate (AGENTS §9): the threshold applies to gross minus gas —
-    // gas_est from the sim × live eth_gasPrice × native USD. A candidate
-    // that dies on gas is still a BelowStrategyThreshold rejection;
-    // gross_usd + gas_est stay on the record so the challenger can
-    // recompute the full cost model independently.
-    // usd_per_unit already falls back to cfg.native_usd for the chain's
-    // wrapped native — flooring with .max() would force an ETH-priced
-    // fallback onto BNB/POL/AVAX whenever the live tick is cheaper.
+    // NET gate (AGENTS §9/§13): threshold applies to gross minus ALL
+    // friction costs:
+    //   gas_usd       = gas_est × live_gas_price × native_usd
+    //   flash_usd     = Aave V3 flash premium (5 bps of input_amount);
+    //                   other providers (Balancer 0%, DODO 0%) will lower
+    //                   this term once GAP-7 is wired — conservative until
+    //                   then (over-deducting is safe; under-deducting loses).
+    // Both terms are carried on the Rejected record so the challenger can
+    // reconstruct the full cost model independently.
     let native_usd = pricing::usd_per_unit(
         pricing::native_symbol(p.chain),
         p.chain,
@@ -562,8 +622,29 @@ async fn handle_sim_result(
         .map(|(g, _)| *g)
         .unwrap_or(2_000_000_000); // 2 gwei conservative fallback
     let gas_usd = res.gas_est as f64 * gas_wei as f64 / 1e18 * native_usd;
-    let profit_usd = gross_usd - gas_usd;
-    if profit_usd < cfg.min_profit_usd {
+    // Flash premium: 5 bps of borrowed amount in input-token units.
+    // If the sim route has no flash leg (future: non-flash cyclic) this
+    // still over-deducts by at most 0.05% — safe direction.
+    const AAVE_FLASH_BPS: f64 = 5.0; // 0.05%
+    let flash_usd = p.input_amount * (AAVE_FLASH_BPS / 10_000.0) * usd_per_unit;
+    let profit_usd = gross_usd - gas_usd - flash_usd;
+    // EV-class submission (GAP-37): on EV-enabled chains, a positive-net
+    // candidate below the standard floor is attempted rather than
+    // discarded — revert cost on the sponsored path is ~zero, the
+    // simgate dry-run + on-chain minProfit remain the authorities, and
+    // every attempt produces real outcome evidence (the data the
+    // calibration stack needs). Per-chain rate cap bounds quota burn;
+    // EV_CHAINS empty = class disabled. The standard floor itself is
+    // never lowered — this is a separate, marked submission class.
+    let ev_eligible = cfg.ev_chains.contains(&p.chain)
+        && profit_usd > 0.0
+        && s
+            .ev_last_emit
+            .get(&p.chain)
+            .map(|t| t.elapsed() >= std::time::Duration::from_secs(cfg.ev_emit_secs))
+            .unwrap_or(true);
+    let ev_mode = profit_usd < cfg.min_profit_usd && ev_eligible;
+    if profit_usd < cfg.min_profit_usd && !ev_mode {
         info!(
             chain = %p.chain.name(), gross_usd, gas_usd, net = profit_usd,
             min = cfg.min_profit_usd, "positive edge below net threshold"
@@ -573,7 +654,14 @@ async fn handle_sim_result(
         let _ = bus.publish(&ev);
         return;
     }
-    s.funnel.profitable.fetch_add(1, Ordering::Relaxed);
+    if ev_mode {
+        s.ev_last_emit.insert(p.chain, Instant::now());
+    } else {
+        // `profitable` counts only candidates that cleared the standard
+        // floor — EV-class emissions stay visible via ev_mode on the
+        // signal, never folded into the standard-gate KPI.
+        s.funnel.profitable.fetch_add(1, Ordering::Relaxed);
+    }
 
     let signal = OpportunitySignal {
         chain: p.chain,
@@ -583,14 +671,20 @@ async fn handle_sim_result(
         input_amount: p.input_amount,
         input_token: p.input_token,
         expected_profit_usd: profit_usd,
-        min_profit_usd: cfg.min_profit_usd,
+        // EV signals carry the bounded EV floor as the on-chain guard —
+        // the contract still reverts below it; the $5 standard floor
+        // applies to standard-class signals only.
+        min_profit_usd: if ev_mode { cfg.ev_floor_usd } else { cfg.min_profit_usd },
+        ev_mode,
         calldata: None, // executor encodes
         ts_ms: now_ms(),
     };
-    info!(
-        chain = %p.chain.name(), profit_usd, legs = p.route.len(),
+    let msg = if ev_mode {
+        "EV-class opportunity (sub-floor, sponsored attempt)"
+    } else {
         "profitable opportunity"
-    );
+    };
+    info!(chain = %p.chain.name(), profit_usd, legs = p.route.len(), ev = ev_mode, "{}", msg);
     let _ = bus.publish(&Event::Opportunity(signal.clone()));
     let _ = bus.publish(&Event::ExecRequest(ExecutionRequest {
         signal,

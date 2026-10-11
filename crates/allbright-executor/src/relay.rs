@@ -95,83 +95,101 @@ fn flash_providers(chain: Chain) -> &'static [(&'static str, u64)] {
     }
 }
 
-/// Canonical stablecoin addresses per chain — used solely for USD→token
-/// conversion of `minProfit`. Membership is verified at runtime by a
-/// successful `decimals()` call; unknown tokens fail closed.
-fn stable_addr(chain: Chain, token: Address) -> bool {
-    let t = format!("{token:?}").to_lowercase();
-    let list: &[&str] = match chain {
-        // Every entry verified on-chain via decimals() on 2026-10-08.
-        Chain::Eth => &[
-            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", // USDC
-            "0xdac17f958d2ee523a2206206994597c13d831ec7", // USDT
-            "0x6b175474e89094c44da98b954eedeac495271d0f", // DAI
-        ],
-        Chain::Arb => &[
-            "0xaf88d065e77c8cc2239327c5edb3a432268e5831", // USDC (native)
-            "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8", // USDC.e
-            "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", // USD₮0
-            "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", // DAI
-        ],
-        Chain::Op => &[
-            "0x0b2c639c533813f4aa9d7837caf62653d097ff85", // USDC
-            "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", // USDT
-            "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1", // DAI
-        ],
-        Chain::Poly => &[
-            "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", // USDC (native)
-            "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", // USDC.e
-            "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", // USDT
-            "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063", // DAI
-        ],
-        Chain::Bsc => &[
-            "0x55d398326f99059ff775485246999027b3197955", // USDT
-            "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", // USDC
-            "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409", // FDUSD
-            "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3", // DAI
-            "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d", // USD1
-        ],
-        Chain::Avax => &[
-            "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // USDC
-            "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", // USDT
-            "0xd586e7f844cea2f87f50152665bcbc2c279d8d70", // DAI.e
-        ],
-        Chain::Base => &[
-            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", // USDC
-            "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", // USDT
-            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb", // DAI
-        ],
-        Chain::Linea => &[
-            "0x176211869ca2b568f2a7d4ee941e073a821ee1ff", // USDC
-            "0xa219439258ca9da29e9cc4ce5596924745e12b93", // USDT
-            "0x4af15ec2a0bd43db75dd04e62faa3b8ef36b00d5", // DAI
-        ],
-        Chain::Scroll => &[
-            "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4", // USDC
-            "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", // USDT
-            "0xca77eb3fefe3725dc33bccb54edefc3d9f764f97", // DAI
-        ],
-        Chain::Blast => &[
-            "0x4300000000000000000000000000000000000003", // USDB (native, rebasing)
-        ],
-    };
-    list.iter().any(|a| *a == t)
+/// Canonical stablecoin membership — the list lives in
+/// `allbright_core::chain` so solver and executor apply the identical
+/// test (executor: USD→token minProfit conversion; solver: emit gate).
+pub fn stable_addr(chain: Chain, token: Address) -> bool {
+    allbright_core::chain::stable_addr_str(chain, &format!("{token:?}"))
 }
 
-async fn eth_call(rpc: &str, to: Address, data: Bytes) -> Result<Bytes> {
-    let client = reqwest::Client::new();
-    let v: serde_json::Value = client
-        .post(rpc)
-        .json(&json!({"jsonrpc":"2.0","id":1,"method":"eth_call",
-            "params":[{"to":format!("{to:?}"),"data":format!("0x{}",alloy::primitives::hex::encode(&data))},"latest"]}))
+// ── Hot-path transport (GAP-10/§36.9) ────────────────────────────────
+// Shared client; each call races the top RACE_WIDTH pool endpoints
+// concurrently — first definitive response wins, transport/provider
+// failures fall through to the next completion. An `Evm` outcome (the
+// node executed the call and it reverted) is authoritative chain truth
+// — it wins the race immediately and is never retried on another
+// endpoint (a second node would only echo the same revert).
+const RACE_WIDTH: usize = 3;
+
+enum CallOutcome {
+    Ok(serde_json::Value),
+    Evm(String),
+    Transport(String),
+}
+
+fn shared_client() -> &'static reqwest::Client {
+    static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    C.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
+async fn rpc_one(
+    client: &reqwest::Client,
+    url: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> CallOutcome {
+    let send = client
+        .post(url)
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
         .send()
-        .await?
-        .json()
-        .await?;
-    let s = v["result"].as_str().unwrap_or("0x");
-    Ok(Bytes::from(
+        .await;
+    let Ok(resp) = send else {
+        return CallOutcome::Transport(send.unwrap_err().to_string());
+    };
+    let v = match resp.json::<serde_json::Value>().await {
+        Ok(v) => v,
+        Err(e) => return CallOutcome::Transport(e.to_string()),
+    };
+    if let Some(err) = v.get("error") {
+        let msg = err["message"].as_str().unwrap_or("evm error");
+        let data = err["data"].as_str().unwrap_or_default();
+        return CallOutcome::Evm(format!("{msg} {data}"));
+    }
+    match v.get("result") {
+        Some(r) => CallOutcome::Ok(r.clone()),
+        None => CallOutcome::Transport("empty response".into()),
+    }
+}
+
+/// Race one JSON-RPC call across the top `RACE_WIDTH` endpoints.
+/// Transport outcomes accumulate; the first Ok/Evm completes the call.
+async fn race_rpc(rpcs: &[String], method: &str, params: serde_json::Value) -> CallOutcome {
+    use futures_util::stream::{FuturesUnordered, StreamExt};
+    let client = shared_client();
+    let mut futs = FuturesUnordered::new();
+    for url in rpcs.iter().take(RACE_WIDTH) {
+        futs.push(rpc_one(client, url, method, params.clone()));
+    }
+    let mut last = CallOutcome::Transport("empty endpoint pool".into());
+    while let Some(out) = futs.next().await {
+        match out {
+            CallOutcome::Transport(_) => last = out,
+            definitive => return definitive,
+        }
+    }
+    last
+}
+
+fn result_bytes(v: &serde_json::Value) -> Bytes {
+    let s = v.as_str().unwrap_or("0x");
+    Bytes::from(
         alloy::primitives::hex::decode(s.trim_start_matches("0x")).unwrap_or_default(),
-    ))
+    )
+}
+
+async fn eth_call(rpcs: &[String], to: Address, data: Bytes) -> Result<Bytes> {
+    let params = json!([{"to":format!("{to:?}"),
+        "data":format!("0x{}",alloy::primitives::hex::encode(&data))},"latest"]);
+    match race_rpc(rpcs, "eth_call", params).await {
+        CallOutcome::Ok(v) => Ok(result_bytes(&v)),
+        CallOutcome::Evm(m) => anyhow::bail!("evm: {m}"),
+        CallOutcome::Transport(m) => anyhow::bail!("transport: {m}"),
+    }
 }
 
 /// `eth_call` with a spoofed `from` — used by the EVM dry-run gate
@@ -184,46 +202,74 @@ enum DryRunErr {
     Transport(anyhow::Error),
 }
 
-async fn eth_call_from(rpc: &str, from: Address, to: Address, data: Bytes) -> std::result::Result<Bytes, DryRunErr> {
-    let client = reqwest::Client::new();
-    let v: serde_json::Value = client
-        .post(rpc)
-        .json(&json!({"jsonrpc":"2.0","id":1,"method":"eth_call",
-            "params":[{"from":format!("{from:?}"),"to":format!("{to:?}"),
-                "data":format!("0x{}",alloy::primitives::hex::encode(&data))},"latest"]}))
-        .send()
-        .await
-        .map_err(|e| DryRunErr::Transport(e.into()))?
-        .json()
-        .await
-        .map_err(|e| DryRunErr::Transport(e.into()))?;
-    if let Some(err) = v.get("error") {
-        let msg = err["message"].as_str().unwrap_or("evm error");
-        let data = err["data"].as_str().unwrap_or_default();
-        return Err(DryRunErr::Evm(format!("{msg} {data}")));
+async fn eth_call_from(rpcs: &[String], from: Address, to: Address, data: Bytes) -> std::result::Result<Bytes, DryRunErr> {
+    let params = json!([{"from":format!("{from:?}"),"to":format!("{to:?}"),
+        "data":format!("0x{}",alloy::primitives::hex::encode(&data))},"latest"]);
+    match race_rpc(rpcs, "eth_call", params).await {
+        CallOutcome::Ok(v) => Ok(result_bytes(&v)),
+        CallOutcome::Evm(m) => Err(DryRunErr::Evm(m)),
+        CallOutcome::Transport(m) => Err(DryRunErr::Transport(anyhow::anyhow!(m))),
     }
-    let s = v["result"].as_str().unwrap_or("0x");
-    Ok(Bytes::from(
-        alloy::primitives::hex::decode(s.trim_start_matches("0x")).unwrap_or_default(),
-    ))
 }
 
-/// On-chain verification for a flash provider candidate:
+async fn eth_get_code(rpcs: &[String], addr: Address) -> Result<Bytes> {
+    match race_rpc(rpcs, "eth_getCode", json!([format!("{addr:?}"), "latest"])).await {
+        CallOutcome::Ok(v) => Ok(result_bytes(&v)),
+        CallOutcome::Evm(m) => anyhow::bail!("evm: {m}"),
+        CallOutcome::Transport(m) => anyhow::bail!("transport: {m}"),
+    }
+}
+
+/// One Multicall3 `aggregate3` over independent view calls — N serial
+/// RTTs collapse into a single raced request (canonical deployment on
+/// all 10 chains). Per-call `allowFailure`: a reverting probe yields
+/// `None`, never poisons the batch. Batch-level transport failure also
+/// yields all-`None` (callers fail closed, same as a dropped probe).
+async fn batch_calls(rpcs: &[String], calls: &[(Address, Bytes)]) -> Vec<Option<Bytes>> {
+    use alloy::sol_types::SolCall;
+    use allbright_core::multicall::{multicall3_addr, IMulticall3};
+    let mc_calls: Vec<IMulticall3::Call3> = calls
+        .iter()
+        .map(|(target, data)| IMulticall3::Call3 {
+            target: *target,
+            allowFailure: true,
+            callData: data.clone(),
+        })
+        .collect();
+    let encoded = IMulticall3::aggregate3Call { calls: mc_calls }.abi_encode();
+    let Ok(out) = eth_call(rpcs, multicall3_addr(), Bytes::from(encoded)).await else {
+        return calls.iter().map(|_| None).collect();
+    };
+    match IMulticall3::aggregate3Call::abi_decode_returns(&out) {
+        Ok(results) => results
+            .into_iter()
+            .map(|r| r.success.then_some(r.returnData))
+            .collect(),
+        Err(_) => calls.iter().map(|_| None).collect(),
+    }
+}
+
+/// On-chain verification for a flash provider candidate — calldata
+/// only; the probes run inside a single `batch_calls` aggregate3:
 /// Aave V3 → `getReservesList()` returns a non-empty array.
 /// Balancer V2 → `getProtocolFeesCollector()` returns an address (only the
 /// real Vault exposes it).
 /// Morpho → `owner()` returns an address (Morpho Blue is owned).
-async fn verify_provider(rpc: &str, addr: Address, kind: u64) -> bool {
-    let probe: &[u8] = match kind {
+fn provider_probe(kind: u64) -> Option<Bytes> {
+    let sel: &[u8] = match kind {
         KIND_AAVE_V3 => &keccak256(b"getReservesList()")[..4],
         KIND_BALANCER_V2 => &keccak256(b"getProtocolFeesCollector()")[..4],
         KIND_MORPHO => &keccak256(b"owner()")[..4],
-        _ => return false,
+        _ => return None,
     };
-    match eth_call(rpc, addr, Bytes::from(probe.to_vec())).await {
-        Ok(out) => out.len() >= 32 && out.iter().any(|b| *b != 0),
-        Err(_) => false,
-    }
+    Some(Bytes::from(sel.to_vec()))
+}
+
+/// `true` when an aggregate3 result carries a non-empty payload —
+/// the shared verdict for every provider probe.
+fn probe_verified(r: Option<&Bytes>) -> bool {
+    r.map(|b| b.len() >= 32 && b.iter().any(|x| *x != 0))
+        .unwrap_or(false)
 }
 
 fn addr_from_ret(b: &Bytes) -> Option<Address> {
@@ -240,40 +286,227 @@ fn u256_from_ret(b: &Bytes) -> Option<U256> {
     Some(U256::from_be_slice(&b[..32]))
 }
 
-async fn erc20_balance_of(rpc: &str, token: Address, holder: Address) -> Option<U256> {
-    let mut d = keccak256(b"balanceOf(address)")[..4].to_vec();
-    d.extend_from_slice(&[0u8; 12]);
-    d.extend_from_slice(holder.as_slice());
-    u256_from_ret(&eth_call(rpc, token, Bytes::from(d)).await.ok()?)
+/// GAP-22 — live on-chain USD quote for a non-stable token. Route legs
+/// are tried first; when none pair `token` with a stable, the verified
+/// pool REGISTRY is scanned for `token↔stable` candidates (Phase C).
+/// Price from `getReserves` (V2/Stable) or `slot0` (V3); `None` → the
+/// caller refuses (no guessed prices).
+async fn quote_token_usd(
+    rpcs: &[String],
+    chain: Chain,
+    route: &[allbright_core::events::SwapLeg],
+    token: Address,
+) -> Option<f64> {
+    let sel_t0 = Bytes::from(keccak256(b"token0()")[..4].to_vec());
+    let sel_t1 = Bytes::from(keccak256(b"token1()")[..4].to_vec());
+    let sel_res = Bytes::from(keccak256(b"getReserves()")[..4].to_vec());
+    let sel_slot0 = Bytes::from(keccak256(b"slot0()")[..4].to_vec());
+    let sel_dec = Bytes::from(keccak256(b"decimals()")[..4].to_vec());
+
+    // Phase A — token0/token1 for every route leg in one aggregate3.
+    let mut calls: Vec<(Address, Bytes)> = Vec::new();
+    let mut leg_ix: Vec<usize> = Vec::new();
+    for (i, leg) in route.iter().enumerate() {
+        let Ok(pool) = leg.pool_address.parse::<Address>() else { continue };
+        calls.push((pool, sel_t0.clone()));
+        calls.push((pool, sel_t1.clone()));
+        leg_ix.push(i);
+    }
+    let res_a = batch_calls(rpcs, &calls).await;
+
+    // Phase B — decimals(token), decimals(stable), price read for each
+    // leg whose pair puts `token` against a verified stable — one more
+    // aggregate3 instead of three serial calls per leg.
+    let mut calls_b: Vec<(Address, Bytes)> = Vec::new();
+    let mut pending: Vec<(bool, DexKind)> = Vec::new(); // (is0, dex)
+    for (k, i) in leg_ix.iter().enumerate() {
+        let leg = &route[*i];
+        let Ok(pool) = leg.pool_address.parse::<Address>() else { continue };
+        let t0 = res_a.get(2 * k).and_then(|r| r.as_ref()).and_then(addr_from_ret);
+        let t1 = res_a.get(2 * k + 1).and_then(|r| r.as_ref()).and_then(addr_from_ret);
+        let (Some(t0), Some(t1)) = (t0, t1) else { continue };
+        // `is0` = token is the pool's token0; the OTHER leg must be a
+        // verified stable for the quote to be USD-denominated.
+        let (stable, is0) = if t0 == token && stable_addr(chain, t1) {
+            (t1, true)
+        } else if t1 == token && stable_addr(chain, t0) {
+            (t0, false)
+        } else {
+            continue;
+        };
+        calls_b.push((token, sel_dec.clone()));
+        calls_b.push((stable, sel_dec.clone()));
+        calls_b.push((
+            pool,
+            if leg.dex == DexKind::V3 { sel_slot0.clone() } else { sel_res.clone() },
+        ));
+        pending.push((is0, leg.dex));
+    }
+    let res_b = batch_calls(rpcs, &calls_b).await;
+
+    for (k, (is0, dex)) in pending.iter().enumerate() {
+        let d_tok = res_b.get(3 * k).and_then(|r| r.as_ref()).and_then(|b| b.last().copied())
+            .filter(|d| *d > 0 && *d <= 36);
+        let d_st = res_b.get(3 * k + 1).and_then(|r| r.as_ref()).and_then(|b| b.last().copied())
+            .filter(|d| *d > 0 && *d <= 36);
+        let data = res_b.get(3 * k + 2).and_then(|r| r.as_ref());
+        let (Some(d_tok), Some(d_st), Some(data)) = (d_tok, d_st, data) else { continue };
+        let price = match dex {
+            DexKind::V3 => {
+                // slot0 word 0 = sqrtPriceX96 → raw P = (sqrt/2^96)²
+                let Some(sqrt) = u256_from_ret(data) else { continue };
+                let s: f64 = sqrt.to_string().parse().ok()?;
+                let p_raw = (s / 18446744073709551616.0).powi(2);
+                // human t0-in-t1 price; token's USD is p01 if is0 else 1/p01
+                let (d0, d1) = if *is0 { (d_tok, d_st) } else { (d_st, d_tok) };
+                let p01 = p_raw * 10f64.powi(d0 as i32 - d1 as i32);
+                if *is0 { p01 } else if p01 > 0.0 { 1.0 / p01 } else { continue }
+            }
+            _ => {
+                if data.len() < 64 { continue }
+                let r0 = U256::from_be_slice(&data[0..32]);
+                let r1 = U256::from_be_slice(&data[32..64]);
+                let (r_tok, r_st) = if *is0 { (r0, r1) } else { (r1, r0) };
+                let rt: f64 = r_tok.to_string().parse().ok()?;
+                let rs: f64 = r_st.to_string().parse().ok()?;
+                if rt <= 0.0 { continue }
+                (rs / 10f64.powi(d_st as i32)) / (rt / 10f64.powi(d_tok as i32))
+            }
+        };
+        if price.is_finite() && price > 0.0 {
+            return Some(price);
+        }
+    }
+
+    // Phase C — universe fallback (pricing-blindness fix): no route leg
+    // priced `token`. Scan the verified registry for pools pairing
+    // `token` against a verified stable and quote the CHEAPEST usable
+    // price — the conservative direction: a lower USD price yields a
+    // LARGER token-denominated minProfit, so a bait pool quoting an
+    // inflated price can't weaken the on-chain gate. Candidates are
+    // filtered by a stable-side liquidity floor ($100) so dust pools
+    // can't inject junk prices either way.
+    let t = format!("{token:?}").to_lowercase();
+    struct Cand { pool: Address, stable: Address, is0: bool, dex: DexKind }
+    let mut cands: Vec<Cand> = Vec::new();
+    for p in allbright_core::chain::load_pools() {
+        if p.chain != chain || cands.len() >= 12 {
+            continue;
+        }
+        let (other, is0) = if p.token0.address.eq_ignore_ascii_case(&t) {
+            (p.token1.address.as_str(), true)
+        } else if p.token1.address.eq_ignore_ascii_case(&t) {
+            (p.token0.address.as_str(), false)
+        } else {
+            continue;
+        };
+        let (Ok(pool), Ok(st)) = (p.address.parse::<Address>(), other.parse::<Address>())
+        else {
+            continue;
+        };
+        if !stable_addr(chain, st) {
+            continue;
+        }
+        cands.push(Cand { pool, stable: st, is0, dex: p.dex });
+    }
+    if cands.is_empty() {
+        return None;
+    }
+
+    let mut calls_c: Vec<(Address, Bytes)> = Vec::with_capacity(3 * cands.len() + 1);
+    calls_c.push((token, sel_dec.clone())); // decimals(token) once
+    for c in &cands {
+        calls_c.push((c.stable, sel_dec.clone()));
+        calls_c.push((
+            c.pool,
+            if c.dex == DexKind::V3 { sel_slot0.clone() } else { sel_res.clone() },
+        ));
+    }
+    let res_c = batch_calls(rpcs, &calls_c).await;
+    let d_tok = res_c
+        .first()
+        .and_then(|r| r.as_ref())
+        .and_then(|b| b.last().copied())
+        .filter(|d| *d > 0 && *d <= 36)?;
+
+    let mut best: Option<f64> = None;
+    for (k, c) in cands.iter().enumerate() {
+        let d_st = res_c
+            .get(1 + 2 * k)
+            .and_then(|r| r.as_ref())
+            .and_then(|b| b.last().copied())
+            .filter(|d| *d > 0 && *d <= 36);
+        let data = res_c.get(1 + 2 * k + 1).and_then(|r| r.as_ref());
+        let (Some(d_st), Some(data)) = (d_st, data) else { continue };
+        let (price, st_liq) = match c.dex {
+            DexKind::V3 => {
+                let Some(sqrt) = u256_from_ret(data) else { continue };
+                let Ok(s) = sqrt.to_string().parse::<f64>() else { continue };
+                let p_raw = (s / 18446744073709551616.0).powi(2);
+                let (d0, d1) = if c.is0 { (d_tok, d_st) } else { (d_st, d_tok) };
+                let p01 = p_raw * 10f64.powi(d0 as i32 - d1 as i32);
+                let price = if c.is0 { p01 } else if p01 > 0.0 { 1.0 / p01 } else { continue };
+                // V3 slot0 gives price but not reserves — skip the
+                // liquidity floor here (in-range quote is still a live
+                // market price) and accept the quote.
+                (price, f64::INFINITY)
+            }
+            _ => {
+                if data.len() < 64 { continue }
+                let r0 = U256::from_be_slice(&data[0..32]);
+                let r1 = U256::from_be_slice(&data[32..64]);
+                let (r_tok, r_st) = if c.is0 { (r0, r1) } else { (r1, r0) };
+                let (Ok(rt), Ok(rs)) = (
+                    r_tok.to_string().parse::<f64>(),
+                    r_st.to_string().parse::<f64>(),
+                ) else { continue };
+                if rt <= 0.0 { continue }
+                let st_liq = rs / 10f64.powi(d_st as i32);
+                ((st_liq) / (rt / 10f64.powi(d_tok as i32)), st_liq)
+            }
+        };
+        if price.is_finite() && price > 0.0 && st_liq >= 100.0 {
+            best = Some(best.map_or(price, |b: f64| b.min(price)));
+        }
+    }
+    best
 }
 
-async fn max_flash_loan(rpc: &str, lender: Address, token: Address) -> Option<U256> {
+async fn max_flash_loan(rpcs: &[String], lender: Address, token: Address) -> Option<U256> {
     let mut d = keccak256(b"maxFlashLoan(address)")[..4].to_vec();
     d.extend_from_slice(&[0u8; 12]);
     d.extend_from_slice(token.as_slice());
-    u256_from_ret(&eth_call(rpc, lender, Bytes::from(d)).await.ok()?)
+    u256_from_ret(&eth_call(rpcs, lender, Bytes::from(d)).await.ok()?)
 }
 
 /// On-chain proof a UniV3 pool can source `token`'s flash:
 /// token_in must be the pool's token0/token1 AND the pool's token
-/// balance must cover the borrow.
-async fn univ3_pool_holds(rpc: &str, pool: Address, token: Address, amount: U256) -> bool {
-    let sel_t0 = Bytes::from(keccak256(b"token0()")[..4].to_vec());
-    let sel_t1 = Bytes::from(keccak256(b"token1()")[..4].to_vec());
-    let holds = match (
-        eth_call(rpc, pool, sel_t0).await.ok().and_then(|b| addr_from_ret(&b)),
-        eth_call(rpc, pool, sel_t1).await.ok().and_then(|b| addr_from_ret(&b)),
-    ) {
-        (Some(t0), Some(t1)) => t0 == token || t1 == token,
-        _ => false,
-    };
-    if !holds {
-        return false;
-    }
-    erc20_balance_of(rpc, token, pool)
-        .await
-        .map(|b| b >= amount)
-        .unwrap_or(false)
+/// balance must cover the borrow. All three reads ride one aggregate3.
+async fn univ3_pool_holds(rpcs: &[String], pool: Address, token: Address, amount: U256) -> bool {
+    let mut bal = keccak256(b"balanceOf(address)")[..4].to_vec();
+    bal.extend_from_slice(&[0u8; 12]);
+    bal.extend_from_slice(pool.as_slice());
+    let res = batch_calls(
+        rpcs,
+        &[
+            (pool, Bytes::from(keccak256(b"token0()")[..4].to_vec())),
+            (pool, Bytes::from(keccak256(b"token1()")[..4].to_vec())),
+            (token, Bytes::from(bal)),
+        ],
+    )
+    .await;
+    let holds = matches!(
+        (res.first(), res.get(1)),
+        (Some(Some(a)), Some(Some(b)))
+            if addr_from_ret(a) == Some(token) || addr_from_ret(b) == Some(token)
+    );
+    holds
+        && res
+            .get(2)
+            .and_then(|r| r.as_ref())
+            .and_then(u256_from_ret)
+            .map(|b| b >= amount)
+            .unwrap_or(false)
 }
 
 /// GAP-5 dynamic flash fallbacks — invoked only when the static
@@ -282,7 +515,7 @@ async fn univ3_pool_holds(rpc: &str, pool: Address, token: Address, amount: U256
 /// candidates come from the verified pool registry, cheapest fee tier
 /// first. Every candidate is re-verified on-chain before selection.
 async fn erc3156_or_univ3_flash(
-    rpc: &str,
+    rpcs: &[String],
     chain: Chain,
     token_in: Address,
     amount_in: U256,
@@ -290,7 +523,7 @@ async fn erc3156_or_univ3_flash(
     if let Ok(lender) = std::env::var(format!("ERC3156_LENDER_{}", chain.name().to_uppercase()))
     {
         if let Ok(addr) = lender.parse::<Address>() {
-            if max_flash_loan(rpc, addr, token_in)
+            if max_flash_loan(rpcs, addr, token_in)
                 .await
                 .map(|m| m >= amount_in)
                 .unwrap_or(false)
@@ -312,22 +545,13 @@ async fn erc3156_or_univ3_flash(
     cands.sort_by_key(|p| p.fee_bps);
     for p in cands {
         let Ok(addr) = p.address.parse::<Address>() else { continue };
-        if univ3_pool_holds(rpc, addr, token_in, amount_in).await {
+        if univ3_pool_holds(rpcs, addr, token_in, amount_in).await {
             tracing::info!(chain = %chain.name(), pool = %p.address,
                 fee_bps = p.fee_bps, "univ3 flash provider selected (fallback)");
             return Ok(Some((addr, KIND_UNIV3_FLASH)));
         }
     }
     Ok(None)
-}
-
-async fn erc20_decimals(rpc: &str, token: Address) -> Result<u8> {
-    let sel = &keccak256(b"decimals()")[..4];
-    let out = eth_call(rpc, token, Bytes::from(sel.to_vec())).await?;
-    out.last()
-        .copied()
-        .filter(|d| *d > 0 && *d <= 36)
-        .ok_or_else(|| anyhow::anyhow!("decimals() unreadable for {token:?}"))
 }
 
 /// BSC-class submission: sponsored UserOp → smart account →
@@ -339,27 +563,23 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
         .executor_address(chain)
         .ok_or_else(|| anyhow::anyhow!("no executor on {}", chain.name()))?
         .parse()?;
-    let rpc = cfg
-        .rpc_urls
+    // Ordered endpoint pool (keyed providers first, §36.9) — every
+    // hot-path call races the top endpoints instead of pinning one.
+    let rpcs = cfg
+        .rpc_pools
         .get(&chain)
-        .ok_or_else(|| anyhow::anyhow!("no rpc for {}", chain.name()))?
-        .clone();
+        .cloned()
+        .filter(|v| !v.is_empty())
+        .or_else(|| cfg.rpc_urls.get(&chain).cloned().map(|u| vec![u]))
+        .ok_or_else(|| anyhow::anyhow!("no rpc for {}", chain.name()))?;
     let signer: PrivateKeySigner = cfg
         .signing_key()
         .ok_or_else(|| anyhow::anyhow!("PRIVATE_KEY unset"))?
         .parse()?;
 
     // The configured executor must actually have code on-chain.
-    let client = reqwest::Client::new();
-    let code_check: serde_json::Value = client
-        .post(&rpc)
-        .json(&json!({"jsonrpc":"2.0","id":1,"method":"eth_getCode",
-            "params":[format!("{executor:?}"),"latest"]}))
-        .send()
-        .await?
-        .json()
-        .await?;
-    if code_check["result"].as_str().unwrap_or("0x").len() <= 4 {
+    let code = eth_get_code(&rpcs, executor).await?;
+    if code.len() <= 2 {
         anyhow::bail!("executor {executor:?} has no code on {}", chain.name());
     }
 
@@ -373,44 +593,71 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
         .parse()
         .map_err(|_| anyhow::anyhow!("token_in not an address"))?;
 
-    // USD→token conversion is only defined for verified stablecoins —
-    // anything else refuses (no guessed prices, AGENTS.md §9/§13).
-    let decimals = erc20_decimals(&rpc, token_in).await?;
-    if !stable_addr(chain, token_in) {
-        anyhow::bail!("token_in {token_in:?} not a whitelisted stable — refuse");
-    }
-    let unit = 10f64.powi(decimals as i32);
-    let amount_in = U256::from((req.signal.input_amount * unit).max(0.0) as u128);
-    let min_profit = U256::from((req.signal.min_profit_usd * unit).max(0.0) as u128);
-    if amount_in.is_zero() {
-        anyhow::bail!("zero amountIn");
-    }
-
-    // Flash funding: walk the provider list cheapest-first (Balancer V2 /
-    // Morpho = 0% premium, Aave = 0.05%) and use the first that verifies
-    // on-chain. Every address is a candidate until the probe passes.
+    // USD→token conversion: verified stablecoins price at 1. Non-stable
+    // inputs (WETH/BNB-class profit routes) get a LIVE on-chain quote
+    // against a verified stable inside the route's own pools — still
+    // fail-closed when no quote exists (GAP-22; AGENTS.md §9/§13).
+    // Phase-1 batch — one aggregate3 carries decimals(token_in) plus
+    // every static flash-provider probe (cheapest-first order preserved
+    // in the metadata). Was: 1 + N sequential eth_call RTTs.
     let providers = flash_providers(chain);
     if providers.is_empty() {
         anyhow::bail!("no flash provider for {}", chain.name());
     }
-    let mut chosen: Option<(Address, u64)> = None;
+    let mut calls: Vec<(Address, Bytes)> = Vec::new();
+    let mut probe_meta: Vec<(Address, u64)> = Vec::new();
     for (addr_str, kind) in providers {
-        let addr: Address = match addr_str.parse() {
-            Ok(a) => a,
-            Err(_) => continue,
+        let (Ok(addr), Some(probe)) = (addr_str.parse::<Address>(), provider_probe(*kind))
+        else {
+            continue;
         };
-        if verify_provider(&rpc, addr, *kind).await {
-            chosen = Some((addr, *kind));
-            break;
-        }
+        calls.push((addr, probe));
+        probe_meta.push((addr, *kind));
     }
+    calls.push((
+        token_in,
+        Bytes::from(keccak256(b"decimals()")[..4].to_vec()),
+    ));
+    let batch = batch_calls(&rpcs, &calls).await;
+    let chosen: Option<(Address, u64)> = probe_meta
+        .iter()
+        .zip(batch.iter())
+        .find_map(|((addr, kind), r)| probe_verified(r.as_ref()).then_some((*addr, *kind)));
+    let decimals = batch
+        .last()
+        .and_then(|r| r.as_ref())
+        .and_then(|b| b.last().copied())
+        .filter(|d| *d > 0 && *d <= 36)
+        .ok_or_else(|| anyhow::anyhow!("decimals() unreadable for {token_in:?}"))?;
+
+    let unit = 10f64.powi(decimals as i32);
+    let amount_in = U256::from((req.signal.input_amount * unit).max(0.0) as u128);
+    let min_profit = if stable_addr(chain, token_in) {
+        U256::from((req.signal.min_profit_usd * unit).max(0.0) as u128)
+    } else {
+        match quote_token_usd(&rpcs, chain, &req.signal.route, token_in).await {
+            Some(usd) if usd > 0.0 && usd.is_finite() => {
+                U256::from((req.signal.min_profit_usd / usd * unit).max(0.0) as u128)
+            }
+            _ => anyhow::bail!(
+                "token_in {token_in:?} non-stable and no on-chain USD quote in route — refuse"
+            ),
+        }
+    };
+    if amount_in.is_zero() {
+        anyhow::bail!("zero amountIn");
+    }
+
+    // Flash funding: the static list is already probed in the phase-1
+    // batch (Balancer V2 / Morpho = 0% premium, Aave = 0.05%). First
+    // verified candidate in cheapest-first order wins.
     let (pool_addr, kind) = match chosen {
         Some(pk) => pk,
         // GAP-5: static list exhausted → dynamic fallbacks. An
         // env-configured ERC-3156 lender first, then any verified V3
         // pool holding token_in (fee = its tier; the contract adds the
         // fee on top of minProfit so economics stay fail-safe).
-        None => erc3156_or_univ3_flash(&rpc, chain, token_in, amount_in)
+        None => erc3156_or_univ3_flash(&rpcs, chain, token_in, amount_in)
             .await?
             .ok_or_else(|| anyhow::anyhow!("no verified flash provider on {}", chain.name()))?,
     };
@@ -438,11 +685,11 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
     // revert data so bait forensics convicts the pool upstream.
     // Transport failure after a retry does not gate (on-chain minProfit
     // still bounds the risk); reverts always gate.
-    let kernel = pim.account_address(&rpc, signer.address()).await?;
+    let kernel = pim.account_address(&rpcs, signer.address()).await?;
     let mut gated = false;
     let mut transport_err: Option<String> = None;
     for _ in 0..2 {
-        match eth_call_from(&rpc, kernel, executor, Bytes::from(encoded.clone())).await {
+        match eth_call_from(&rpcs, kernel, executor, Bytes::from(encoded.clone())).await {
             Ok(_) => { gated = true; break; }
             // EVM-level failure — the real tx would fail identically.
             // Bail carrying the revert data so bait forensics convicts.
@@ -457,7 +704,7 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
     }
 
     let inner = aa::kernel_execute_calldata(executor, U256::ZERO, Bytes::from(encoded));
-    pim.sponsored_user_op(chain.name(), chain.chain_id(), &rpc, &signer, inner, false)
+    pim.sponsored_user_op(chain.name(), chain.chain_id(), &rpcs, &signer, inner, false)
         .await
 }
 

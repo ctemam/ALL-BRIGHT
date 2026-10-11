@@ -1,0 +1,10 @@
+{
+  "pools": {
+    "0x6b00325bc678e0fbcbd7d4be4eb0785408860176": {
+      "reason": "YetiSwap: K",
+      "reverts": 1,
+      "first_ms": 1791734416517,
+      "last_ms": 1791734416517
+    }
+  }
+}

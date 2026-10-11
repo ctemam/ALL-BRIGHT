@@ -184,6 +184,12 @@ pub struct OpportunitySignal {
     pub input_token: String,
     pub expected_profit_usd: f64,
     pub min_profit_usd: f64,
+    /// EV-class submission (GAP-37): positive-net candidate below the
+    /// standard floor, attempted only where revert cost ~0 (sponsored
+    /// path) and the simgate dry-run is the authority. Telemetry must
+    /// distinguish these from standard-floor submissions.
+    #[serde(default)]
+    pub ev_mode: bool,
     /// ABI-encoded AllbrightExecutor call, ready for submission.
     pub calldata: Option<String>,
     pub ts_ms: u64,
@@ -339,6 +345,15 @@ pub enum RejectReason {
     ExecutionUnavailable,
     StaleState,
     RiskRejected,
+    /// Route touches a pool convicted as bait (fake reserves → on-chain
+    /// revert). Emitted when a conviction lands between sim dispatch
+    /// and result — the in-flight candidate is dropped, never executed.
+    BaitPool,
+    /// Simulated output exceeds what the route's pools physically
+    /// hold — a reserve-bound violation proves the input state was
+    /// corrupt/incoherent (the nine-figure phantom class), so the
+    /// candidate is rejected as a math artifact, never executed.
+    MathArtifact,
 }
 
 /// Independent Opportunity Observatory record — a price discrepancy the
@@ -444,6 +459,20 @@ pub struct UniverseStats {
     pub ts_ms: u64,
 }
 
+/// Compact freshness heartbeat: pools re-verified UNCHANGED at a pin
+/// block during one shard scan. Replaces identical-state re-emission —
+/// consumers update "verified-at" block/ts stamps so staleness and
+/// coherence checks measure read-time truth, not last-change time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolHeartbeat {
+    pub chain: Chain,
+    /// Pin block the unchanged state was verified at.
+    pub block: u64,
+    pub ts_ms: u64,
+    /// Pool addresses confirmed unchanged this scan.
+    pub pools: Vec<String>,
+}
+
 /// The single envelope all processes speak.
 /// Lifecycle/operational marker — service boots, journal rollovers,
 /// config-level facts. Journaled for restart attribution and audit.
@@ -487,6 +516,8 @@ pub enum Event {
     RpcScan(crate::rpc_registry::RegistrySummary),
     /// Lifecycle/operational marker (boot, journal rotate, …).
     System(SystemEvent),
+    /// Verified-unchanged pool set for one scan (post-dedup freshness).
+    PoolHeartbeat(PoolHeartbeat),
 }
 
 pub fn now_ms() -> u64 {

@@ -1392,6 +1392,21 @@ BlockMachine, NodeFlare, SolidRPC), directory sources (QuickRPC ~2.5k
 networks, ChainIndex/ChainList), and community/decentralized providers.
 **No directory entry is trusted without independent live qualification.**
 
+**Tier doctrine (Commander directive 2026-10-11):** keyed private
+free-tier providers (`<PROVIDER>_API_KEY` → §36.9 expansion: Alchemy,
+Infura, dRPC, BlastAPI, Ankr, Chainstack, BlockPI, Nodit, Tenderly,
+NOWNodes, Moralis, OnFinality, NodeReal, Chainnodes, AllThatNode,
+Dwellir — 126 endpoint expansions when keys land) are the
+**primary** read/simulation path whenever keys are provisioned — keyed
+quota, WSS subscription support, `pendingTransactions`/`logs`/`eth_simulateV1`
+method availability, and observability public endpoints cannot offer.
+Shared anonymous public endpoints are demoted to the **fallback tier**:
+they backstop keyed capacity and feed the discovery funnel, but they
+MUST NOT carry the predictive/hot path while keyed capacity exists.
+Predictive strategies in particular require keyed WSS — public
+endpoints do not serve `pendingTransactions` feeds and degrade first
+under load (measured: >200ms P95 = <10% opportunity capture).
+
 ### 36.1 Independence, not count
 
 200 endpoints backed by one provider ≠ 200 independent resources. Track
@@ -2110,31 +2125,25 @@ Every agent must preserve this closed loop.
 
 ---
 
-## APPENDIX B — BLUEPRINT GAP REGISTER (audit 2026-10-10)
+## APPENDIX B — GAP REGISTER (superseded 2026-10-11)
 
-Gaps identified by comparing AllBright against the proactive-flash-loan
-reference blueprint (mempool ingestion → revm simulation → atomic
-bundling → on-chain execution → validator incentive). Each gap is
-tracked to closure; statuses update only on measured evidence.
+The legacy GAP-1..38 blueprint register has been **retired** to prevent
+dual numbering systems. The canonical gap register is now the **unified
+register in `HANDOFF.md` §7 (U1–U28)** — 3-round industry research
+(28 references), Before/After format, import-order agreed.
 
-| ID | Gap | Evidence | Economic cost | Closure plan |
-|---|---|---|---|---|
-| GAP-1 | No EVM-level simulation — math-only sim cannot see reverts | `allbright-simulation` = `amm.rs` math; no `revm` in workspace | 13,028 execs, 0 inclusions; `CamelotPair: K` bait class | EVM dry-run gate (`eth_call` of `execute()` pre-submission); revm backend roadmap |
-| GAP-2 | Shallow pool registry — depth-blind on base/avax | `pools.json` lacks aerodrome/uniswap-v3/pharaoh/pancake-v3 deep pools; no depth fields | Challenger counterfactuals cap at ~$0.03 net — dust-profit ceiling | Depth-aware `fetch_pools.py` re-run; on-chain verify; provenance kept |
-| GAP-3 | Block-cadence ingestion only | `evm_stream.rs`: `newHeads` + Multicall poll; no Swap-log subs, no pending tx | State staleness vs event-driven competitors | WSS `Swap`/`Sync`/`PoolSwap` log subscriptions → pool refresh |
-| GAP-4 | Flashbots submit is a stub | `relay.rs:319` returns literal `0xflashbots-pending` — no signed tx | Fake-hash landmine if triggered | Implement real `eth_sendBundle` (Eth only) or fail-closed |
-| GAP-5 | Dead flash capacity | Contract supports `UNIV3_FLASH`+`ERC3156`; `flash_providers()` never emits them | Two zero-fee providers unused | Add verified UniV3-flash/ERC-3156 candidates per chain |
+- Legacy register archived at `data/legacy_gap_register_2026-10-10.md`
+  (full GAP-1..38 tables + implementation-status history preserved).
+- Mapping: the unified table's `GAP` column ties U# rows to the legacy
+  IDs where one exists (GAP-33→U1, GAP-38→U2, GAP-25→U10, GAP-35→U14,
+  GAP-37→U20).
+- Code comments citing `GAP-##` are fix-provenance and refer to the
+  archive file, not live tracking.
+- New gaps enter the U-register only, with evidence and closure plan.
 
-**Applicability caveat:** blueprint phases 1/3/5 are Ethereum-mainnet
-shaped. Arbitrum and Base have no public mempool and no builder auction —
-the portable equivalents are Swap-event ingestion (GAP-3) and private
-submission where a verified relay exists. `block.coinbase` tipping is
-N/A on L2s; inclusion incentive on active chains runs through the
-Pimlico paymaster path.
-
-**Rule:** closing a gap means measured evidence of the capability in
-production, not merged code. Each closure re-runs the relevant
-blindness test (§28) and is journaled.
+**Rule (unchanged):** closing a gap means measured evidence of the
+capability in production, not merged code. Each closure re-runs the
+relevant blindness test (§28) and is journaled.
 
 ---
 
@@ -2242,3 +2251,64 @@ Binding rules:
   (`http://localhost:11434/v1`) — zero cost, zero data egress. External
   providers (Groq/OpenRouter/Gemini/GitHub Models) require explicit
   Commander configuration.
+
+## APPENDIX D — GAP-DISCOVERY AUDIT PROTOCOL (codified 2026-10-10)
+
+**Origin:** codified from the 13-round pipeline deep-dive that produced
+GAP-1..GAP-32. This is the mandatory repeatable method for discovering
+gaps in any module — run it, don't improvise it.
+
+### D.1 The six-step audit
+
+Run per crate/module, in order. Every step is journaled to the gap
+register (Appendix B) or explicitly marked VERIFIED-CLEAN.
+
+```
+1. ACTIVITY MAP     — enumerate every action the module performs
+                      end-to-end; a gap is a missing or wrong STEP,
+                      not a code smell. Read the trace, not the file.
+2. CLAIM INVENTORY  — every status/number/state produced → what
+                      measured evidence generates it? An asserted-
+                      but-unmeasured value is a gap (expected-as-
+                      realized, included-as-final, ledger-with-no-
+                      writer).
+3. WIRING MATRIX    — producer ↔ consumer pairs for every event,
+                      API, and file. Zero consumers or zero producers
+                      = DUMB dead wiring (§32). Never promote
+                      UNVERIFIED → OPERATIONAL silently.
+4. FAILURE SWEEP    — per activity: what if it is slow / stale /
+                      wrong / reorged / attacked / flooded / silent?
+                      Every unanswered mode is a gap.
+5. BOUNDARY AUDIT   — every external call (RPC, bundler, API, feed):
+                      capability-detect + fallback + error class +
+                      secret-hygiene (does the error path leak URLs/
+                      keys into logs?).
+6. REFERENCE DIFF   — against the industry implementation: which
+                      control do they have that we lack? Prebuilt
+                      wheels preferred over invention (standing rule).
+```
+
+### D.2 Two-layer execution
+
+- **Machine layer (audit ring):** dead-wired events, KPI lineage
+  breaks, silent-zero feeds, unmeasured dashboard claims are
+  enumerable — they belong to automated checks (sentinel / dashboard
+  compliance), never to an agent's memory.
+- **Judgment layer (periodic agent audit):** spec-vs-implementation
+  byte checks, reference diffs, failure sweeps — run on cadence,
+  results filed to Appendix B with evidence, cost, closure plan.
+
+### D.3 Regression memory
+
+The journaled failure corpus is a permanent test suite. Every gap
+fix MUST replay the recorded failures it addresses (e.g. the 13,028
+`Pair:K` calldatas through the new sim gate). A fix that cannot
+reproduce its target failure class is UNVERIFIED.
+
+### D.4 Rules
+
+- No gap closes on merged code — only on measured production evidence
+  + the relevant §28 blindness test rerun.
+- A discovered gap is reported, never silently patched around.
+- Fail-safe direction always wins: when a check can't run, the
+  system fails toward the safer state and says so loudly.

@@ -1,0 +1,384 @@
+{
+ "audit": "2026-10-10",
+ "rounds": 14,
+ "rule": "no invented wheels \u00e2\u20ac\u201d industry-proven replacements only",
+ "recommendations": [
+  {
+   "gap": "GAP-6",
+   "phase": "A",
+   "tool": "eth_simulateV1 + revm/AlloyDB",
+   "why": "EVM-faithful sim gate kills the 100% Pair:K revert class",
+   "maturity": "standard (EIP execution-apis #484; alloy types)"
+  },
+  {
+   "gap": "GAP-7",
+   "phase": "A",
+   "tool": "Balancer V2 0% flash loans / FlashRouter pattern",
+   "why": "~0.05% margin per trade",
+   "maturity": "production"
+  },
+  {
+   "gap": "GAP-8",
+   "phase": "B",
+   "tool": "Turnkey agentic wallets",
+   "why": "enclave keys + policy scope replaces hot EOA",
+   "maturity": "production (2026 agentic stack)"
+  },
+  {
+   "gap": "GAP-9",
+   "phase": "B",
+   "tool": "forge script + CreateX CREATE2",
+   "why": "deterministic verified multi-chain deploys",
+   "maturity": "standard"
+  },
+  {
+   "gap": "GAP-10",
+   "phase": "C",
+   "tool": "alloy FallbackLayer/ThrottleLayer + chainlist.org/rpcs.json",
+   "why": "ranked failover + canonical endpoint feed fixes arb 0-qualified",
+   "maturity": "production"
+  },
+  {
+   "gap": "GAP-11",
+   "phase": "C",
+   "tool": "ccxt-rust",
+   "why": "multi-CEX Vector A",
+   "maturity": "vet (0.1.x, Dec 2025)"
+  },
+  {
+   "gap": "GAP-12",
+   "phase": "C",
+   "tool": "GoPlus Security API",
+   "why": "free token-risk pre-screen all 10 chains",
+   "maturity": "production API; crate unofficial"
+  },
+  {
+   "gap": "GAP-14",
+   "phase": "C",
+   "tool": "EigenPhi MEVScan leaderboard",
+   "why": "live peer PnL for Benchmark",
+   "maturity": "production API"
+  },
+  {
+   "gap": "GAP-15",
+   "phase": "C",
+   "tool": "NSSM + OpenZeppelin Monitor (OSS)",
+   "why": "real services + external alerts; PM2 masking removed",
+   "maturity": "NSSM stable; OZ Monitor OSS alpha"
+  },
+  {
+   "gap": "GAP-16",
+   "phase": "C",
+   "tool": "figment/dotenvy",
+   "why": "layered validated config",
+   "maturity": "standard"
+  },
+  {
+   "gap": "GAP-17",
+   "phase": "B",
+   "tool": "tower_resilience_adaptive (AIMD/Vegas/Gradient2) / throttle-net AdaptiveLimiter",
+   "why": "closed-loop adaptive concurrency \u00e2\u20ac\u201d fleet/worker sizing reacts to measured capacity instead of static constants; prevents PM2 kill-loop class and blind-spot under-provisioning",
+   "maturity": "production (tower-resilience ecosystem; throttle-net 1.0 hardened \u00e2\u20ac\u201d loom+fuzz)"
+  },
+  {
+   "gap": "GAP-18",
+   "phase": "A",
+   "tool": "alloy rpc::types::eth::erc4337 (UserOperation + eth_getUserOperationReceipt)",
+   "why": "standard 4337 receipt replaces vendor-specific pimlico_getUserOperationStatus; already in dep tree \u2014 zero new deps",
+   "maturity": "standard (ERC-4337 RPC spec)"
+  },
+  {
+   "gap": "GAP-19",
+   "phase": "A",
+   "tool": "receipt-log accounting \u2014 decode contract Executed/Swept events + balanceOf delta (mev-inspect convention)",
+   "why": "settled_profit currently credits EXPECTED profit \u2014 realized must be measured on-chain",
+   "maturity": "production convention (flashbots mev-inspect)"
+  },
+  {
+   "gap": "GAP-20",
+   "phase": "B",
+   "tool": "Safe multisig + Zodiac Roles Modifier v2 as profit destination; per-chain sweep incl. ERC-20 via contract sweep(token,to)",
+   "why": "scoped, allowance-metered, revocable treasury \u2014 zodiac docs literally cover permissioning AI-agent keys",
+   "maturity": "production (ENS DAO, Balancer, kpk)"
+  },
+  {
+   "gap": "GAP-21",
+   "phase": "A",
+   "tool": "sweep-receipt tracking + append-only transfers.jsonl writer on Swept event",
+   "why": "last_swept advances pre-confirmation; ledger has no writer \u2014 dead wiring",
+   "maturity": "n/a (wiring repair)"
+  },
+  {
+   "gap": "GAP-18",
+   "phase": "A",
+   "tool": "alloy_provider::ext::Erc4337Api \u2014 send_user_operation/get_user_operation_receipt/estimate_user_operation_gas + PackedUserOperation (EP v0.7 matches pack_userop layout exactly)",
+   "why": "standard typed 4337 client replaces hand-rolled JSON plumbing AND fixes single-bundler evidence; receipt carries actualGasUsed+logs+success \u2014 the settlement-truth source",
+   "maturity": "merged upstream (alloy PR #1176), in-tree"
+  },
+  {
+   "gap": "GAP-22",
+   "phase": "B",
+   "tool": "on-chain profit-token pricing \u2014 route-token quote vs chain stable set; DefiLlama coins.llama.fi cross-check",
+   "why": "Executed event reports token amounts; USD valuation needed for ledger + KPI",
+   "maturity": "production API"
+  },
+  {
+   "gap": "GAP-3",
+   "phase": "A",
+   "tool": "48Club Puissant auction feed (newPendingAuctions/WithState + eth_sendBundle backrunTarget) \u2014 prebuilt BSC backrun infra; bloXroute pendingTxs/arbOnlyMEV alt; plain newPendingTransactions on qualified BSC WSS as floor",
+   "why": "BSC has a public mempool \u2014 true P05 trigger exists today unexploited; feed delivers pre-simulated state changes (no mempool parsing needed)",
+   "maturity": "production (48Club SP-gated; bloXroute paid tier)"
+  },
+  {
+   "gap": "GAP-23",
+   "phase": "B",
+   "tool": "opentelemetry + opentelemetry-otlp 0.31 (OTLP\u2192Prometheus) + tracing-opentelemetry bridge",
+   "why": "existing tracing spans bridge to industry metrics/alerting without replacing journal; opentelemetry-prometheus crate deprecated+CVE \u2014 do NOT use",
+   "maturity": "OTel metrics stable; OTLP exporter RC"
+  },
+  {
+   "gap": "GAP-24",
+   "phase": "B",
+   "tool": "alloy Eip1559Estimator / provider fillers + eth_maxPriorityFeePerGas cross-check",
+   "why": "pimlico_getUserOperationGasPrice is vendor-specific; challenger raw eth_gasPrice misestimates on 1559 chains",
+   "maturity": "in-tree (alloy)"
+  },
+  {
+   "gap": "GAP-1",
+   "phase": "A",
+   "tool": "eth_simulateV1 \u2014 confirmed live on ALL 5 active chains (Nodit Aug-2026: arb/bnb/base/op/poly; Base public Flashblocks endpoint adds pre-confirmed-state sim); alloy node_bindings Anvil fork-harness replays journaled Pair:K calldata as blindness test",
+   "why": "the 13,028-revert class is now testable offline AND gateable online \u2014 closure is measurable",
+   "maturity": "standard (Geth 1.14.9+/Nethermind 1.28+)"
+  },
+  {
+   "gap": "GAP-3",
+   "phase": "A",
+   "tool": "48Club Puissant eth_sendBundle \u2014 submission rail as well as feed: BSC exec can bypass public AA mempool for backrun bundles",
+   "why": "Puissant is dual-purpose: feed (newPendingAuctions) + private submission \u2014 alternate exec rail on BSC, reducing single-vendor Pimlico SPOF on our #1 chain",
+   "maturity": "production"
+  },
+  {
+   "gap": "GAP-25",
+   "phase": "B",
+   "tool": "dex-optimizer pattern \u2014 CSR pool graph + log-space Bellman-Ford (reference implementation, not dependency)",
+   "why": "O(n^3) nested loops cap at 3 hops and scale badly; >3-hop cycles structurally invisible",
+   "maturity": "reference"
+  },
+  {
+   "gap": "GAP-26",
+   "phase": "A",
+   "tool": "finalized block tag \u2014 eth_getBlockByNumber(finalized) gate before settlement credit; BSC ~0.65s deterministic finality (BEP-648, Osaka Apr-2026), Polygon milestones ~2-5s, Arb/Base safe-tag, Avax accepted-tag/depth",
+   "why": "the 15-confirmation era is over on BSC/Polygon \u2014 deterministic tag is cheaper AND stronger; kills phantom-settlement on reorg",
+   "maturity": "standard JSON-RPC on both chains"
+  },
+  {
+   "gap": "GAP-27",
+   "phase": "B",
+   "tool": "reqwest error-URL sanitization (map_err dropping err.url()) \u2014 no new dep",
+   "why": "Pimlico key rides in URL per their API; reqwest Error::to_string embeds the URL \u2192 apikey lands in plaintext logs",
+   "maturity": "trivial"
+  },
+  {
+   "gap": "GAP-8",
+   "phase": "B",
+   "tool": "ZeroDev Kernel v3 Permissions (session keys) \u2014 composable signer+policies+action enforced ON-CHAIN at account layer; call-policy pinned to executor functions, gas policy, rate-limit policy",
+   "why": "defense-in-depth under Turnkey: even a fully compromised key can only call execute/sweep \u2014 compromise stays affordable (same threat model as Zodiac AI-agent docs)",
+   "maturity": "production (Kernel v3 / EP 0.7 \u2014 our EP version)"
+  },
+  {
+   "gap": "GAP-28",
+   "phase": "C",
+   "tool": "LI.FI Intents/Composer REST API (reqwest-callable; TS SDK irrelevant) \u2014 solver-network bridging, exact-output stables, /status tracking",
+   "why": "5-chain profit silos have no consolidation rail; 2026 standard for programmatic treasury movement",
+   "maturity": "production (1000+ integrations)"
+  },
+  {
+   "gap": "GAP-22",
+   "phase": "A",
+   "tool": "on-chain quote-of-input-token vs stable set \u2014 same call solves minProfit conversion AND settlement valuation; unlocks WETH/BNB-settled routes (dominant L2 profit class)",
+   "why": "stable_addr() refuse-gate means the engine can only execute stable-denominated routes \u2014 coverage-critical, not just accounting",
+   "maturity": "uses existing pool state"
+  },
+  {
+   "gap": "GAP-29",
+   "phase": "C",
+   "tool": "publisher-side outbox spool (fjall/sled, embedded Rust KV) + replay-on-reconnect; NATS JetStream if bus ever goes multi-host",
+   "why": "broadcast+terminate-on-lag drops ExecRequests silently \u2014 qualified profit evaporates under load; re-detection bounds but does not guarantee",
+   "maturity": "embedded crates stable"
+  },
+  {
+   "gap": "GAP-30",
+   "phase": "B",
+   "tool": "48Club Puissant eth_sendBundle private submission for BSC",
+   "why": "handleOps calldata is public in BSC mempool pre-inclusion \u2014 verbatim route leak = copy-cat theft; L2s single-sequencer = no public mempool window",
+   "maturity": "production"
+  },
+  {
+   "gap": "GAP-31",
+   "phase": "A",
+   "tool": "in-process pending-nonce allocator or EP v0.7 parallel nonce keys",
+   "why": "two ExecRequests inside one inclusion window share a nonce \u2014 deterministic AA10-class rejection of the second",
+   "maturity": "EP spec supports keyed nonce sequences"
+  },
+  {
+   "gap": "GAP-32",
+   "phase": "B",
+   "tool": "bounded signal_age_ms check at executor entry (\u22642x block cadence), stale signals classified Rejected not dropped",
+   "why": "no TTL exists today \u2014 dead signals burn sponsored ops",
+   "maturity": "n/a"
+  },
+  {
+   "gap": "GAP-33",
+   "phase": "A",
+   "tool": "pending-tx ingestion: newPendingTransactions (BSC/Poly/Avax) or Puissant newPendingAuctions(WithState) or bloXroute pendingTxs -> decode -> apply-to-state -> backrun sim",
+   "why": "all 199,398 detections were post-settlement residuals; no pre-confirmation trigger exists",
+   "sources": [
+    "docs.bloxroute.com/bsc/streams",
+    "docs.48.club/puissant-builder",
+    "chainscorelabs.com"
+   ],
+   "maturity": "n/a"
+  },
+  {
+   "gap": "GAP-34",
+   "phase": "A",
+   "tool": "scout WSS rung: accept wss:// in discovery + derive from live HTTPS + keyed-provider WS forms + eth_subscribe newHeads probe",
+   "why": "0 wss endpoints in registry; caps.websocket/transport never populated \u2014 event layer is dead code",
+   "sources": [
+    "rpc_registry.json audit",
+    "chainlist.org/rpcs.json"
+   ],
+   "maturity": "n/a"
+  },
+  {
+   "gap": "GAP-35",
+   "phase": "B",
+   "tool": "BSC: Puissant eth_sendBundle or bloXroute blxr_submit_bundle (48club/blockrazor/jetbldr/nodereal); L2: atomic tx direct to sequencer; UserOp -> sweep path",
+   "why": "UserOp->public bundler mempool is the slowest rail class on every chain",
+   "sources": [
+    "docs.bloxroute.com/bsc/submit-bundles",
+    "docs.48.club",
+    "ai-frb.com"
+   ],
+   "maturity": "n/a"
+  },
+  {
+   "gap": "GAP-36",
+   "phase": "A",
+   "tool": "detected = candidate above friction band (fee+gas+priority) on evaluated state; report executable-universe size as headline",
+   "why": "dust residuals counted as opportunities flattered total blindness",
+   "sources": [
+    "LIPIcs AFT-2025 searcher profitability",
+    "quantmemo.com"
+   ],
+   "maturity": "n/a"
+  },
+  {
+   "gap": "GAP-37",
+   "phase": "B",
+   "tool": "EV submission mode per chain: P(success)*net - revert_cost > 0 with revert-cost cap",
+   "why": "L2 revert costs cents; documented top bot fires 1984 attempts/8 profitable \u2014 hard gate refuses the winnable niche",
+   "sources": [
+    "devilsintheopcodes.substack.com",
+    "ashiq.co.za"
+   ],
+   "maturity": "n/a"
+  },
+  {
+   "gap": "GAP-38",
+   "phase": "A",
+   "tool": "factory PairCreated/PoolCreated enumeration per chain -> on-chain verify -> liquidity-pruned graph (feeds GAP-25)",
+   "why": "6-61 tokens/chain curated slice vs full-factory enumeration in reference engines",
+   "sources": [
+    "github Aether-V1",
+    "github HopScout",
+    "pools.json audit"
+   ],
+   "maturity": "n/a"
+  }
+ ],
+ "rejected": [
+  "Hummingbot (Python, no flash/cyclic)",
+  "reth-mev (own node required)",
+  "Uniswap SOR (GPL-3 + TS)",
+  "permissionless.js/Alto self-host (TS)",
+  "Timeboost participation (3-entity capture; not a lane we can win)",
+  "Tenderly hot-path sim (rate-limited; diagnostics only)",
+  {
+   "tool": "Alchemy aa-sdk / permissionless.js",
+   "why": "TypeScript/viem \u2014 violates Rust-first doctrine; Pimlico hosted already covers the function"
+  },
+  {
+   "tool": "silius (Rust bundler)",
+   "why": "Apache-2.0 Rust bundler but last release alpha May-2024, requires debug_traceCall; Rundler preferred \u2014 silius primitives watchlist only"
+  }
+ ],
+ "watchlist": [
+  "sizing-router (Sept 2026, low adoption \u00e2\u20ac\u201d soak)",
+  "dex-optimizer (CSR+Bellman-Ford pattern ref)",
+  "OZ Relayer (alpha\u00e2\u2020\u2019stable)",
+  "Rundler (Rust bundler fallback)",
+  {
+   "tool": "Envio HyperIndex",
+   "why": "fastest independently-benchmarked EVM indexer (HyperSync ~2000x RPC); multichain + reorg-safe \u2014 candidate for Challenger/historical research feeds, not hot path"
+  },
+  {
+   "tool": "silius primitives",
+   "why": "Rust 4337 crates reusable but repo alpha since May-2024 \u2014 reuse types only if needed"
+  }
+ ],
+ "notes": [
+  "R6 byte-level: entire execution path is AA-only (relay::submit has no EOA branch) \u2014 pimlico is SPOF; kernel_execute_calldata verified ERC-7579 mode-0 correct; user_op_hash v0.7 packing verified spec-shaped",
+  "R7: zero eth_subscribe in codebase (byte-verified); BSC public mempool + 48Club Puissant auction feed = prebuilt P05 backrun rail; opentelemetry-prometheus deprecated \u2014 OTLP is the path",
+  "R8: solver is brute-force nested-loop (GAP-25); contract deadline absent but atomic routes make it moot; eth_simulateV1 coverage = 5/5 active chains via Nodit, Base public endpoint free",
+  "R9: sim pipeline verified wired (solver->3102->SimResult); dedup exists (moved HashSets); BSC/Polygon deterministic finalized-tag supersedes confirmation counting; pimlico apikey leaks via reqwest error URLs",
+  "R10: contract per-leg balanceOf accounting verified FoT-safe; sim+solver caches share ordered PoolUpdate feed (coherent); Kernel v3 session keys = on-chain scoped signing; LI.FI Intents = treasury consolidation rail",
+  "R11: relay.rs:379 stable_addr gate = execution coverage cap \u2014 all non-stable-input routes refused; contract security posture at parity+ vs 4 reference executors",
+  "R12: recorder writes unbuffered-per-event (OK); pools.json boot-load only (restart to pick registry); bus is broadcast+terminate-on-lag \u2014 ExecRequest loss mode confirmed; BSC handleOps mempool leak real, L2s clean"
+ ],
+ "contract_benchmark": {
+  "compared_against": [
+   "flasharb FlashArbExecutor",
+   "arb-wave FlashLoanArbExecutor",
+   "paco0x FlashBot",
+   "AlphaRouting (private core, public interface)"
+  ],
+  "verdict": "parity-or-better: onlyOwner, nonReentrant, pendingLender callback auth (FlashBot permissionedPairAddress equivalent), pause, minProfit assert, FoT-safe balanceOf accounting \u2014 arb-wave token allowlist the only control absent",
+  "evidence": "contracts/src/AllbrightExecutor.sol vs 4 reference implementations"
+ },
+ "activity_trace": {
+  "note": "byte-level end-to-end trace, round 13",
+  "verified_clean": [
+   "pool registry boot-load",
+   "multicall state reads",
+   "PoolUpdate fan-out ordered",
+   "sim/solver shared feed",
+   "ternary sizing",
+   "sim eval",
+   "USD pricing triple-fallback (cex\u2192pools\u2192reject)",
+   "net gate deducts gas (est x gasPrice x native_usd)",
+   "executor_addr empty = fail-closed",
+   "calldata encode",
+   "provider verify on-chain",
+   "eth_call dry-run gate",
+   "v0.7 userop hash",
+   "kill-switch per-request"
+  ],
+  "gaps_found": [
+   "GAP-31 nonce race",
+   "GAP-32 no freshness TTL",
+   "paymaster sponsorship cost not in economics (solver uses chain-gas proxy \u2014 conservative)"
+  ]
+ },
+ "detection_audit": {
+  "round": 14,
+  "finding": "199,398 detections were sub-friction settled-state residuals; system has no pre-confirmation or confirmed-event trigger on any chain; 0 qualified WSS; submission rail is slowest class",
+  "winnable_niches": [
+   "L2 atomic backrun/cyclic on confirmed state (FCFS)",
+   "BSC backruns via Puissant/bloXroute pending feeds",
+   "long-tail/new-pool detection"
+  ],
+  "competitive_reality": "CEX-DEX arb trident: Wintermute/SCP/Kayle ~73% of extracted value, ~90% by Q1 2025 (AFT-2025)"
+ },
+ "superseded_by": "HANDOFF.md \u00a77 unified gap register U1\u2013U28 (2026-10-11); GAP-## IDs archived at data/legacy_gap_register_2026-10-10.md"
+}

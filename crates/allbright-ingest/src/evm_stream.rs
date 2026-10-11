@@ -8,16 +8,17 @@
 //! descriptor; mismatches drop the pool with a warning (addresses are
 //! config, not trust).
 
+use alloy::eips::BlockId;
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::sol_types::SolCall;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 use allbright_core::{
     chain::{self, PoolDescriptor},
     config::Config,
-    events::{now_ms, Chain, DexKind, Event, PoolState, Token},
+    events::{now_ms, Chain, DexKind, Event, HealAction, PoolState, Token},
     lineage::{Component, FailureClass, FailureEvent},
     multicall::{multicall3_addr, IMulticall3, IPairCalls, IV3PoolCalls},
 };
@@ -77,33 +78,25 @@ pub async fn run(cfg: Config, tx: mpsc::Sender<Event>) {
         let wss2 = wss.clone();
         // RPC-capacity scaling (AGENTS §37): shard the pool set across
         // parallel workers, each starting on a different endpoint of the
-        // augmented list. More endpoints in concurrent use → higher
-        // aggregate refresh rate, isolated rate-limit blast radius, and
-        // no single endpoint carrying a chain's whole universe.
-        let shards = (rpcs.len() / 4).clamp(1, 3);
-        for shard in 0..shards {
-            let shard_pools: Vec<PoolDescriptor> = pools
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| i % shards == shard)
-                .map(|(_, p)| p.clone())
-                .collect();
-            if shard_pools.is_empty() {
-                break;
-            }
-            // Rotate each shard's endpoint view so workers don't pile
-            // onto endpoint 0 simultaneously.
-            let mut shard_rpcs = rpcs.clone();
-            shard_rpcs.rotate_left(shard % rpcs.len().max(1));
-            let env_pool_s = env_pool.clone();
-            let tx_s = tx.clone();
-            let wss_s = wss.clone();
-            handles.push(tokio::spawn(async move {
-                chain_loop(chain, env_pool_s, shard_rpcs, shard_pools, interval, tx_s, wss_s).await;
-            }));
-        }
-        tracing::info!(chain = %chain.name(), shards, endpoints = rpcs.len(),
-            pools = pools.len(), "collector shards spawned");
+        // augmented list. GAP-17: a supervisor owns the shard set —
+        // endpoint promotions/demotions in the registry rescale workers
+        // at runtime instead of pinning the boot-time count forever.
+        // Cross-shard coherence cell (arb.coherence fix): one shared head
+        // per chain. Every shard merges the head it observes and pins its
+        // aggregate3 to the max seen — all shards read the same block
+        // instead of whatever block each endpoint happened to be on.
+        let head = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let env_pool_s = env_pool.clone();
+        let pools_s = pools.clone();
+        let rpcs_s = rpcs.clone();
+        let tx_s = tx.clone();
+        let wss_s = wss.clone();
+        let head_s = head.clone();
+        handles.push(tokio::spawn(async move {
+            shard_supervisor(chain, env_pool_s, rpcs_s, pools_s, interval, tx_s, wss_s, head_s).await;
+        }));
+        tracing::info!(chain = %chain.name(), endpoints = rpcs.len(),
+            pools = pools.len(), "collector shard supervisor spawned");
         handles.push(tokio::spawn(async move {
             discovery_loop(chain, rpcs2, factories, known, tx2, wss2).await;
         }));
@@ -117,7 +110,7 @@ pub async fn run(cfg: Config, tx: mpsc::Sender<Event>) {
         let tx3 = tx.clone();
         let wss3 = cfg.wss_urls.get(chain_id).cloned();
         handles.push(tokio::spawn(async move {
-            swap_watch_loop(chain, rpcs3, pools3, tx3, wss3).await;
+            swap_watch_loop(chain, rpcs3, pools3, tx3, wss3, head).await;
         }));
     }
 
@@ -186,6 +179,118 @@ fn augmented_endpoints(chain: Chain, env_pool: &[String]) -> Vec<String> {
     out
 }
 
+/// GAP-17 — shard supervisor: recomputes the desired shard count from
+/// a FRESH registry read every 120s (the scout promotes/demotes
+/// endpoints while collectors run). Rescales require two consecutive
+/// matching desired counts (hysteresis — no thrash on a single noisy
+/// sweep). A rescale respawns the shard set under the new modulo
+/// partition and is journaled as a `Heal` action — never silent.
+/// Dead workers are detected and respawned on the same tick.
+async fn shard_supervisor(
+    chain: Chain,
+    env_pool: Vec<String>,
+    rpcs: Vec<String>,
+    pools: Vec<PoolDescriptor>,
+    interval: Duration,
+    tx: mpsc::Sender<Event>,
+    wss: Option<String>,
+    head: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) {
+    const RESCALE_TICK: Duration = Duration::from_secs(120);
+    const MAX_SHARDS: usize = 3;
+    let mut rpcs = rpcs;
+    let mut workers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    let mut current = 0usize;
+    let mut pending: Option<usize> = None;
+    let mut streak = 0u32;
+
+    loop {
+        let fresh = augmented_endpoints(chain, &env_pool);
+        if fresh != rpcs {
+            rpcs = fresh;
+        }
+        // Desired parallelism: ~1 worker per 4 endpoints, bounded by
+        // MAX_SHARDS and by the pool count (empty shards are useless).
+        let desired = (rpcs.len() / 4)
+            .clamp(1, MAX_SHARDS)
+            .min(pools.len().max(1));
+
+        if desired == current {
+            pending = None;
+            streak = 0;
+        } else {
+            if pending == Some(desired) {
+                streak += 1;
+            } else {
+                pending = Some(desired);
+                streak = 1;
+            }
+            // Cold start scales immediately; rescales need 2 ticks.
+            if workers.is_empty() || streak >= 2 {
+                for w in &workers {
+                    w.abort();
+                }
+                workers.clear();
+                for shard in 0..desired {
+                    let shard_pools: Vec<PoolDescriptor> = pools
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| i % desired == shard)
+                        .map(|(_, p)| p.clone())
+                        .collect();
+                    if shard_pools.is_empty() {
+                        continue;
+                    }
+                    // Rotate each shard's endpoint view so workers don't
+                    // pile onto endpoint 0 simultaneously.
+                    let mut shard_rpcs = rpcs.clone();
+                    let n_rpc = shard_rpcs.len().max(1);
+                    shard_rpcs.rotate_left(shard % n_rpc);
+                    let env_s = env_pool.clone();
+                    let tx_s = tx.clone();
+                    let wss_s = wss.clone();
+                    let head_w = head.clone();
+                    workers.push(tokio::spawn(async move {
+                        chain_loop(chain, env_s, shard_rpcs, shard_pools, interval, tx_s, wss_s, head_w)
+                            .await;
+                    }));
+                }
+                if current != 0 && !workers.is_empty() {
+                    let _ = tx
+                        .send(Event::Heal(HealAction {
+                            target: "allbright-ingest".into(),
+                            action: "shard_rescale".into(),
+                            reason: format!(
+                                "{}: shards {}→{} after registry reread",
+                                chain.name(),
+                                current,
+                                workers.len()
+                            ),
+                            success: true,
+                            restarts_in_window: 0,
+                            ts_ms: now_ms(),
+                        }))
+                        .await;
+                }
+                tracing::info!(chain = %chain.name(), shards = workers.len(),
+                    endpoints = rpcs.len(), "shard set (re)scaled");
+                current = workers.len();
+                pending = None;
+                streak = 0;
+            }
+        }
+
+        // Dead-worker detection: a finished chain_loop is reaped here;
+        // if every shard died, current drops to 0 and the next tick
+        // cold-starts the set again.
+        workers.retain(|w| !w.is_finished());
+        if workers.is_empty() {
+            current = 0;
+        }
+        tokio::time::sleep(RESCALE_TICK).await;
+    }
+}
+
 async fn chain_loop(
     chain: Chain,
     env_pool: Vec<String>,
@@ -194,6 +299,7 @@ async fn chain_loop(
     interval: Duration,
     tx: mpsc::Sender<Event>,
     wss: Option<String>,
+    head: std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) {
     let mut ep = 0usize;
     let mut ep_fails = 0u32;
@@ -202,6 +308,8 @@ async fn chain_loop(
     // Pools that failed verification are quarantined, not retried forever.
     let mut dead: HashSet<String> = HashSet::new();
     let mut verified: HashSet<String> = HashSet::new();
+    // Material-change dedup: pool → last emitted state fingerprint.
+    let mut last_seen: HashMap<String, [u64; 4]> = HashMap::new();
 
     // Prefer block-driven refresh: subscribe to newHeads over WSS (the
     // configured <CHAIN>_WSS_URL, else derive from the HTTP endpoint —
@@ -285,7 +393,14 @@ async fn chain_loop(
         if !do_refresh {
             continue;
         }
-        match refresh(&provider, &pools, &mut dead, &mut verified, chain, &tx).await {
+        let pin = match provider.get_block_number().await {
+            Ok(own) => {
+                let prev = head.fetch_max(own, std::sync::atomic::Ordering::Relaxed);
+                prev.max(own)
+            }
+            Err(_) => head.load(std::sync::atomic::Ordering::Relaxed),
+        };
+        match refresh(&provider, &pools, &mut dead, &mut verified, &mut last_seen, chain, &tx, pin).await {
             Ok(()) => ep_fails = 0,
             Err(msg) => {
                 // Silent-blindness fix: a failed state pull is a classified
@@ -398,7 +513,14 @@ async fn discovery_loop(
     let mut ep = 0usize;
     let mut http =
         ProviderBuilder::new().connect_http(rpcs[ep].parse().expect("rpc url"));
-    let wss_url = wss.unwrap_or_else(|| rpcs[0].replacen("https://", "wss://", 1));
+    let wss_cands = wss_candidates(wss, &rpcs);
+    if wss_cands.is_empty() {
+        fail(&tx, FailureClass::RpcMethodUnavailable, "p06.factory.no_wss", chain,
+            "no WS-capable endpoint configured or derivable — discovery off".into())
+            .await;
+        return;
+    }
+    let mut wss_idx = 0usize;
 
     let sigs = factory_sigs().to_vec();
     // Exponential backoff on WSS failure — a chain without WS capability
@@ -406,10 +528,16 @@ async fn discovery_loop(
     // not a spam stream).
     let mut backoff = Duration::from_secs(10);
 
+    // GAP-12 — token-risk gate (GoPlus): on-chain token0/token1 match is
+    // necessary but not sufficient; a honeypot/taxed/mintable token is
+    // never promoted to the verified tier. Verdicts are cached (6h
+    // assessed / 60s unverified) so discovery doesn't hammer the API.
+    let risk = allbright_core::token_risk::TokenRiskClient::new();
+
     let mut seen = known;
     loop {
         let ws = match ProviderBuilder::new()
-            .connect_ws(alloy::providers::WsConnect::new(wss_url.as_str()))
+            .connect_ws(alloy::providers::WsConnect::new(wss_cands[wss_idx].as_str()))
             .await
         {
             Ok(w) => w,
@@ -426,6 +554,7 @@ async fn discovery_loop(
                     FailureClass::RpcProviderFailure
                 };
                 fail(&tx, class, "p06.factory.connect", chain, msg).await;
+                wss_idx = (wss_idx + 1) % wss_cands.len();
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(300));
                 continue;
@@ -466,9 +595,12 @@ async fn discovery_loop(
             seen.insert(key);
 
             // Verify on-chain: pool's token0/token1 must match the event,
-            // and both tokens must resolve decimals().
+            // and both tokens must resolve decimals(). GAP-12 then gates
+            // promotion on the GoPlus risk verdict — fail-closed:
+            // Flagged AND Unverified both keep verified:false.
             let factory = log.address();
-            let verified = verify_discovered(&http, pool, token0, token1).await;
+            let verified = verify_discovered(&http, pool, token0, token1).await
+                && risk_gate(&risk, chain, token0, token1, &tx).await;
             let _ = tx.send(Event::DiscoveredPool(
                 allbright_core::events::DiscoveredPool {
                     chain,
@@ -491,16 +623,91 @@ async fn discovery_loop(
 
 /// Swap/state-change event signatures the GAP-3 watcher subscribes to.
 /// V2 `Sync` covers swap+mint+burn on constant-product pools; V3
-/// `Swap`/`Mint`/`Burn` cover price moves and liquidity changes on CL.
-fn swap_sigs() -> [alloy::primitives::B256; 5] {
+/// `Swap`/`Mint`/`Burn` cover price moves and liquidity changes on CL;
+/// Solidly `Sync(uint256,uint256)` covers the Stable lane (Velodrome/
+/// Ramses-family — their Swap matches the V2 signature, Sync differs).
+fn swap_sigs() -> [alloy::primitives::B256; 6] {
     use alloy::primitives::keccak256;
     [
         keccak256("Sync(uint112,uint112)"),
+        keccak256("Sync(uint256,uint256)"),
         keccak256("Swap(address,uint256,uint256,uint256,uint256,address)"),
         keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)"),
         keccak256("Mint(address,address,int24,int24,uint128,uint256,uint256)"),
         keccak256("Burn(address,address,int24,int24,uint256,uint256)"),
     ]
+}
+
+/// WSS candidate ladder (GAP-3 / GAP-34): registry-qualified WSS
+/// endpoints come first (eth_subscribe grant confirmed by scout),
+/// then the configured `<CHAIN>_WSS_URL`, then blind https→wss
+/// derivation from the HTTP RPC pool as a last-resort fallback.
+///
+/// Preference order:
+///   1. Registry `wss_qualified_urls` (OVS-ordered, probe-verified)
+///   2. Operator-configured `<CHAIN>_WSS_URL`
+///   3. Blind scheme substitution (kept for first-boot / no-registry)
+///
+/// Once the scout sweep populates WSS-qualified records (GAP-34 fix),
+/// ingest uses them without any config change. The blind-derivation
+/// tail ensures the function always returns *something* on first boot
+/// before the first scout sweep completes.
+fn wss_candidates(wss: Option<String>, rpcs: &[String]) -> Vec<String> {
+    use allbright_core::rpc_registry::RpcRegistry;
+    // Determine chain from the first RPC URL by loading the registry
+    // and matching; simpler: just read the registry file and let each
+    // caller supply the chain directly — but the signature is shared
+    // with two call sites. We read the file and extract ALL qualified
+    // WSS URLs; callers already filter by chain via the rpc pool, and
+    // the registry entries carry chain metadata so we can intersect.
+    // Simplest approach: load registry, return wss_qualified_urls
+    // for every chain the given rpcs appear in, then deduplicate.
+    let path = std::env::var("RPC_REGISTRY_PATH")
+        .unwrap_or_else(|_| allbright_core::rpc_registry::REGISTRY_FILE.to_string());
+    let reg = RpcRegistry::load(std::path::Path::new(&path));
+
+    let mut out: Vec<String> = Vec::new();
+
+    // Step 1 — registry-qualified WSS (probe-verified eth_subscribe grant).
+    // Build a set from the HTTP RPC pool to identify the chain without
+    // changing the function signature: registry records whose HTTP URL
+    // is in `rpcs` share the same chain as those WSS records.
+    let rpcs_set: std::collections::HashSet<&String> = rpcs.iter().collect();
+    let matching_chains: std::collections::HashSet<allbright_core::events::Chain> = reg
+        .endpoints
+        .iter()
+        .filter(|e| e.transport != "wss" && e.transport != "ws" && rpcs_set.contains(&e.url))
+        .map(|e| e.chain)
+        .collect();
+    for chain in &matching_chains {
+        for u in reg.wss_qualified_urls(*chain) {
+            if !out.contains(&u) {
+                out.push(u);
+            }
+        }
+    }
+
+    // Step 2 — operator-configured explicit WSS URL.
+    if let Some(w) = wss {
+        if !w.is_empty() && !out.contains(&w) {
+            out.push(w);
+        }
+    }
+
+    // Step 3 — blind scheme substitution fallback (first-boot / no registry).
+    for r in rpcs {
+        for derived in [
+            r.replacen("https://", "wss://", 1),
+            r.replacen("http://", "ws://", 1),
+        ] {
+            if (derived.starts_with("wss://") || derived.starts_with("ws://"))
+                && !out.contains(&derived)
+            {
+                out.push(derived);
+            }
+        }
+    }
+    out
 }
 
 /// GAP-3 (AGENTS Appendix B): event-driven pool freshness. Subscribes to
@@ -514,6 +721,7 @@ async fn swap_watch_loop(
     pools: Vec<PoolDescriptor>,
     tx: mpsc::Sender<Event>,
     wss: Option<String>,
+    head: std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) {
     use alloy::primitives::Address;
     use alloy::rpc::types::Filter;
@@ -534,17 +742,28 @@ async fn swap_watch_loop(
     let mut ep = 0usize;
     let mut http =
         ProviderBuilder::new().connect_http(rpcs[ep].parse().expect("rpc url"));
-    let wss_url = wss.unwrap_or_else(|| rpcs[0].replacen("https://", "wss://", 1));
+    // WSS ladder — configured endpoint first, WS-derivable RPC pool
+    // entries after; rotate on failure rather than retrying a
+    // WS-incapable endpoint forever.
+    let wss_cands = wss_candidates(wss, &rpcs);
+    if wss_cands.is_empty() {
+        fail(&tx, FailureClass::RpcMethodUnavailable, "gap3.swap.no_wss", chain,
+            "no WS-capable endpoint configured or derivable — polling only".into())
+            .await;
+        return;
+    }
+    let mut wss_idx = 0usize;
     let sigs = swap_sigs().to_vec();
     let mut backoff = Duration::from_secs(10);
     // Per-watcher verify cache — reuses refresh()'s verification path
     // without sharing state with the poll workers.
     let mut dead: HashSet<String> = HashSet::new();
     let mut verified: HashSet<String> = HashSet::new();
+    let mut last_seen: HashMap<String, [u64; 4]> = HashMap::new();
 
     loop {
         let ws = match ProviderBuilder::new()
-            .connect_ws(alloy::providers::WsConnect::new(wss_url.as_str()))
+            .connect_ws(alloy::providers::WsConnect::new(wss_cands[wss_idx].as_str()))
             .await
         {
             Ok(w) => w,
@@ -558,25 +777,42 @@ async fn swap_watch_loop(
                     FailureClass::RpcProviderFailure
                 };
                 fail(&tx, class, "gap3.swap.connect", chain, msg).await;
+                wss_idx = (wss_idx + 1) % wss_cands.len();
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(300));
                 continue;
             }
         };
-        let filter = Filter::new()
-            .address(addrs.clone())
-            .event_signature(sigs.clone());
-        let mut stream = match ws.subscribe_logs(&filter).await {
-            Ok(s) => s.into_stream(),
-            Err(e) => {
-                fail(&tx, FailureClass::StreamDrop, "gap3.swap.subscribe", chain, e.to_string()).await;
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(300));
-                continue;
+        // Provider filter limits cap ~hundreds of addresses per
+        // subscription — chunk the watched set at 200 and merge the
+        // streams over the same WS connection (GAP-3).
+        const MAX_FILTER_ADDRS: usize = 200;
+        let mut streams: Vec<std::pin::Pin<Box<dyn futures_util::Stream<
+            Item = alloy::rpc::types::Log> + Send>>> = Vec::new();
+        let mut sub_ok = true;
+        for chunk in addrs.chunks(MAX_FILTER_ADDRS) {
+            let filter = Filter::new()
+                .address(chunk.to_vec())
+                .event_signature(sigs.clone());
+            match ws.subscribe_logs(&filter).await {
+                Ok(s) => streams.push(Box::pin(s.into_stream())),
+                Err(e) => {
+                    fail(&tx, FailureClass::StreamDrop, "gap3.swap.subscribe", chain,
+                        format!("chunk {}: {e}", streams.len())).await;
+                    sub_ok = false;
+                    break;
+                }
             }
-        };
+        }
+        if !sub_ok {
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(300));
+            continue;
+        }
+        let mut stream = futures_util::stream::select_all(streams);
         backoff = Duration::from_secs(10);
         tracing::info!(chain = %chain.name(), pools = addrs.len(),
+            subs = (addrs.len() + MAX_FILTER_ADDRS - 1) / MAX_FILTER_ADDRS,
             "swap-event watch live — event-driven freshness");
 
         while let Some(log) = stream.next().await {
@@ -585,8 +821,13 @@ async fn swap_watch_loop(
             // Targeted refresh of just this pool — bounded by event
             // rate; a hot pool self-throttles via block cadence.
             let slice = std::slice::from_ref(p);
+            // Pin to the log's own block — post-swap state exactly; fall
+            // back to the shared head when the log carries no block.
+            let pin = log
+                .block_number
+                .unwrap_or_else(|| head.load(std::sync::atomic::Ordering::Relaxed));
             if let Err(msg) =
-                refresh(&http, slice, &mut dead, &mut verified, chain, &tx).await
+                refresh(&http, slice, &mut dead, &mut verified, &mut last_seen, chain, &tx, pin).await
             {
                 if rpcs.len() > 1 {
                     ep = (ep + 1) % rpcs.len();
@@ -600,6 +841,45 @@ async fn swap_watch_loop(
             "swap log stream closed".into()).await;
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
+}
+
+/// GAP-12 — assess both pool legs against the token-risk index.
+/// `true` only when BOTH tokens come back `Clear`; any `Flagged` or
+/// `Unverified` verdict emits a classified `TokenRisk` failure and
+/// blocks promotion (fail-closed — unassessable is never safe).
+async fn risk_gate(
+    risk: &allbright_core::token_risk::TokenRiskClient,
+    chain: Chain,
+    t0: alloy::primitives::Address,
+    t1: alloy::primitives::Address,
+    tx: &mpsc::Sender<Event>,
+) -> bool {
+    use allbright_core::token_risk::RiskGrade;
+    let a0 = format!("{t0:?}");
+    let a1 = format!("{t1:?}");
+    let verdicts = risk
+        .check_many(chain.chain_id(), &[a0.clone(), a1.clone()])
+        .await;
+    let mut clean = true;
+    for (addr, v) in verdicts {
+        let grade = match v.grade {
+            RiskGrade::Clear => continue,
+            RiskGrade::Flagged => "flagged",
+            RiskGrade::Unverified => "unverified",
+        };
+        clean = false;
+        tracing::warn!(chain = %chain.name(), token = %addr, grade,
+            reasons = %v.reason_codes(), "token risk gate blocked promotion");
+        fail(
+            tx,
+            FailureClass::TokenRisk,
+            "p06.token_risk",
+            chain,
+            format!("token {addr} {grade}: {}", v.reason_codes()),
+        )
+        .await;
+    }
+    clean
 }
 
 /// Verify a discovered pool: token0/token1 must equal the event's
@@ -641,12 +921,17 @@ async fn refresh<P: Provider>(
     pools: &[PoolDescriptor],
     dead: &mut HashSet<String>,
     verified: &mut HashSet<String>,
+    last_seen: &mut HashMap<String, [u64; 4]>,
     chain: Chain,
     tx: &mpsc::Sender<Event>,
+    pin_block: u64,
 ) -> Result<(), String> {
     {
         let mc = IMulticall3::new(multicall3_addr(), provider);
-        let block = provider.get_block_number().await.unwrap_or(0);
+        // pin_block is the caller-chosen coherence anchor (shared head
+        // for polls, the log's own block for swap refreshes). 0 → unpin.
+        let block = pin_block;
+        let mut unchanged: Vec<String> = Vec::new();
         let live: Vec<&PoolDescriptor> =
             pools.iter().filter(|p| !dead.contains(&p.address)).collect();
 
@@ -693,7 +978,15 @@ async fn refresh<P: Provider>(
             }
         }
 
-        match mc.aggregate3(calls).call().await {
+        // Coherence pin (arb.coherence fix): previously the label block
+        // was fetched but aggregate3 executed at whatever block the node
+        // was on when the call landed — every shard read a different
+        // block, all stamped `block`, feeding the solver legs that never
+        // coexisted (574k+ routes dropped). Pin the call to the fetched
+        // block so all pool states in this scan are one snapshot.
+        let call = mc.aggregate3(calls);
+        let call = if block > 0 { call.block(BlockId::from(block)) } else { call };
+        match call.call().await {
             Ok(results) => {
                 let mut idx = 0usize;
                 for p in &live {
@@ -726,20 +1019,38 @@ async fn refresh<P: Provider>(
                             }
                         }
                     }
-                    match p.dex {
+                    let state = match p.dex {
                         DexKind::V3 => {
                             let (s, l) = (&results[idx], &results[idx + 1]);
                             idx += 2;
-                            if let Some(state) = decode_v3(chain, p, s, l, block) {
-                                let _ = tx.send(Event::PoolUpdate(state)).await;
-                            }
+                            decode_v3(chain, p, s, l, block)
                         }
                         _ => {
                             let r = &results[idx];
                             idx += 1;
-                            if let Some(state) = decode_v2(chain, p, r, block) {
-                                let _ = tx.send(Event::PoolUpdate(state)).await;
-                            }
+                            decode_v2(chain, p, r, block)
+                        }
+                    };
+                    if let Some(state) = state {
+                        // Event-flood fix (§31 event_flood diagnosis):
+                        // identical-state republishes starved low-rate
+                        // subscribers — emit only on a material change.
+                        // Unchanged pools join one PoolHeartbeat so
+                        // consumers keep honest "verified-at" stamps —
+                        // silent suppress would fake staleness and the
+                        // solver's coherence filter would kill routes
+                        // touching any quiet pool.
+                        let fp = [
+                            state.reserve0.to_bits(),
+                            state.reserve1.to_bits(),
+                            state.sqrt_price_x96.unwrap_or(0.0).to_bits(),
+                            state.liquidity.unwrap_or(0.0).to_bits(),
+                        ];
+                        if last_seen.get(&state.address) != Some(&fp) {
+                            last_seen.insert(state.address.clone(), fp);
+                            let _ = tx.send(Event::PoolUpdate(state)).await;
+                        } else {
+                            unchanged.push(state.address.clone());
                         }
                     }
                 }
@@ -748,6 +1059,19 @@ async fn refresh<P: Provider>(
                 tracing::debug!(chain = %chain.name(), "multicall failed: {e}");
                 return Err(e.to_string());
             }
+        }
+        // One heartbeat per scan carries the "verified unchanged" set at
+        // this pin block — consumers refresh staleness stamps without a
+        // per-pool re-emit (the flood this replaced).
+        if !unchanged.is_empty() {
+            let _ = tx
+                .send(Event::PoolHeartbeat(allbright_core::events::PoolHeartbeat {
+                    chain,
+                    block,
+                    ts_ms: allbright_core::events::now_ms(),
+                    pools: unchanged,
+                }))
+                .await;
         }
         Ok(())
     }

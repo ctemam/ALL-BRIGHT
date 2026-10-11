@@ -93,8 +93,13 @@ pub fn access_of(url: &str) -> AccessClass {
         }
     }
     for pat in [
-        "g.alchemy.com", ".infura.io/", "quiknode.pro", "lb.drpc.org",
-        ".blastapi.io/", "nodereal.io", ".chainstack.com", "tenderly.co",
+        "g.alchemy.com", ".infura.io/", "quiknode.pro",
+        ".blastapi.io/", "nodereal.io", ".chainstack.com",
+        // Keyed Tenderly = `{slug}.gateway.tenderly.co/{key}` — the
+        // keyless public gateway has no path segment, so require the
+        // trailing slash or a bare keyless URL would be mislabeled
+        // private and admitted to the private-only production pool.
+        ".gateway.tenderly.co/",
     ] {
         if u.contains(pat) && !u.contains("public.") {
             return AccessClass::Private;
@@ -325,8 +330,8 @@ impl RpcRegistry {
             e.visibility = rec.visibility;
             e.state = rec.state;
             e.rtt_ms = rec.rtt_ms;
-            e.probes += rec.probes.max(1) - 1;
-            e.errors += rec.errors;
+            e.probes = e.probes.saturating_add(rec.probes.saturating_sub(1).max(0));
+            e.errors = e.errors.saturating_add(rec.errors);
             e.consecutive_errors = rec.consecutive_errors;
             e.last_error = rec.last_error;
             e.head_lag_secs = rec.head_lag_secs;
@@ -385,6 +390,25 @@ impl RpcRegistry {
                 e.state == QualState::Degraded
                     && e.access == AccessClass::Private
                     && e.caps.pool_state == CapState::Available
+            })
+            .collect();
+        v.sort_by(|a, b| b.ovs.partial_cmp(&a.ovs).unwrap_or(std::cmp::Ordering::Equal));
+        v.into_iter().map(|e| e.url.clone()).collect()
+    }
+
+    /// WSS-qualified endpoints for a chain (GAP-34): transport is
+    /// `wss` or `ws`, `eth_subscribe newHeads` was granted
+    /// (`caps.websocket == Available`), and state is `Qualified`.
+    /// Ordered OVS descending so the fastest measured endpoint is tried
+    /// first. No access-class filter — WSS endpoints come from Chainlist
+    /// and derived candidates, not just private keyed infrastructure.
+    pub fn wss_qualified_urls(&self, chain: Chain) -> Vec<String> {
+        let mut v: Vec<&RpcEndpointRecord> = self
+            .for_chain(chain)
+            .filter(|e| {
+                (e.transport == "wss" || e.transport == "ws")
+                    && e.state == QualState::Qualified
+                    && e.caps.websocket == CapState::Available
             })
             .collect();
         v.sort_by(|a, b| b.ovs.partial_cmp(&a.ovs).unwrap_or(std::cmp::Ordering::Equal));

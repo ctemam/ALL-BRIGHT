@@ -1157,3 +1157,32 @@ Engineering duties:
   `localStorage.ab_agent_model` persists selection.
 - Fail-closed: unreachable endpoint surfaces an honest error; unavailable
   model list is a valid state.
+
+## 42. GAP-DISCOVERY AUDIT SKILL (AGENTS Appendix D — mandatory method)
+
+Per-module gap discovery runs the six-step protocol — never generic
+code review:
+
+```
+ACTIVITY MAP → CLAIM INVENTORY → WIRING MATRIX →
+FAILURE SWEEP → BOUNDARY AUDIT → REFERENCE DIFF
+```
+
+- **Activity map first.** Enumerate the module's end-to-end actions;
+  gaps live in missing/wrong STEPS (nonce race, missing TTL), not in
+  style. Trace the pipeline stage by stage.
+- **Asserted ≠ measured.** Every produced value must trace to measured
+  evidence; expected-as-realized, included-as-final, and
+  reader-with-no-writer are canonical gap shapes.
+- **Failure sweep per activity:** slow / stale / wrong / reorged /
+  attacked / flooded / silent — each unanswered mode is a registered
+  gap with evidence, cost, and a closure plan naming a prebuilt wheel
+  (no invention).
+- **Machine layer stays in the system:** dead-wired events, lineage
+  breaks, silent-zero feeds are automated audit-ring checks; agent
+  audits cover judgment (spec-vs-impl, reference diffs).
+- **Replay the corpus:** a gap fix must replay its recorded failure
+  class (the `Pair:K` journal set is the canonical case) — a fix that
+  can't reproduce its target failure is UNVERIFIED.
+- **Closure = evidence:** measured production proof + §28 blindness
+  test rerun + journal entry. Merged code is a step, never closure.

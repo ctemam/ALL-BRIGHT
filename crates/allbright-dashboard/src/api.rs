@@ -8,7 +8,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use allbright_core::config::Config;
+use allbright_core::config::{
+    Config, PASTE_IN_PROVIDERS, PRIVATE_PROVIDERS, PROVIDER_CATALOG,
+};
 use allbright_core::events::Chain;
 use allbright_core::rpc_registry::{QualState, RpcRegistry, REGISTRY_FILE};
 use axum::extract::{Query, State};
@@ -294,17 +296,65 @@ pub async fn infrastructure(State(st): State<Shared>) -> Json<Value> {
                 v.iter().sum::<f64>() / v.len() as f64
             }
         };
+        let (total_eps, n_priv, n_priv_q) = reg.chain_access_counts(c);
         chains.push(json!({
             "chain": c.name(),
             "active": st.cfg.active_chains.contains(&c),
             "qualified": q, "providers": prov,
             "healthy": healthy,
+            "endpoints": total_eps,
+            "private": n_priv, "private_qualified": n_priv_q,
+            // §36.9 measured budget — null until the scout verifies a
+            // sustained rps; never fabricated (§38.24).
+            "capacity_rps": reg.chain_capacity_rps(c),
+            "budget_rps": reg.chain_budget_rps(c),
+            "budget_day": reg.chain_budget_day(c),
+            "pool_size": st.cfg.rpc_pools.get(&c).map(|p| p.len()).unwrap_or(0),
             "p50_ms": p(0.5), "p95_ms": p(0.95), "p99_ms": p(0.99),
             "ovs_avg": ovs_avg,
             "visibility": if q >= 5 && prov >= 3 { "V4+resilient" }
                           else if q >= 2 { "V4" }
                           else if q == 1 { "V2-single-homed" }
                           else { "V0-blind" },
+        }));
+    }
+    // §36.9 provider budget roster — templated keyed providers plus
+    // paste-in providers detected by host substring in the live pools.
+    // `quota_advertised` is provider-published, NOT measured.
+    let pool_blob = st
+        .cfg
+        .rpc_pools
+        .values()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let mut providers: Vec<Value> = PRIVATE_PROVIDERS
+        .iter()
+        .map(|(env_key, _tpl, nets)| {
+            let short = env_key
+                .trim_end_matches("_API_KEY")
+                .trim_end_matches("_KEY");
+            let (disp, quota) = PROVIDER_CATALOG
+                .iter()
+                .find(|(k, _, _)| k == env_key)
+                .map(|(_, d, q)| (*d, *q))
+                .unwrap_or((short, "free tier"));
+            json!({
+                "provider": disp, "key_env": env_key, "mode": "templated",
+                "configured": !st.cfg.pending_providers.iter().any(|p| p == short),
+                "chains": nets.len(),
+                "quota_advertised": quota,
+            })
+        })
+        .collect();
+    for (name, host_pat, quota) in PASTE_IN_PROVIDERS {
+        providers.push(json!({
+            "provider": name, "key_env": Value::Null, "mode": "paste-in",
+            "configured": pool_blob.contains(host_pat),
+            "chains": Value::Null,
+            "quota_advertised": quota,
         }));
     }
     let s = reg.summary();
@@ -320,6 +370,7 @@ pub async fn infrastructure(State(st): State<Shared>) -> Json<Value> {
     Json(json!({
         "registry": s,
         "chains": chains,
+        "providers": providers,
         "healing": {"total": heals, "successful": heal_ok},
         "registry_updated_ms": reg.updated_ms,
     }))

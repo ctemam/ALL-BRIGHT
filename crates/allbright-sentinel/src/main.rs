@@ -418,11 +418,13 @@ fn diagnose_stall(
 
 /// Run a pm2 subcommand. On Windows `pm2` resolves to a `.cmd` shim that
 /// requires `cmd.exe`; the extensionless bash shim appears first in PATH
-/// and is not exec'able by CreateProcess. Bounded by a timeout with one
-/// retry — the node CLI can be slow under host CPU pressure, and a
-/// transient failure must not be read as daemon blindness.
+/// and is not exec'able by CreateProcess. Bounded retries with growing
+/// backoff — under host CPU saturation `pm2` routinely exceeds 15s, and
+/// a transient slowness must not read as daemon blindness (the observed
+/// "jlist unavailable — remediation suspended" windows were CLI latency,
+/// not a dead daemon).
 async fn pm2(args: &[&str]) -> Option<std::process::Output> {
-    for attempt in 0..2 {
+    for attempt in 0..4u32 {
         let fut = if cfg!(windows) {
             // Explicit `pm2.cmd` — the extensionless bash shim `pm2` resolves
             // first in PATH and is not exec'able, which silently broke every
@@ -433,9 +435,14 @@ async fn pm2(args: &[&str]) -> Option<std::process::Output> {
         } else {
             quiet_cmd("pm2").args(args).output()
         };
-        match tokio::time::timeout(Duration::from_secs(15), fut).await {
+        // Grow the timeout each attempt: 20s → 35s → 50s → 65s. A loaded
+        // host still answers; a dead daemon fails fast and we give up.
+        let timeout = Duration::from_secs(20 + 15 * attempt as u64);
+        match tokio::time::timeout(timeout, fut).await {
             Ok(Ok(o)) if o.status.success() => return Some(o),
-            _ if attempt == 0 => tokio::time::sleep(Duration::from_millis(500)).await,
+            _ if attempt < 3 => {
+                tokio::time::sleep(Duration::from_millis(500 * (1 << attempt))).await;
+            }
             _ => {}
         }
     }

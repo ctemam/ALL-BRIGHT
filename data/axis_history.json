@@ -14,5 +14,21 @@
       "Gas economics": "PARTIAL",
       "Security / risk governance": "STRONG"
     }
+  },
+  {
+    "date": "2026-10-11",
+    "ratings": {
+      "Data speed & state freshness": "STRONG",
+      "Simulation accuracy": "UNVERIFIED",
+      "Route optimization": "STRONG",
+      "Execution reliability / inclusion": "UNVERIFIED",
+      "MEV protection / private orderflow": "PARTIAL",
+      "Strategy diversity": "STRONG",
+      "Research / replay / auditability": "STRONG",
+      "Adaptive / learning loop": "STRONG",
+      "Multi-chain breadth": "STRONG",
+      "Gas economics": "PARTIAL",
+      "Security / risk governance": "STRONG"
+    }
   }
 ]

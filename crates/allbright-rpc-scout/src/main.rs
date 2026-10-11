@@ -25,6 +25,7 @@ use allbright_core::{
 };
 use futures_util::stream::{self, StreamExt};
 use serde_json::json;
+use throttle_net::{AdaptiveLimiter, Aimd};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -51,7 +52,7 @@ const POCKET_SLUGS: &[(Chain, &str)] = &[
 ];
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(7);
-const CONCURRENCY: usize = 64;
+const CONCURRENCY: usize = 24;
 /// Head older than this ⇒ stale state, not a healthy endpoint.
 const MAX_HEAD_LAG_SECS: u64 = 300;
 /// Multicall3 — deployed identically on every enabled chain; used as the
@@ -102,7 +103,7 @@ fn hex_u64(v: &serde_json::Value) -> Option<u64> {
 
 /// Full qualification probe for one candidate endpoint (§36.5 ladder).
 async fn qualify(client: &reqwest::Client, mut rec: RpcEndpointRecord) -> RpcEndpointRecord {
-    rec.probes += 1;
+    rec.probes = rec.probes.saturating_add(1);
     rec.last_probe_ms = allbright_core::events::now_ms();
     let expected = rec.chain.chain_id();
     let url = rec.url.clone();
@@ -123,14 +124,14 @@ async fn qualify(client: &reqwest::Client, mut rec: RpcEndpointRecord) -> RpcEnd
                 rec.caps.chain_id = CapState::Unavailable;
                 rec.state = QualState::Quarantined;
                 rec.last_error = Some(format!("wrong chainId {v} expected {expected:#x}"));
-                rec.errors += 1;
+                rec.errors = rec.errors.saturating_add(1);
                 rec.compute_ovs();
                 return rec;
             }
         }
         Err(e) => {
-            rec.errors += 1;
-            rec.consecutive_errors += 1;
+            rec.errors = rec.errors.saturating_add(1);
+            rec.consecutive_errors = rec.consecutive_errors.saturating_add(1);
             rec.last_error = Some(e.clone());
             rec.state = if e.contains("429") {
                 QualState::RateLimited
@@ -307,6 +308,141 @@ async fn market_probe(
     rec.compute_ovs();
 }
 
+/// One JSON-RPC call over a WebSocket — send request, await the frame
+/// carrying the matching id (subscription notifications are skipped).
+async fn ws_rpc(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    id: u64,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+    ws.send(Message::Text(req.to_string()))
+        .await
+        .map_err(|e| format!("ws send: {e}"))?;
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    while Instant::now() < deadline {
+        let msg = match tokio::time::timeout(PROBE_TIMEOUT, ws.next()).await {
+            Ok(Some(Ok(m))) => m,
+            Ok(Some(Err(e))) => return Err(format!("ws read: {e}")),
+            Ok(None) => return Err("ws closed".into()),
+            Err(_) => return Err("ws read timeout".into()),
+        };
+        let Message::Text(t) = msg else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) else {
+            continue;
+        };
+        if v.get("id").and_then(|i| i.as_u64()) != Some(id) {
+            continue; // async notification or unrelated reply
+        }
+        if let Some(err) = v.get("error") {
+            return Err(format!(
+                "rpc error {}",
+                err.get("code").and_then(|c| c.as_i64()).unwrap_or(0)
+            ));
+        }
+        return Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null));
+    }
+    Err("ws reply window expired".into())
+}
+
+/// WSS qualification leg (GAP-34): prove the endpoint actually speaks
+/// JSON-RPC over WebSocket and grants `eth_subscribe` — the capability
+/// the event-driven detection layer (GAP-3) is dead without. Ladder:
+///   WS connect → eth_chainId (chain match) → eth_subscribe newHeads
+///   (subscription id granted).
+/// First-head delivery is NOT awaited — a granted subscription id is the
+/// measured capability; delivery health is observed by the consumer.
+async fn wss_probe(rec: &mut RpcEndpointRecord) {
+    use tokio_tungstenite::connect_async;
+
+    rec.probes = rec.probes.saturating_add(1);
+    rec.last_probe_ms = now_ms();
+    let t0 = Instant::now();
+
+    let mut ws = match tokio::time::timeout(PROBE_TIMEOUT, connect_async(&rec.url)).await {
+        Ok(Ok((s, _))) => s,
+        Ok(Err(e)) => {
+            rec.errors = rec.errors.saturating_add(1);
+            rec.consecutive_errors = rec.consecutive_errors.saturating_add(1);
+            rec.last_error = Some(format!("ws connect: {e}"));
+            rec.state = QualState::Broken;
+            rec.caps.websocket = CapState::Unavailable;
+            rec.compute_ovs();
+            return;
+        }
+        Err(_) => {
+            rec.errors = rec.errors.saturating_add(1);
+            rec.consecutive_errors = rec.consecutive_errors.saturating_add(1);
+            rec.last_error = Some("ws connect timeout".into());
+            rec.state = QualState::Broken;
+            rec.caps.websocket = CapState::Unavailable;
+            rec.compute_ovs();
+            return;
+        }
+    };
+    rec.push_rtt(t0.elapsed().as_millis() as u64);
+    rec.visibility = VisibilityClass::V1Connected;
+    rec.state = QualState::Live;
+
+    // Chain-ID validation over the WS transport.
+    match ws_rpc(&mut ws, 1, "eth_chainId", json!([])).await {
+        Ok(v) if hex_u64(&v) == Some(rec.chain.chain_id()) => {
+            rec.caps.chain_id = CapState::Available;
+            rec.visibility = VisibilityClass::V2ChainVisible;
+            rec.state = QualState::ChainVerified;
+        }
+        Ok(v) => {
+            rec.caps.chain_id = CapState::Unavailable;
+            rec.state = QualState::Quarantined;
+            rec.last_error = Some(format!(
+                "ws wrong chainId {v} expected {:#x}",
+                rec.chain.chain_id()
+            ));
+            rec.errors = rec.errors.saturating_add(1);
+            rec.compute_ovs();
+            return;
+        }
+        Err(e) => {
+            rec.errors = rec.errors.saturating_add(1);
+            rec.consecutive_errors = rec.consecutive_errors.saturating_add(1);
+            rec.last_error = Some(format!("ws chainId: {e}"));
+            rec.state = QualState::Broken;
+            rec.compute_ovs();
+            return;
+        }
+    }
+
+    // The capability that matters: eth_subscribe grant.
+    match ws_rpc(&mut ws, 2, "eth_subscribe", json!(["newHeads"])).await {
+        Ok(v) if v.as_str().map(|s| s.starts_with("0x")).unwrap_or(false) => {
+            rec.caps.websocket = CapState::Available;
+            rec.state = if rec.median_rtt().map(|r| r < 1500).unwrap_or(false) {
+                QualState::Qualified
+            } else {
+                QualState::Degraded
+            };
+        }
+        Ok(v) => {
+            rec.caps.websocket = CapState::Partial;
+            rec.state = QualState::Degraded;
+            rec.last_error = Some(format!("ws subscribe odd reply {v}"));
+        }
+        Err(e) => {
+            rec.caps.websocket = CapState::Unavailable;
+            rec.state = QualState::Degraded;
+            rec.last_error = Some(format!("ws subscribe: {e}"));
+        }
+    }
+    rec.consecutive_errors = 0;
+    rec.compute_ovs();
+}
+
 /// Discovery — multiple independent sources (§36.1). Returns deduplicated
 /// candidate records; templated `{KEY}` URLs are recorded as NeedsKey
 /// (counted, never probed — no static trust).
@@ -342,8 +478,10 @@ async fn discover(
                         .unwrap_or_default()
                     {
                         let url = r.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                        if url.is_empty() || !url.starts_with("http") {
-                            continue; // wss endpoints tracked separately
+                        if url.is_empty()
+                            || !(url.starts_with("http") || url.starts_with("ws"))
+                        {
+                            continue;
                         }
                         let mut rec = RpcEndpointRecord::new(url, *chain, "chainlist");
                         if url.contains('{') {
@@ -382,10 +520,53 @@ async fn discover(
         out.push(e.clone());
     }
 
+    // Source D (GAP-34): derived WSS candidates — every live HTTPS
+    // endpoint is a potential WS host; keyed providers expose documented
+    // wss:// forms. Derived records are *candidates*: the wss_probe pass
+    // below measures `eth_subscribe` capability — never static trust.
+    // Derive WSS candidates from every HTTPS endpoint that is not
+    // definitively dead (Broken/Quarantined/NeedsKey). Unknown-state
+    // entries exist on first boot — excluding them would produce zero
+    // WSS candidates to probe before the first HTTP qualification pass
+    // completes. Wrong-form guesses cost one bounded probe each (7 s
+    // timeout) — never a blind trust.
+    let derived: Vec<RpcEndpointRecord> = out
+        .iter()
+        .filter(|e| {
+            e.transport == "https"
+                && !matches!(
+                    e.state,
+                    QualState::Broken | QualState::Quarantined | QualState::NeedsKey
+                )
+                && !e.url.contains('{')
+        })
+        .filter_map(|e| {
+            derive_wss(&e.url).map(|w| RpcEndpointRecord::new(&w, e.chain, "derived-wss"))
+        })
+        .collect();
+    out.extend(derived);
+
     // Dedupe by (url, chain).
     let mut seen = std::collections::HashSet::new();
     out.retain(|r| seen.insert((r.url.clone(), r.chain)));
     out
+}
+
+/// HTTPS → WSS candidate derivation (GAP-34). Provider-documented WS
+/// forms are applied where the HTTPS path differs from the WS path —
+/// wrong-form guesses cost one bounded probe each, never a blind trust.
+fn derive_wss(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let mut w = format!("wss://{rest}");
+    // Infura serves WS under /ws/: infura.io/v3/{key} → infura.io/ws/v3/{key}
+    if w.contains(".infura.io/v3/") {
+        w = w.replace(".infura.io/v3/", ".infura.io/ws/v3/");
+    }
+    // dRPC load balancer: /ogrpc (http) ↔ /ogws (websocket)
+    if w.contains("lb.drpc.org/ogrpc") {
+        w = w.replace("/ogrpc", "/ogws");
+    }
+    Some(w)
 }
 
 #[tokio::main]
@@ -428,9 +609,35 @@ async fn main() -> anyhow::Result<()> {
             .collect();
         info!(candidates = probeable.len(), "qualification sweep starting");
 
-        // ---- QUALIFY (bounded concurrency) ----
+        // ---- QUALIFY (adaptive concurrency — GAP-17) ----
+        // throttle-net AIMD limiter (prebuilt — no hand-rolled congestion
+        // control): probes that hit transport failures shrink the
+        // in-flight limit; responsive stretches grow it toward the
+        // ceiling. A static CONCURRENCY was the PM2 kill-loop's root
+        // mechanism — 64 concurrent TLS commits spiked RSS past cap.
+        let limiter = AdaptiveLimiter::builder()
+            .floor(4)
+            .ceiling(CONCURRENCY as u32)
+            .initial(12)
+            .build(Aimd::default());
         let results: Vec<RpcEndpointRecord> = stream::iter(probeable)
-            .map(|rec| qualify(&client, rec))
+            .map(|rec| {
+                let limiter = &limiter;
+                let client = &client;
+                async move {
+                    let permit = limiter.acquire().await;
+                    let out = qualify(client, rec).await;
+                    match out.state {
+                        QualState::Broken | QualState::RateLimited => {
+                            permit.failure();
+                        }
+                        _ => {
+                            permit.success();
+                        }
+                    }
+                    out
+                }
+            })
             .buffer_unordered(CONCURRENCY)
             .collect()
             .await;
@@ -445,6 +652,11 @@ async fn main() -> anyhow::Result<()> {
         let pools = chain::load_pools();
         let by_chain = chain::pools_by_chain(&pools);
         for chain in Chain::ALL {
+            // Skip chains with no configured RPC pool — probing them
+            // doubles the pass (and its memory commit) for zero value.
+            if !cfg.rpc_pools.contains_key(&chain) {
+                continue;
+            }
             let Some(sample) = by_chain.get(&chain).and_then(|p| p.first()).cloned() else {
                 continue;
             };
@@ -457,8 +669,61 @@ async fn main() -> anyhow::Result<()> {
                 .map(|mut rec| {
                     let client = client.clone();
                     let sample = sample.clone();
+                    let limiter = &limiter;
                     async move {
+                        let permit = limiter.acquire().await;
                         market_probe(&client, &mut rec, &sample).await;
+                        match rec.state {
+                            QualState::Broken | QualState::RateLimited => {
+                                permit.failure();
+                            }
+                            _ => {
+                                permit.success();
+                            }
+                        }
+                        rec
+                    }
+                })
+                .buffer_unordered(CONCURRENCY)
+                .collect()
+                .await;
+            for rec in probed {
+                registry.upsert(rec);
+            }
+        }
+
+        // ---- WSS VISIBILITY PASS (GAP-34) ----
+        // Every ws/wss record is probed for a granted `eth_subscribe` —
+        // the transport the event-driven detection layer requires. A
+        // chain with zero qualified WS endpoints cannot react to swaps
+        // inside their own block; that blindness is classified below,
+        // never assumed away.
+        let wss_targets: Vec<RpcEndpointRecord> = registry
+            .endpoints
+            .iter()
+            .filter(|e| {
+                (e.transport == "wss" || e.transport == "ws")
+                    && e.state != QualState::NeedsKey
+                    && !e.url.contains('{')
+            })
+            .cloned()
+            .collect();
+        if !wss_targets.is_empty() {
+            info!(candidates = wss_targets.len(), "wss qualification pass");
+            let probed: Vec<RpcEndpointRecord> = stream::iter(wss_targets)
+                .map(|mut rec| {
+                    let limiter = &limiter;
+                    async move {
+                        let permit = limiter.acquire().await;
+                        wss_probe(&mut rec).await;
+                        match rec.state {
+                            QualState::Broken | QualState::RateLimited => {
+                                permit.failure();
+                            }
+                            _ => {
+                                permit.success();
+                            }
+                        }
                         rec
                     }
                 })
@@ -522,6 +787,24 @@ async fn main() -> anyhow::Result<()> {
                         FailureClass::RpcOpportunityBlind,
                         "scout.market_probe",
                         format!("{}: endpoints alive but zero V4 market visibility — economically blind", chain.name()),
+                    ).on_chain(chain)));
+                }
+                // GAP-34: HTTP-V4 endpoints but zero WS-qualified = the
+                // chain can read state but can never subscribe — the
+                // event-driven detection layer is dead there.
+                let wss_q = registry
+                    .for_chain(chain)
+                    .filter(|e| {
+                        (e.transport == "wss" || e.transport == "ws")
+                            && e.state == QualState::Qualified
+                    })
+                    .count();
+                if wss_q == 0 {
+                    let _ = bus.publish(&Event::Failure(FailureEvent::new(
+                        Component::RpcScout,
+                        FailureClass::RpcMethodUnavailable,
+                        "scout.wss_probe",
+                        format!("{}: zero WSS-qualified endpoints — event-driven visibility impossible (GAP-34)", chain.name()),
                     ).on_chain(chain)));
                 }
             }

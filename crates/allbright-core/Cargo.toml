@@ -19,3 +19,13 @@ tokio-tungstenite.workspace = true
 futures-util.workspace = true
 alloy.workspace = true
 rustls.workspace = true
+figment.workspace = true
+tower.workspace = true
+reqwest.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+
+[features]
+telemetry = ["dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]

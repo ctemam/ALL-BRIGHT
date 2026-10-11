@@ -61,8 +61,9 @@ async fn main() -> Result<()> {
 
     let pim = aa::PimlicoClient::new(key);
     let bsc_rpc = "https://bsc-rpc.publicnode.com";
+    let rpcs = vec![bsc_rpc.to_string()];
 
-    let acct = pim.account_address(bsc_rpc, signer.address()).await?;
+    let acct = pim.account_address(&rpcs, signer.address()).await?;
     println!("smart account: {acct:?}");
 
     let initcode = read_initcode(acct)?;
@@ -89,7 +90,7 @@ async fn main() -> Result<()> {
     let call = aa::kernel_execute_calldata(factory, U256::ZERO, Bytes::from(cd));
 
     let res = pim
-        .sponsored_user_op("bsc", 56, bsc_rpc, &signer, call, false)
+        .sponsored_user_op("bsc", 56, &rpcs, &signer, call, false)
         .await?;
     println!("userOpHash: {res}");
 

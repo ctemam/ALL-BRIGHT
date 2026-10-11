@@ -17,6 +17,9 @@ pub mod events;
 pub mod lineage;
 pub mod multicall;
 pub mod rpc_registry;
+pub mod rpc_transport;
+pub mod telemetry_export;
+pub mod token_risk;
 
 pub use chain::*;
 pub use config::*;
