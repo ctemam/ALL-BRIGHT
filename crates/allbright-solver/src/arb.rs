@@ -3,13 +3,15 @@
 //! graph. Matching is by token ADDRESS — never symbol — so bridged
 //! variants (USDC vs USDC.e) cannot collide.
 //!
-//! Every candidate is sized by ternary search on the concave profit
-//! function, evaluated with the shared AMM math in allbright-core.
+//! Every candidate is sized by the closed-form optimum where the route
+//! shape admits one (2-leg V2↔V2 cycles — U12/Quarry), else ternary
+//! search on the concave profit function, evaluated with the shared
+//! AMM math in allbright-core.
 
 use std::collections::HashMap;
 
 use allbright_core::amm;
-use allbright_core::events::{now_ms, Chain, PoolState, SwapLeg};
+use allbright_core::events::{now_ms, Chain, DexKind, PoolState, SwapLeg};
 
 /// State-coherence bounds for route legs (phantom-edge filter): a route
 /// that mixes pool states measured blocks apart prices a divergence that
@@ -354,16 +356,24 @@ fn try_route(
     if hi <= lo {
         return;
     }
-    for _ in 0..40 {
-        let m1 = lo + (hi - lo) / 3.0;
-        let m2 = hi - (hi - lo) / 3.0;
-        if f(m1) < f(m2) {
-            lo = m1;
-        } else {
-            hi = m2;
+    // U12 — closed-form x* where the shape admits it (2-leg V2↔V2):
+    // exact maximizer, no iteration. Profit is concave, so the cap
+    // constraint binds at the boundary — clamp, never re-search.
+    let x = match closed_form_x2(pools, &route) {
+        Some(xf) => xf.clamp(lo, hi),
+        None => {
+            for _ in 0..40 {
+                let m1 = lo + (hi - lo) / 3.0;
+                let m2 = hi - (hi - lo) / 3.0;
+                if f(m1) < f(m2) {
+                    lo = m1;
+                } else {
+                    hi = m2;
+                }
+            }
+            (lo + hi) / 2.0
         }
-    }
-    let x = (lo + hi) / 2.0;
+    };
     let est_profit = f(x);
     if est_profit <= 0.0 {
         return;
@@ -380,6 +390,34 @@ fn try_route(
         optimal_input: x,
         est_profit,
     });
+}
+
+/// U12 — Quarry closed-form optimum for a 2-leg V2↔V2 cycle.
+///
+/// Profit `P(x) = γ2·y·a2/(b2 + γ2·y) − x` with `y = γ1·x·b1/(a1 + γ1·x)`
+/// (per-leg input reserve a_i, output reserve b_i, fee factor γ_i).
+/// Setting dP/dx = 0 yields
+///
+///   x* = (√(γ1·γ2·a1·b1·a2·b2) − a1·b2) / (γ1·(b2 + γ2·b1))
+///
+/// — exact, no iteration; reduces to the classic √(r·r·r·r) form at
+/// γ1=γ2=1. `None` for any non-V2 leg, longer route, or degenerate
+/// reserve — the caller keeps the ternary fallback for those.
+fn closed_form_x2(pools: &HashMap<String, PoolState>, route: &[SwapLeg]) -> Option<f64> {
+    if route.len() != 2 || route.iter().any(|l| l.dex != DexKind::V2) {
+        return None;
+    }
+    let a_pool = pools.get(&route[0].pool_address)?;
+    let b_pool = pools.get(&route[1].pool_address)?;
+    let (a1, b1) = amm::effective_reserves(a_pool, &route[0].token_in)?;
+    let (b2, a2) = amm::effective_reserves(b_pool, &route[1].token_in)?;
+    if a1 <= 0.0 || b1 <= 0.0 || a2 <= 0.0 || b2 <= 0.0 {
+        return None;
+    }
+    let g1 = (10_000.0 - a_pool.fee_bps as f64) / 10_000.0;
+    let g2 = (10_000.0 - b_pool.fee_bps as f64) / 10_000.0;
+    let x = ((g1 * g2 * a1 * b1 * a2 * b2).sqrt() - a1 * b2) / (g1 * (b2 + g2 * b1));
+    (x.is_finite() && x > 0.0).then_some(x)
 }
 
 /// 2-hop: pool A sells X→Y, pool B sells Y→X, different pool addresses.
@@ -684,6 +722,43 @@ mod tests {
         assert_eq!(c.route[0].pool_address, "0xstale");
         assert_eq!(c.route[0].token_out, WETH.1);
         assert!(c.est_profit > 0.0);
+    }
+
+    /// U12 — closed-form x* must match (or beat) 40-iteration ternary
+    /// on the same concave profit function, on both directions.
+    #[test]
+    fn closed_form_matches_ternary() {
+        let mut pools = HashMap::new();
+        // Same pair, divergent prices: A $2700, B $3100.
+        pools.insert("0xa".into(), mkpool("0xa", USDC, WETH, 270_000.0, 100.0));
+        pools.insert("0xb".into(), mkpool("0xb", USDC, WETH, 620_000.0, 200.0));
+        let lookup = |a: &str| pools.get(a);
+        for (a, b) in [("0xa", "0xb"), ("0xb", "0xa")] {
+            for (tin, tout) in [(USDC.1, WETH.1), (WETH.1, USDC.1)] {
+                let pa = pools.get(a).unwrap();
+                let pb = pools.get(b).unwrap();
+                let route = vec![leg(pa, tin, tout), leg(pb, tout, tin)];
+                let Some(xf) = closed_form_x2(&pools, &route) else {
+                    continue; // no profitable direction → skip
+                };
+                let f = |x: f64| match amm::route_out(&lookup, &route, tin, x) {
+                    Some((fin, _)) => fin - x,
+                    None => f64::NEG_INFINITY,
+                };
+                let (mut lo, mut hi) = (1e-6, xf * 3.0);
+                for _ in 0..40 {
+                    let m1 = lo + (hi - lo) / 3.0;
+                    let m2 = hi - (hi - lo) / 3.0;
+                    if f(m1) < f(m2) { lo = m1; } else { hi = m2; }
+                }
+                let xt = (lo + hi) / 2.0;
+                assert!(
+                    f(xf) >= f(xt) - 1e-9,
+                    "closed form must not underperform ternary: x*={xf} f={} vs xt={xt} f={}",
+                    f(xf), f(xt)
+                );
+            }
+        }
     }
 
     /// Entry above fair = buying the overpriced side → no strike even
