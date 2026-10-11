@@ -112,6 +112,16 @@ pub async fn run(cfg: Config, tx: mpsc::Sender<Event>) {
         handles.push(tokio::spawn(async move {
             swap_watch_loop(chain, rpcs3, pools3, tx3, wss3, head).await;
         }));
+        // U1: mempool watcher — pending txs touching watched pools emit
+        // PendingSwap (pre-confirmation trigger). Chains without a public
+        // mempool fail-closed inside the loop.
+        let rpcs4 = rpcs.clone();
+        let pools4 = chain_pools.clone();
+        let tx4 = tx.clone();
+        let wss4 = cfg.wss_urls.get(chain_id).cloned();
+        handles.push(tokio::spawn(async move {
+            pending_watch_loop(chain, rpcs4, pools4, tx4, wss4).await;
+        }));
     }
 
     if handles.is_empty() {
@@ -839,6 +849,153 @@ async fn swap_watch_loop(
         }
         fail(&tx, FailureClass::StreamDrop, "gap3.swap.ended", chain,
             "swap log stream closed".into()).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+/// U1 — pre-confirmation trigger (mev-templates pipeline pattern):
+/// subscribe `newPendingTransactions` (full bodies, geth ≥1.11) and emit
+/// `PendingSwap` whenever a pending tx touches a watched pool — matched
+/// on `tx.to` OR on any watched address embedded in the calldata's
+/// 32-byte words (router/aggregator paths carry pool addresses).
+///
+/// Honest coverage: private/sequenced mempools (Arbitrum, Base, OP L2s)
+/// expose nothing — the subscribe fails and the loop exits after
+/// classifying each WSS candidate once. Polling + GAP-3 log watches
+/// still cover those chains.
+async fn pending_watch_loop(
+    chain: Chain,
+    rpcs: Vec<String>,
+    pools: Vec<PoolDescriptor>,
+    tx: mpsc::Sender<Event>,
+    wss: Option<String>,
+) {
+    use alloy::consensus::Transaction as _;
+    use alloy::primitives::Address;
+    use futures_util::StreamExt;
+
+    // Watched set: lowercase 0x-prefixed addresses.
+    let watched: HashSet<String> = pools
+        .iter()
+        .map(|p| p.address.to_lowercase())
+        .collect();
+    if watched.is_empty() {
+        return;
+    }
+    let wss_cands = wss_candidates(wss, &rpcs);
+    if wss_cands.is_empty() {
+        fail(&tx, FailureClass::RpcMethodUnavailable, "u1.pending.no_wss", chain,
+            "no WS-capable endpoint — pending watch off".into())
+            .await;
+        return;
+    }
+    let mut wss_idx = 0usize;
+    let mut backoff = Duration::from_secs(10);
+    let mut tried = 0usize;
+
+    loop {
+        let ws = match ProviderBuilder::new()
+            .connect_ws(alloy::providers::WsConnect::new(wss_cands[wss_idx].as_str()))
+            .await
+        {
+            Ok(w) => w,
+            Err(e) => {
+                let msg = e.to_string();
+                let class = if msg.contains("400") || msg.contains("405") || msg.contains("unsupported") {
+                    FailureClass::RpcMethodUnavailable
+                } else if msg.contains("429") {
+                    FailureClass::RpcRateLimit
+                } else {
+                    FailureClass::RpcProviderFailure
+                };
+                fail(&tx, class, "u1.pending.connect", chain, msg).await;
+                tried += 1;
+                if tried >= wss_cands.len() {
+                    tracing::info!(chain = %chain.name(),
+                        "pending watch: no WSS endpoint reachable — off for this chain");
+                    return;
+                }
+                wss_idx = (wss_idx + 1) % wss_cands.len();
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(300));
+                continue;
+            }
+        };
+        let mut stream = match ws.subscribe_full_pending_transactions().await {
+            Ok(s) => s.into_stream(),
+            Err(e) => {
+                // Most non-geth endpoints reject full-body pending subs —
+                // classify once per endpoint, rotate, then exit cleanly.
+                let msg = e.to_string();
+                let class = if msg.contains("not supported") || msg.contains("method")
+                    || msg.contains("invalid") || msg.contains("-32601")
+                {
+                    FailureClass::RpcMethodUnavailable
+                } else if msg.contains("429") {
+                    FailureClass::RpcRateLimit
+                } else {
+                    FailureClass::RpcProviderFailure
+                };
+                fail(&tx, class, "u1.pending.subscribe", chain, msg).await;
+                tried += 1;
+                if tried >= wss_cands.len() {
+                    tracing::info!(chain = %chain.name(),
+                        "pending watch: no endpoint supports full pending txs — off for this chain");
+                    return;
+                }
+                wss_idx = (wss_idx + 1) % wss_cands.len();
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(300));
+                continue;
+            }
+        };
+        tried = 0;
+        backoff = Duration::from_secs(10);
+        tracing::info!(chain = %chain.name(), pools = watched.len(),
+            "pending-tx watch live — pre-confirmation trigger");
+
+        while let Some(tx_env) = stream.next().await {
+            // Match 1 — direct call: tx.to is a watched pool.
+            let mut hit: Option<String> = tx_env
+                .inner
+                .to()
+                .map(|a| format!("{a:?}").to_lowercase())
+                .filter(|k| watched.contains(k));
+            // Match 2 — embedded pool address in calldata words
+            // (router/aggregator paths carry pool addresses as
+            // zero-padded 32-byte words). Scan word-aligned chunks only.
+            if hit.is_none() {
+                let input = tx_env.inner.input();
+                // ABI bodies: 4-byte selector, then 32-byte words — so
+                // embedded addresses sit at offset 4 + 32k, not 32k.
+                let body = if input.len() > 4 { &input[4..] } else { &input[..] };
+                for w in body.chunks_exact(32) {
+                    if w[..12].iter().all(|b| *b == 0) {
+                        let addr = Address::from_slice(&w[12..]);
+                        let k = format!("{addr:?}").to_lowercase();
+                        if watched.contains(&k) {
+                            hit = Some(k);
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(pool) = hit {
+                let _ = tx
+                    .send(Event::PendingSwap(
+                        allbright_core::events::PendingSwap {
+                            chain,
+                            pool_address: pool,
+                            tx_hash: format!("{:?}", tx_env.inner.tx_hash()),
+                            ts_ms: now_ms(),
+                        },
+                    ))
+                    .await;
+            }
+        }
+        fail(&tx, FailureClass::StreamDrop, "u1.pending.ended", chain,
+            "pending tx stream closed".into())
+            .await;
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }

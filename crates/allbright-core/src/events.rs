@@ -459,6 +459,23 @@ pub struct UniverseStats {
     pub ts_ms: u64,
 }
 
+/// U1 pre-confirmation trigger: a pending (public-mempool) transaction
+/// observed touching a watched pool — emitted by the ingest pending
+/// watcher BEFORE the tx lands. Match is `to == pool` OR a watched pool
+/// address embedded in the calldata's 32-byte words (router/aggregator
+/// paths). Chains with private/sequenced mempools simply emit nothing.
+/// Evidence only — the tx may never land; the predicted shift is used
+/// to rescan early, never to fabricate state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingSwap {
+    pub chain: Chain,
+    /// Watched pool the pending tx touches.
+    pub pool_address: String,
+    /// Pending tx hash — evidence, not finality.
+    pub tx_hash: String,
+    pub ts_ms: u64,
+}
+
 /// Compact freshness heartbeat: pools re-verified UNCHANGED at a pin
 /// block during one shard scan. Replaces identical-state re-emission —
 /// consumers update "verified-at" block/ts stamps so staleness and
@@ -518,6 +535,8 @@ pub enum Event {
     System(SystemEvent),
     /// Verified-unchanged pool set for one scan (post-dedup freshness).
     PoolHeartbeat(PoolHeartbeat),
+    /// U1: mempool tx predicted to move a watched pool (pre-confirmation).
+    PendingSwap(PendingSwap),
 }
 
 pub fn now_ms() -> u64 {

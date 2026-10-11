@@ -59,6 +59,9 @@ struct State {
     /// Per-chain rate cap on EV-class ExecRequests (GAP-37) — bounds
     /// bundler/quota burn while keeping the class journaled.
     ev_last_emit: HashMap<Chain, Instant>,
+    /// Per-CEX-symbol throttle for the P09 predictive scan (gap-based —
+    /// runs on every tick, not just on sharp moves).
+    pred_scan: HashMap<String, Instant>,
 }
 
 /// Minimum interval between candidate regenerations per chain.
@@ -155,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
         bait: HashMap::new(),
         bait_checked: Instant::now() - std::time::Duration::from_secs(60),
         ev_last_emit: HashMap::new(),
+        pred_scan: HashMap::new(),
     }));
 
     // Own bus :3103 — publishes Opportunity/ExecRequest/Telemetry.
@@ -244,6 +248,39 @@ async fn main() -> anyhow::Result<()> {
                                 .map(|p| (p.bid + p.ask) / 2.0);
                             let mid = (t.bid + t.ask) / 2.0;
                             s.cex.insert(t.symbol.clone(), t.clone());
+
+                            // P09 — predictive scan (CEX-leadership /
+                            // stale-quote loop): on every tick — throttled
+                            // 1 s/symbol — evaluate each pool's implied USD
+                            // price vs the CEX fair mid. A persistent gap
+                            // triggers a directed strike even when the CEX
+                            // isn't moving (a pool that never repriced is a
+                            // standing target).
+                            let pred_due = s
+                                .pred_scan
+                                .get(&t.symbol)
+                                .map(|ts| ts.elapsed()
+                                    >= std::time::Duration::from_secs(1))
+                                .unwrap_or(true);
+                            if pred_due {
+                                s.pred_scan.insert(t.symbol.clone(), Instant::now());
+                                let syms = cex_asset_syms(&t.symbol);
+                                if !syms.is_empty() {
+                                    for chain in &cfg_i.active_chains {
+                                        let strikes = arb::predictive_strikes(
+                                            &s.pools,
+                                            *chain,
+                                            &syms,
+                                            mid,
+                                            &|q| pricing::usd_per_unit(
+                                                q, *chain, &s.cex, cfg_i.native_usd,
+                                            ),
+                                        );
+                                        queue_sims(&mut s, strikes, &cfg_i, &mut reqs);
+                                    }
+                                }
+                            }
+
                             let Some(pm) = prev_mid else { continue };
                             let move_bps = if pm > 0.0 { ((mid - pm) / pm).abs() * 1e4 } else { 0.0 };
                             let cooldown_ok = s
@@ -274,36 +311,41 @@ async fn main() -> anyhow::Result<()> {
                                 candidates = cands.len(),
                                 "CEX divergence trigger — rescanning touched assets"
                             );
-                            for c in cands {
-                                if !cfg_i.strategies.iter().any(|t| t == c.strategy) {
-                                    continue;
-                                }
-                                s.req_seq += 1;
-                                let req_id = s.req_seq;
-                                s.pending.insert(req_id, PendingSim {
-                                    route: c.route.clone(),
-                                    chain: c.chain,
-                                    input_amount: c.optimal_input,
-                                    input_token: c.input_token.clone(),
-                                    input_symbol: c.input_symbol.clone(),
-                                    kind: OppKind::CexDexDivergence,
-                                    strategy: c.strategy,
-                                });
-                                s.funnel.simulated.fetch_add(1, Ordering::Relaxed);
-                                reqs.push(SimRequest {
-                                    req_id,
-                                    chain: c.chain,
-                                    route: c.route,
-                                    input_amount: c.optimal_input,
-                                    input_token: c.input_token,
-                                    strategy: c.strategy.to_string(),
-                                    block: 0,
-                                    ts_ms: now_ms(),
-                                });
-                            }
+                            queue_sims(&mut s, cands, &cfg_i, &mut reqs);
                             if incoh > 0 {
                                 s.funnel.incoherent.fetch_add(incoh, Ordering::Relaxed);
                             }
+                        }
+                        Event::PendingSwap(ps) => {
+                            // U1 pre-confirmation trigger: a mempool tx
+                            // touching a watched pool predicts an imminent
+                            // state change — mark the pool moved and rescan
+                            // NOW (pre-inclusion), not at the next poll.
+                            let mut s = state.lock().await;
+                            if !s.pools.contains_key(&ps.pool_address) {
+                                continue;
+                            }
+                            s.dirty_moved
+                                .entry(ps.chain)
+                                .or_default()
+                                .insert(ps.pool_address.clone());
+                            // Tighter debounce than pool updates — the
+                            // point is beating the pending tx's inclusion.
+                            let due = s
+                                .last_regen
+                                .get(&ps.chain)
+                                .map(|t| t.elapsed()
+                                    >= std::time::Duration::from_millis(150))
+                                .unwrap_or(true);
+                            if !due {
+                                continue;
+                            }
+                            s.last_regen.insert(ps.chain, Instant::now());
+                            let moved =
+                                s.dirty_moved.remove(&ps.chain).unwrap_or_default();
+                            let (cands, _incoh) =
+                                arb::candidates(&s.pools, ps.chain, &moved);
+                            queue_sims(&mut s, cands, &cfg_i, &mut reqs);
                         }
                         Event::PoolHeartbeat(h) => {
                             // Post-dedup freshness: unchanged pools keep
@@ -413,37 +455,7 @@ async fn main() -> anyhow::Result<()> {
                                         ));
                                     }
                                 }
-                                for c in cands {
-                                    if !cfg_i.strategies.iter().any(|t| t == c.strategy) {
-                                        continue;
-                                    }
-                                    s.req_seq += 1;
-                                    let req_id = s.req_seq;
-                                    s.pending.insert(req_id, PendingSim {
-                                        route: c.route.clone(),
-                                        chain: c.chain,
-                                        input_amount: c.optimal_input,
-                                        input_token: c.input_token.clone(),
-                                        input_symbol: c.input_symbol.clone(),
-                                        kind: if c.strategy == "P05" {
-                                            OppKind::Backrun
-                                        } else {
-                                            OppKind::AtomicDexArb
-                                        },
-                                        strategy: c.strategy,
-                                    });
-                                    s.funnel.simulated.fetch_add(1, Ordering::Relaxed);
-                                    reqs.push(SimRequest {
-                                        req_id,
-                                        chain: c.chain,
-                                        route: c.route,
-                                        input_amount: c.optimal_input,
-                                        input_token: c.input_token,
-                                        strategy: c.strategy.to_string(),
-                                        block: 0,
-                                        ts_ms: now_ms(),
-                                    });
-                                }
+                                queue_sims(&mut s, cands, &cfg_i, &mut reqs);
                             }
                         }
                         _ => {}
@@ -491,6 +503,53 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::signal::ctrl_c().await.ok();
     Ok(())
+}
+
+/// Push candidates through the strategy allowlist into the sim pipeline —
+/// one code path for pool-update, pending-tx (U1) and CEX predictive (P09)
+/// scans. `kind` is derived from the strategy tag for attribution.
+fn queue_sims(
+    s: &mut State,
+    cands: Vec<arb::Candidate>,
+    cfg: &Config,
+    reqs: &mut Vec<SimRequest>,
+) {
+    for c in cands {
+        // P09 rides the P03 lane: admissible wherever P03 is enabled
+        // (the predictive form of the same CEX/DEX strategy family).
+        let allowed = cfg.strategies.iter().any(|t| t == c.strategy)
+            || (c.strategy == "P09" && cfg.strategies.iter().any(|t| t == "P03"));
+        if !allowed {
+            continue;
+        }
+        let kind = match c.strategy {
+            "P05" => OppKind::Backrun,
+            "P03" | "P09" => OppKind::CexDexDivergence,
+            _ => OppKind::AtomicDexArb,
+        };
+        s.req_seq += 1;
+        let req_id = s.req_seq;
+        s.pending.insert(req_id, PendingSim {
+            route: c.route.clone(),
+            chain: c.chain,
+            input_amount: c.optimal_input,
+            input_token: c.input_token.clone(),
+            input_symbol: c.input_symbol.clone(),
+            kind,
+            strategy: c.strategy,
+        });
+        s.funnel.simulated.fetch_add(1, Ordering::Relaxed);
+        reqs.push(SimRequest {
+            req_id,
+            chain: c.chain,
+            route: c.route,
+            input_amount: c.optimal_input,
+            input_token: c.input_token,
+            strategy: c.strategy.to_string(),
+            block: 0,
+            ts_ms: now_ms(),
+        });
+    }
 }
 
 /// SimResult arrived — score profitability and emit downstream events.

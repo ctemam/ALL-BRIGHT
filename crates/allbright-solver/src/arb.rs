@@ -143,6 +143,108 @@ pub fn candidates_for_asset(
     (out, incoherent)
 }
 
+/// Minimum repricing tailwind (bps): the buy leg's pool must price the
+/// asset below CEX fair mid by this much — otherwise the entry is at or
+/// above fair value and the strike buys the overpriced side.
+const PRED_TAILWIND_BPS: f64 = 10.0;
+
+/// P09 — predictive stale-quote strikes (CEX-leadership / whack-a-mole
+/// loop): the CEX mid is the forecast of where DEX quotes are heading —
+/// liquidity moves there first, DEX pools reprice after. A pool whose
+/// implied USD price sits BELOW the mid is stale in the profitable
+/// direction: buy it now, it reprices UP. The exit leg is a same-pair
+/// pool on a different venue priced higher — the route still settles
+/// atomically (no legged CEX hedge — that's outside allbright's model).
+///
+/// Unlike the P03 move-triggered rescan, this fires on the persistent
+/// gap between pool price and fair value: a pool that never repriced is
+/// a standing target even while the CEX sits still.
+///
+/// `usd_of` maps a quote-token symbol to its USD unit price (solver
+/// pricing module). Candidates carry strategy "P09" for attribution.
+pub fn predictive_strikes(
+    pools: &HashMap<String, PoolState>,
+    chain: Chain,
+    asset_syms: &std::collections::HashSet<String>,
+    cex_mid_usd: f64,
+    usd_of: &dyn Fn(&str) -> f64,
+) -> Vec<Candidate> {
+    if cex_mid_usd <= 0.0 {
+        return Vec::new();
+    }
+    // Implied USD price of the CEX-mapped asset per pool.
+    let mut implied: HashMap<String, f64> = HashMap::new();
+    for p in pools.values() {
+        if p.chain != chain {
+            continue;
+        }
+        let base_is_t0 = asset_syms.contains(&p.token0.symbol.to_ascii_uppercase());
+        let base_is_t1 = asset_syms.contains(&p.token1.symbol.to_ascii_uppercase());
+        if !base_is_t0 && !base_is_t1 {
+            continue;
+        }
+        let quote_sym = if base_is_t0 { &p.token1.symbol } else { &p.token0.symbol };
+        let quote_usd = usd_of(quote_sym);
+        let px = p.spot_price(); // token1 per token0 (human units)
+        if quote_usd <= 0.0 || px <= 0.0 {
+            continue;
+        }
+        let usd = if base_is_t0 { px } else { 1.0 / px } * quote_usd;
+        if usd.is_finite() && usd > 0.0 {
+            implied.insert(p.address.clone(), usd);
+        }
+    }
+    let tail = cex_mid_usd * (PRED_TAILWIND_BPS / 1e4);
+    let mut out = Vec::new();
+    let mut incoherent = 0u64;
+    let moved = std::collections::HashSet::new();
+    for (addr, &buy_px) in &implied {
+        // Entry must be stale-LOW vs fair — the repricing tailwind is
+        // the predicted edge, not just the measured spread.
+        if buy_px >= cex_mid_usd - tail {
+            continue;
+        }
+        let Some(bp) = pools.get(addr) else { continue };
+        for (eaddr, &sell_px) in &implied {
+            if eaddr == addr || sell_px <= buy_px {
+                continue;
+            }
+            let Some(ep) = pools.get(eaddr) else { continue };
+            // Atomicity: exit leg must pay out in the input token —
+            // same token pair on a different pool.
+            if !same_pair(bp, ep) {
+                continue;
+            }
+            // Direction: input = quote side of the buy pool.
+            let (tin, tout) = if asset_syms
+                .contains(&bp.token0.symbol.to_ascii_uppercase())
+            {
+                (bp.token1.address.as_str(), bp.token0.address.as_str())
+            } else {
+                (bp.token0.address.as_str(), bp.token1.address.as_str())
+            };
+            try_route(
+                pools,
+                chain,
+                vec![leg(bp, tin, tout), leg(ep, tout, tin)],
+                &moved,
+                &mut out,
+                &mut incoherent,
+            );
+        }
+    }
+    for c in &mut out {
+        c.strategy = "P09";
+    }
+    if out.len() > MAX_CANDIDATES_PER_SCAN {
+        out.sort_by(|a, b| {
+            b.est_profit.partial_cmp(&a.est_profit).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        out.truncate(MAX_CANDIDATES_PER_SCAN);
+    }
+    out
+}
+
 /// True when every leg's pool state is coherent: measured within
 /// MAX_BLOCK_SKEW blocks and MAX_TS_SKEW_MS of each other, and no leg
 /// older than MAX_POOL_AGE_MS. Block 0 (unknown height) falls back to
@@ -359,5 +461,70 @@ fn three_hop(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use allbright_core::events::{DexKind, PoolState, Token};
+
+    fn mkpool(addr: &str, sym_a: (&str, &str), sym_b: (&str, &str), r0: f64, r1: f64) -> PoolState {
+        PoolState {
+            chain: Chain::Base,
+            dex: DexKind::V2,
+            venue: format!("v_{addr}"),
+            address: addr.into(),
+            token0: Token { symbol: sym_a.0.into(), address: sym_a.1.into(), decimals: 18 },
+            token1: Token { symbol: sym_b.0.into(), address: sym_b.1.into(), decimals: 18 },
+            reserve0: r0,
+            reserve1: r1,
+            sqrt_price_x96: None,
+            liquidity: None,
+            fee_bps: 30,
+            block: 10,
+            ts_ms: now_ms(),
+        }
+    }
+
+    const WETH: (&str, &str) = ("WETH", "0x4200000000000000000000000000000000000006");
+    const USDC: (&str, &str) = ("USDC", "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
+
+    fn syms() -> std::collections::HashSet<String> {
+        ["WETH".to_string(), "ETH".to_string()].into_iter().collect()
+    }
+
+    /// Stale-low pool + repriced pool → one directed P09 strike whose
+    /// entry leg is the pool below the CEX fair mid.
+    #[test]
+    fn stale_low_pool_yields_directed_strike() {
+        let mut pools = HashMap::new();
+        // fair mid = 3000. Stale pool: 100 WETH / 270k USDC → $2700.
+        // Repriced pool: 200 WETH / 620k USDC → $3100.
+        pools.insert("0xstale".into(), mkpool("0xstale", USDC, WETH, 270_000.0, 100.0));
+        pools.insert("0xfair".into(), mkpool("0xfair", USDC, WETH, 620_000.0, 200.0));
+        let usd = |s: &str| if s == "USDC" { 1.0 } else { 0.0 };
+        let out = predictive_strikes(&pools, Chain::Base, &syms(), 3000.0, &usd);
+        assert!(!out.is_empty(), "stale-low + repriced pools must strike");
+        let c = &out[0];
+        assert_eq!(c.strategy, "P09");
+        // Entry leg is the stale pool selling WETH for USDC.
+        assert_eq!(c.route[0].pool_address, "0xstale");
+        assert_eq!(c.route[0].token_out, WETH.1);
+        assert!(c.est_profit > 0.0);
+    }
+
+    /// Entry above fair = buying the overpriced side → no strike even
+    /// when a pool-vs-pool spread exists (direction is predictive).
+    #[test]
+    fn entry_above_mid_is_rejected() {
+        let mut pools = HashMap::new();
+        // mid = 3000. Pool A above mid ($3100), pool B higher ($3200) —
+        // spread exists but the "cheap" entry is already above fair.
+        pools.insert("0xa".into(), mkpool("0xa", USDC, WETH, 620_000.0, 200.0));
+        pools.insert("0xb".into(), mkpool("0xb", USDC, WETH, 960_000.0, 300.0));
+        let usd = |s: &str| if s == "USDC" { 1.0 } else { 0.0 };
+        let out = predictive_strikes(&pools, Chain::Base, &syms(), 3000.0, &usd);
+        assert!(out.is_empty(), "no strike when the cheapest entry is above mid");
     }
 }
