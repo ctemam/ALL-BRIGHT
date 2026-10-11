@@ -554,10 +554,20 @@ async fn erc3156_or_univ3_flash(
     Ok(None)
 }
 
-/// BSC-class submission: sponsored UserOp → smart account →
-/// `AllbrightExecutor.execute(legs, amountIn, minProfit, aavePool, kind)`.
-/// Fail-closed at every verification step.
-async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
+/// Everything the two submission paths share: executor lookup, ordered
+/// RPC pool, signer, code-existence check, input token, flash-provider
+/// verification (cheapest-first), USD→token minProfit conversion and
+/// the final `execute(...)` calldata. Extracted so the sponsored
+/// UserOp path and the Ethereum signed-tx private path run the
+/// IDENTICAL verification sequence — fail-closed at every step.
+struct PreparedExecute {
+    executor: Address,
+    rpcs: Vec<String>,
+    signer: PrivateKeySigner,
+    encoded: Vec<u8>,
+}
+
+async fn prepare_execute(cfg: &Config, req: &ExecutionRequest) -> Result<PreparedExecute> {
     let chain = req.signal.chain;
     let executor: Address = cfg
         .executor_address(chain)
@@ -669,6 +679,16 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
         pool_addr,
         Bytes::from(U256::from(kind).to_be_bytes::<32>().to_vec()),
     )?;
+    Ok(PreparedExecute { executor, rpcs, signer, encoded })
+}
+
+/// BSC-class submission: sponsored UserOp → smart account →
+/// `AllbrightExecutor.execute(legs, amountIn, minProfit, aavePool, kind)`.
+/// Fail-closed at every verification step.
+async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
+    let chain = req.signal.chain;
+    let PreparedExecute { executor, rpcs, signer, encoded } =
+        prepare_execute(cfg, req).await?;
     let pim = aa::PimlicoClient::new(
         cfg.pimlico_api_key
             .as_ref()
@@ -708,11 +728,153 @@ async fn submit_via_aa(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
         .await
 }
 
-async fn submit_flashbots(_cfg: &Config, _req: &ExecutionRequest) -> Result<String> {
-    // GAP-4 (AGENTS Appendix B): this path previously returned a
-    // fabricated "0xflashbots-pending" hash after a credential ping — a
-    // truth violation (submission ≠ inclusion must never be faked).
-    // Real eth_sendBundle (signed executor tx + bundle ordering) is not
-    // implemented; fail closed until it is.
-    anyhow::bail!("flashbots bundle path not implemented — refusing to fabricate submission")
+// ── Ethereum private submission (U14/U18) ────────────────────────────
+// mev-templates / Flashbots-Protect pattern: a signed executor tx sent
+// to a private endpoint — never the public mempool. Two lanes:
+//   1. `eth_sendPrivateTransaction` → rpc.flashbots.net (free, no
+//      account, no key — the tx lands privately or not at all).
+//   2. `eth_sendBundle` → relay.flashbots.net — only when
+//      FLASHBOTS_AUTH_KEY is set (reputation relay requires the
+//      X-Flashbots-Signature auth header; target = next block).
+// Honest constraints: the EOA pays gas (Ethereum is not gasless —
+// AllbrightExecutor enforces minProfit on-chain which bounds the
+// loss), and inclusion is never claimed — the return is the relay's
+// own hash only.
+const ETH_PRIVATE_TX_URL: &str = "https://rpc.flashbots.net";
+const FLASHBOTS_RELAY_URL: &str = "https://relay.flashbots.net";
+
+/// Parse a `0x`-hex JSON-RPC quantity result into u128.
+fn rpc_hex_u128(v: &serde_json::Value) -> Option<u128> {
+    let s = v.as_str()?.trim_start_matches("0x");
+    u128::from_str_radix(if s.is_empty() { "0" } else { s }, 16).ok()
+}
+
+async fn rpc_quantity(rpcs: &[String], method: &str, params: serde_json::Value) -> Result<u128> {
+    match race_rpc(rpcs, method, params).await {
+        CallOutcome::Ok(v) => rpc_hex_u128(&v)
+            .ok_or_else(|| anyhow::anyhow!("{method}: bad quantity {v}")),
+        CallOutcome::Evm(m) => anyhow::bail!("{method} evm: {m}"),
+        CallOutcome::Transport(m) => anyhow::bail!("{method} transport: {m}"),
+    }
+}
+
+async fn submit_flashbots(cfg: &Config, req: &ExecutionRequest) -> Result<String> {
+    use alloy::consensus::{SignableTransaction, TxEip1559};
+    use alloy::eips::Encodable2718;
+    use alloy::primitives::TxKind;
+    use alloy::signers::Signer;
+
+    let PreparedExecute { executor, rpcs, signer, encoded } =
+        prepare_execute(cfg, req).await?;
+    let from = signer.address();
+
+    // Same zero-gas-loss gate as the AA path — `from` is the paying EOA
+    // here, not the Kernel account.
+    let mut gated = false;
+    let mut transport_err: Option<String> = None;
+    for _ in 0..2 {
+        match eth_call_from(&rpcs, from, executor, Bytes::from(encoded.clone())).await {
+            Ok(_) => { gated = true; break; }
+            Err(DryRunErr::Evm(d)) => anyhow::bail!("evm dry-run gate: {d}"),
+            Err(DryRunErr::Transport(e)) => transport_err = Some(e.to_string()),
+        }
+    }
+    if !gated {
+        tracing::warn!(err = %transport_err.unwrap_or_default(),
+            "eth dry-run gate inconclusive (transport) — proceeding under minProfit guard");
+    }
+
+    // Nonce / gas / fees. The priority fee IS the ordering bid (U18):
+    // builders rank bundles by it. Default 2 gwei, tunable via env.
+    let nonce = rpc_quantity(
+        &rpcs,
+        "eth_getTransactionCount",
+        json!([format!("{from:?}"), "pending"]),
+    )
+    .await? as u64;
+    let est = rpc_quantity(
+        &rpcs,
+        "eth_estimateGas",
+        json!([{"from":format!("{from:?}"),"to":format!("{executor:?}"),
+            "data":format!("0x{}",alloy::primitives::hex::encode(&encoded))}]),
+    )
+    .await?;
+    let gas_limit = (est * 6 / 5).min(1_500_000) as u64;
+    let prio: u128 = std::env::var("ETH_PRIORITY_WEI")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2_000_000_000); // 2 gwei — the default builder bid
+    let basefee = match race_rpc(&rpcs, "eth_feeHistory", json!([1, "latest", []])).await {
+        CallOutcome::Ok(v) => v["baseFeePerGas"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(rpc_hex_u128)
+            .unwrap_or(0),
+        _ => 0,
+    };
+    let max_fee = if basefee > 0 { basefee * 2 + prio } else { prio * 10 };
+
+    let tx = TxEip1559 {
+        chain_id: 1,
+        nonce,
+        gas_limit,
+        max_fee_per_gas: max_fee,
+        max_priority_fee_per_gas: prio,
+        to: TxKind::Call(executor),
+        value: U256::ZERO,
+        access_list: Default::default(),
+        input: Bytes::from(encoded),
+    };
+    let sig = signer.sign_hash(&tx.signature_hash()).await?;
+    let raw = tx.into_signed(sig).encoded_2718();
+    let raw_hex = format!("0x{}", alloy::primitives::hex::encode(&raw));
+
+    let client = shared_client();
+    if let Ok(auth_key) = std::env::var("FLASHBOTS_AUTH_KEY") {
+        // eth_sendBundle — reputation relay, signed auth header,
+        // next-block target. Returns a bundle hash, not a tx hash.
+        let auth: PrivateKeySigner = auth_key
+            .parse()
+            .map_err(|_| anyhow::anyhow!("FLASHBOTS_AUTH_KEY invalid"))?;
+        let target = rpc_quantity(&rpcs, "eth_blockNumber", json!([])).await? + 1;
+        let body = json!({"jsonrpc":"2.0","id":1,"method":"eth_sendBundle",
+            "params":[{"txs":[raw_hex],"blockNumber":format!("0x{target:x}")}]})
+        .to_string();
+        let sig = auth
+            .sign_message(&keccak256(body.as_bytes()).0)
+            .await?;
+        let resp = client
+            .post(std::env::var("FLASHBOTS_RELAY_URL").unwrap_or_else(|_| FLASHBOTS_RELAY_URL.into()))
+            .header("Content-Type", "application/json")
+            .header("X-Flashbots-Signature", format!("{:?}:{}", auth.address(), sig))
+            .body(body)
+            .send()
+            .await?
+            .json::<serde_json::Value>()
+            .await?;
+        if let Some(err) = resp.get("error") {
+            anyhow::bail!("eth_sendBundle: {}", err["message"].as_str().unwrap_or("err"));
+        }
+        return Ok(format!("bundle:{}", resp["result"]["bundleHash"].as_str().unwrap_or("")));
+    }
+
+    // eth_sendPrivateTransaction — Flashbots Protect fast mode. Free,
+    // keyless; lands privately or not at all.
+    let url = std::env::var("ETH_PRIVATE_TX_URL")
+        .unwrap_or_else(|_| ETH_PRIVATE_TX_URL.into());
+    let resp = client
+        .post(url)
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"eth_sendPrivateTransaction",
+            "params":[{"tx":raw_hex,"preferences":{"fast":true}}]}))
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+    if let Some(err) = resp.get("error") {
+        anyhow::bail!("eth_sendPrivateTransaction: {}",
+            err["message"].as_str().unwrap_or("err"));
+    }
+    resp["result"].as_str()
+        .map(|h| h.to_string())
+        .ok_or_else(|| anyhow::anyhow!("private tx: empty hash"))
 }
