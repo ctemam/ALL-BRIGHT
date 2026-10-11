@@ -96,8 +96,12 @@ pub fn candidates(
     let mut incoherent = 0u64;
     two_hop(&list, pools, moved, &mut out, &mut incoherent);
     three_hop(&list, pools, moved, &mut out, &mut incoherent);
-    // Keep the best-K by estimated gross — prevents a pool-update burst
-    // from flooding the sim link (broadcast lag wedges subscribers).
+    negative_cycles(&list, pools, moved, &mut out, &mut incoherent);
+    // Dedup across generators (BF can rediscover enumerated cycles),
+    // then keep the best-K by estimated gross — prevents a pool-update
+    // burst from flooding the sim link (broadcast lag wedges subscribers).
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|c| seen.insert(route_sig(&c.route)));
     if out.len() > MAX_CANDIDATES_PER_SCAN {
         out.sort_by(|a, b| {
             b.est_profit.partial_cmp(&a.est_profit).unwrap_or(std::cmp::Ordering::Equal)
@@ -464,6 +468,174 @@ fn three_hop(
     }
 }
 
+/// Maximum legs in a Bellman-Ford-discovered cycle — deeper paths pay
+/// more gas and drift further between quote and inclusion.
+const MAX_BF_LEGS: usize = 4;
+/// Negative-cycle extractions per scan: each round masks the found
+/// cycle's edges so the next pass surfaces a different cycle.
+const MAX_BF_CYCLES: usize = 8;
+
+/// Canonical route signature — the token_in sequence rotated so its
+/// smallest address leads. Cycles found at different starting tokens,
+/// and BF/redundant scans of the same route, collapse to one key.
+fn route_sig(route: &[SwapLeg]) -> String {
+    let n = route.len();
+    if n == 0 {
+        return String::new();
+    }
+    let mut best = String::new();
+    for r in 0..n {
+        let mut sig = String::new();
+        for k in 0..n {
+            let l = &route[(r + k) % n];
+            sig.push_str(&l.pool_address);
+            sig.push(':');
+            sig.push_str(&l.token_in);
+            sig.push(';');
+        }
+        if best.is_empty() || sig < best {
+            best = sig;
+        }
+    }
+    best
+}
+
+/// U10 — Bellman-Ford-Moore negative-cycle discovery (DeFiPoser /
+/// tycho-searcher pattern): tokens are vertices, each pool contributes
+/// two directed edges weighted `-ln(spot_rate × (1 - fee))`; a
+/// negative-sum cycle is a profitable closed route. Only cycle-FINDING
+/// uses log weights — spot-rate candidates are hints; sizing and
+/// viability still run through `try_route` and the shared funnel.
+/// Catches cycles the brute-force scans structurally miss (4-hop and
+/// non-enumerated paths).
+fn negative_cycles(
+    list: &[&PoolState],
+    pools: &HashMap<String, PoolState>,
+    moved: &std::collections::HashSet<String>,
+    out: &mut Vec<Candidate>,
+    incoherent: &mut u64,
+) {
+    struct Edge {
+        from: usize,
+        to: usize,
+        w: f64,
+        pool: usize,
+        tin: String,
+        tout: String,
+    }
+    let mut tidx: HashMap<&str, usize> = HashMap::new();
+    let mut edges: Vec<Edge> = Vec::new();
+    fn push_edge<'k>(
+        tidx: &mut HashMap<&'k str, usize>,
+        edges: &mut Vec<Edge>,
+        pool: usize,
+        tin: &'k str,
+        tout: &'k str,
+        rate: f64,
+    ) {
+        let n = tidx.len();
+        let from = *tidx.entry(tin).or_insert(n);
+        let n = tidx.len();
+        let to = *tidx.entry(tout).or_insert(n);
+        edges.push(Edge {
+            from,
+            to,
+            w: -rate.ln(),
+            pool,
+            tin: tin.to_string(),
+            tout: tout.to_string(),
+        });
+    }
+    for (pi, p) in list.iter().enumerate() {
+        let px = p.spot_price(); // token1 per token0 (human units)
+        if !px.is_finite() || px <= 0.0 {
+            continue;
+        }
+        let keep = 1.0 - p.fee_bps as f64 / 1e4;
+        if keep <= 0.0 {
+            continue;
+        }
+        push_edge(&mut tidx, &mut edges, pi, &p.token0.address, &p.token1.address, px * keep);
+        push_edge(&mut tidx, &mut edges, pi, &p.token1.address, &p.token0.address, keep / px);
+    }
+    let v = tidx.len();
+    if v < 2 || edges.is_empty() {
+        return;
+    }
+    let mut masked = vec![false; edges.len()];
+    let mut seen = std::collections::HashSet::new();
+
+    for _ in 0..MAX_BF_CYCLES {
+        // Super-source trick: all distances start at 0 — any negative
+        // cycle in the graph is detected, not only root-reachable ones.
+        let mut dist = vec![0.0f64; v];
+        let mut prev: Vec<Option<usize>> = vec![None; v];
+        let mut hit: Option<usize> = None;
+        for _round in 0..v {
+            hit = None;
+            for (i, e) in edges.iter().enumerate() {
+                if masked[i] {
+                    continue;
+                }
+                if dist[e.from] + e.w < dist[e.to] - 1e-12 {
+                    dist[e.to] = dist[e.from] + e.w;
+                    prev[e.to] = Some(i);
+                    hit = Some(e.to);
+                }
+            }
+            if hit.is_none() {
+                break;
+            }
+        }
+        let Some(mut y) = hit else { break };
+        // Walk V predecessors to land strictly inside the cycle.
+        let mut ok = true;
+        for _ in 0..v {
+            match prev[y] {
+                Some(ei) => y = edges[ei].from,
+                None => { ok = false; break }
+            }
+        }
+        if !ok {
+            break;
+        }
+        // Collect the closed walk y → y in edge order.
+        let mut cyc: Vec<usize> = Vec::new();
+        let mut cur = y;
+        let mut closed = false;
+        while cyc.len() <= v {
+            let Some(ei) = prev[cur] else { break };
+            cyc.push(ei);
+            cur = edges[ei].from;
+            if cur == y {
+                closed = true;
+                break;
+            }
+        }
+        if !closed || cyc.len() > MAX_BF_LEGS {
+            break;
+        }
+        cyc.reverse();
+        for &ei in &cyc {
+            masked[ei] = true;
+        }
+
+        let route: Vec<SwapLeg> = cyc
+            .iter()
+            .map(|&ei| leg(list[edges[ei].pool], &edges[ei].tin, &edges[ei].tout))
+            .collect();
+        // Degenerate cycles reusing one pool price a phantom — require
+        // ≥2 distinct pools, same as the brute-force scans.
+        let distinct: std::collections::HashSet<&str> =
+            route.iter().map(|l| l.pool_address.as_str()).collect();
+        if distinct.len() < 2 || !seen.insert(route_sig(&route)) {
+            continue;
+        }
+        let chain = list[edges[cyc[0]].pool].chain;
+        try_route(pools, chain, route, moved, out, incoherent);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,5 +698,41 @@ mod tests {
         let usd = |s: &str| if s == "USDC" { 1.0 } else { 0.0 };
         let out = predictive_strikes(&pools, Chain::Base, &syms(), 3000.0, &usd);
         assert!(out.is_empty(), "no strike when the cheapest entry is above mid");
+    }
+    /// Bellman-Ford finds a profitable 4-hop cycle the brute-force scans
+    /// never enumerate — A→B→C→D→A with rates multiplying to ~1.46.
+    #[test]
+    fn bf_finds_four_hop_negative_cycle() {
+        let mut pools = HashMap::new();
+        pools.insert("0xp1".into(), mkpool("0xp1", ("TA","0xta"), ("TB","0xtb"), 1000.0, 1100.0));
+        pools.insert("0xp2".into(), mkpool("0xp2", ("TB","0xtb"), ("TC","0xtc"), 1000.0, 1100.0));
+        pools.insert("0xp3".into(), mkpool("0xp3", ("TC","0xtc"), ("TD","0xtd"), 1000.0, 1100.0));
+        pools.insert("0xp4".into(), mkpool("0xp4", ("TD","0xtd"), ("TA","0xta"), 1000.0, 1100.0));
+        let list: Vec<&PoolState> = pools.values().collect();
+        let mut out = Vec::new();
+        let mut incoh = 0u64;
+        negative_cycles(&list, &pools, &std::collections::HashSet::new(), &mut out, &mut incoh);
+        assert!(!out.is_empty(), "4-hop negative cycle must surface a candidate");
+        let c = &out[0];
+        assert_eq!(c.route.len(), 4);
+        assert_eq!(c.strategy, "P02");
+        // The route is closed: every leg's out feeds the next leg's in.
+        for i in 0..4 {
+            assert_eq!(c.route[i].token_out, c.route[(i + 1) % 4].token_in);
+        }
+    }
+
+    /// No negative cycle → no candidates (honest empty, not a fabricated
+    /// route).
+    #[test]
+    fn bf_empty_when_no_negative_cycle() {
+        let mut pools = HashMap::new();
+        pools.insert("0xp1".into(), mkpool("0xp1", ("TA","0xta"), ("TB","0xtb"), 1000.0, 1000.0));
+        pools.insert("0xp2".into(), mkpool("0xp2", ("TB","0xtb"), ("TC","0xtc"), 1000.0, 1000.0));
+        let list: Vec<&PoolState> = pools.values().collect();
+        let mut out = Vec::new();
+        let mut incoh = 0u64;
+        negative_cycles(&list, &pools, &std::collections::HashSet::new(), &mut out, &mut incoh);
+        assert!(out.is_empty());
     }
 }
