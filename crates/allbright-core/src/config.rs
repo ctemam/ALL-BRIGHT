@@ -397,6 +397,21 @@ pub struct Config {
     /// Per-chain minimum seconds between EV-class ExecRequests
     /// (`EV_EMIT_SECS`, default 15) — bounds bundler/quota burn.
     pub ev_emit_secs: u64,
+    /// Adaptive net-profit floor (`ADAPTIVE_FLOOR`, default true):
+    /// floor(chain) = clamp(base + gas_mult×gas_ewma − challenger_credit,
+    /// floor_min, cap). Proven-pattern composite — live gas regime
+    /// (searcher EV-gate) + challenger lookback adaptation (Freqtrade
+    /// protections class). The static `min_profit_usd` remains the base.
+    pub adaptive_floor: bool,
+    /// Hard lower bound on the adaptive floor (`PROFIT_FLOOR_USD`,
+    /// default 1.0) — never adapts below it.
+    pub profit_floor_usd: f64,
+    /// Hard upper bound (`PROFIT_CAP_USD`, default 50.0) — a runaway
+    /// gas regime can never freeze trading past this.
+    pub profit_cap_usd: f64,
+    /// Gas-regime multiplier (`ADAPTIVE_GAS_MULT`, default 0.5) — the
+    /// floor clears ~1.5× live attempt cost before firing.
+    pub adaptive_gas_mult: f64,
     /// Optional per-service port overrides (PORT_INGEST etc.) or defaults.
     pub ports: ServicePorts,
 }
@@ -708,6 +723,10 @@ impl Config {
         let ev_chains_raw = get("EV_CHAINS");
         let ev_floor_raw = get("EV_FLOOR_USD");
         let ev_emit_raw = get("EV_EMIT_SECS");
+        let adaptive_floor_raw = get("ADAPTIVE_FLOOR");
+        let profit_floor_raw = get("PROFIT_FLOOR_USD");
+        let profit_cap_raw = get("PROFIT_CAP_USD");
+        let adaptive_gas_mult_raw = get("ADAPTIVE_GAS_MULT");
 
         let active_chains: Vec<Chain> = spec
             .active_chains
@@ -763,6 +782,12 @@ impl Config {
             ev_chains,
             ev_floor_usd: num_or("EV_FLOOR_USD", ev_floor_raw, 0.01),
             ev_emit_secs: num_or("EV_EMIT_SECS", ev_emit_raw, 15u64),
+            adaptive_floor: adaptive_floor_raw
+                .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(true),
+            profit_floor_usd: num_or("PROFIT_FLOOR_USD", profit_floor_raw, 1.0),
+            profit_cap_usd: num_or("PROFIT_CAP_USD", profit_cap_raw, 50.0),
+            adaptive_gas_mult: num_or("ADAPTIVE_GAS_MULT", adaptive_gas_mult_raw, 0.5),
             velora_api_key: secret(spec.velora_api_key),
             flashbots_relay: spec
                 .flashboots_relay
@@ -1007,6 +1032,18 @@ mod tests {
             ev_emit_secs: get("EV_EMIT_SECS")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(15),
+            adaptive_floor: get("ADAPTIVE_FLOOR")
+                .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(true),
+            profit_floor_usd: get("PROFIT_FLOOR_USD")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1.0),
+            profit_cap_usd: get("PROFIT_CAP_USD")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(50.0),
+            adaptive_gas_mult: get("ADAPTIVE_GAS_MULT")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.5),
             velora_api_key: secret("VELORA_API_KEY"),
             flashbots_relay: get("FLASHBOOTS_RELAY")
                 .unwrap_or_else(|| "https://relay.flashbots.net".into()),

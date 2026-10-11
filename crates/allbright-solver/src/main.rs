@@ -11,6 +11,7 @@
 
 mod arb;
 mod pricing;
+mod threshold;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -59,6 +60,9 @@ struct State {
     /// Per-chain rate cap on EV-class ExecRequests (GAP-37) — bounds
     /// bundler/quota burn while keeping the class journaled.
     ev_last_emit: HashMap<Chain, Instant>,
+    /// Adaptive net-profit floor — EV-gate composite (live gas regime
+    /// + challenger-verdict EWMA), clamped to [floor_min, cap].
+    threshold: threshold::AdaptiveFloor,
     /// Per-CEX-symbol throttle for the P09 predictive scan (gap-based —
     /// runs on every tick, not just on sharp moves).
     pred_scan: HashMap<String, Instant>,
@@ -158,6 +162,13 @@ async fn main() -> anyhow::Result<()> {
         bait: HashMap::new(),
         bait_checked: Instant::now() - std::time::Duration::from_secs(60),
         ev_last_emit: HashMap::new(),
+        threshold: threshold::AdaptiveFloor::new(
+            cfg.min_profit_usd,
+            cfg.adaptive_gas_mult,
+            cfg.profit_floor_usd,
+            cfg.profit_cap_usd,
+            cfg.adaptive_floor,
+        ),
         pred_scan: HashMap::new(),
     }));
 
@@ -218,6 +229,28 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            }
+        }
+    });
+
+    // Challenger feed :3107 — counterfactual verdicts feed the adaptive
+    // floor (Freqtrade-protection-style lookback: sustained challenged=
+    // true evidence lowers the lane floor toward floor_min).
+    let challenger_addr = format!("127.0.0.1:{}", cfg.ports.challenger);
+    tokio::spawn({
+        let state = state.clone();
+        async move {
+            loop {
+                let mut cli = BusClient::connect_retry(&challenger_addr).await;
+                while let Some(ev) = cli.incoming.recv().await {
+                    if let Event::Challenge(v) = ev {
+                        let mut s = state.lock().await;
+                        s.threshold
+                            .note_verdict(v.chain, v.challenged, v.counterfactual_net_usd);
+                    }
+                }
+                tracing::warn!("challenger feed dropped; reconnecting");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         }
     });
@@ -563,11 +596,15 @@ async fn handle_sim_result(
     info!(req_id = res.req_id, ok = res.ok, out = res.output_amount,
           us = res.elapsed_us, "sim result");
     let Some(p) = s.pending.remove(&res.req_id) else { return };
+    // Floor at decision time — adaptive (gas regime + challenger credit)
+    // or the static base when ADAPTIVE_FLOOR=false.
+    let floor = s.threshold.floor(p.chain);
     // Every funnel exit is recorded as a classified Rejected candidate —
     // the observatory/challenger need the full rejection trail, not just
     // the survivors. ("Zero opportunity" ≠ "zero qualified opportunity".)
     let reject = |state: OppState, reason: RejectReason,
-                  p: &PendingSim, gross_usd: f64, res: &SimResult| {
+                  p: &PendingSim, gross_usd: f64, res: &SimResult,
+                  floor: f64| {
         Event::Rejected(RejectedCandidate {
             chain: p.chain,
             kind: p.kind,
@@ -579,13 +616,13 @@ async fn handle_sim_result(
             state,
             reason,
             gross_usd,
-            threshold_usd: cfg.min_profit_usd,
+            threshold_usd: floor,
             gas_est: res.gas_est,
             ts_ms: now_ms(),
         })
     };
     if !res.ok {
-        let ev = reject(OppState::Candidate, RejectReason::SimulationFailed, &p, 0.0, &res);
+        let ev = reject(OppState::Candidate, RejectReason::SimulationFailed, &p, 0.0, &res, floor);
         drop(s);
         let _ = bus.publish(&ev);
         return;
@@ -599,14 +636,14 @@ async fn handle_sim_result(
             .map(|b| b.is_convicted(&leg.pool_address))
             .unwrap_or(false)
     }) {
-        let ev = reject(OppState::Simulated, RejectReason::BaitPool, &p, 0.0, &res);
+        let ev = reject(OppState::Simulated, RejectReason::BaitPool, &p, 0.0, &res, floor);
         drop(s);
         let _ = bus.publish(&ev);
         return;
     }
     let gross = res.output_amount - p.input_amount;
     if gross <= 0.0 {
-        let ev = reject(OppState::Simulated, RejectReason::NegativeEdge, &p, 0.0, &res);
+        let ev = reject(OppState::Simulated, RejectReason::NegativeEdge, &p, 0.0, &res, floor);
         drop(s);
         let _ = bus.publish(&ev);
         return;
@@ -632,7 +669,7 @@ async fn handle_sim_result(
                 st.reserve0.min(st.reserve1)
             };
             if res.output_amount > out_reserve && out_reserve > 0.0 {
-                let ev = reject(OppState::Simulated, RejectReason::MathArtifact, &p, 0.0, &res);
+                let ev = reject(OppState::Simulated, RejectReason::MathArtifact, &p, 0.0, &res, floor);
                 drop(s);
                 let _ = bus.publish(&ev);
                 return;
@@ -654,7 +691,7 @@ async fn handle_sim_result(
         );
     }
     if usd_per_unit <= 0.0 {
-        let ev = reject(OppState::Simulated, RejectReason::NoUsdPricing, &p, 0.0, &res);
+        let ev = reject(OppState::Simulated, RejectReason::NoUsdPricing, &p, 0.0, &res, floor);
         drop(s);
         let _ = bus.publish(&ev);
         return;
@@ -681,6 +718,10 @@ async fn handle_sim_result(
         .map(|(g, _)| *g)
         .unwrap_or(2_000_000_000); // 2 gwei conservative fallback
     let gas_usd = res.gas_est as f64 * gas_wei as f64 / 1e18 * native_usd;
+    // Feed the lane's live gas regime into the adaptive floor, then
+    // re-read it — this decision uses the freshest regime evidence.
+    s.threshold.note_gas(p.chain, gas_usd);
+    let floor = s.threshold.floor(p.chain);
     // Flash premium: 5 bps of borrowed amount in input-token units.
     // If the sim route has no flash leg (future: non-flash cyclic) this
     // still over-deducts by at most 0.05% — safe direction.
@@ -702,13 +743,13 @@ async fn handle_sim_result(
             .get(&p.chain)
             .map(|t| t.elapsed() >= std::time::Duration::from_secs(cfg.ev_emit_secs))
             .unwrap_or(true);
-    let ev_mode = profit_usd < cfg.min_profit_usd && ev_eligible;
-    if profit_usd < cfg.min_profit_usd && !ev_mode {
+    let ev_mode = profit_usd < floor && ev_eligible;
+    if profit_usd < floor && !ev_mode {
         info!(
             chain = %p.chain.name(), gross_usd, gas_usd, net = profit_usd,
-            min = cfg.min_profit_usd, "positive edge below net threshold"
+            min = floor, "positive edge below net threshold"
         );
-        let ev = reject(OppState::Simulated, RejectReason::BelowStrategyThreshold, &p, gross_usd, &res);
+        let ev = reject(OppState::Simulated, RejectReason::BelowStrategyThreshold, &p, gross_usd, &res, floor);
         drop(s);
         let _ = bus.publish(&ev);
         return;
@@ -731,9 +772,9 @@ async fn handle_sim_result(
         input_token: p.input_token,
         expected_profit_usd: profit_usd,
         // EV signals carry the bounded EV floor as the on-chain guard —
-        // the contract still reverts below it; the $5 standard floor
-        // applies to standard-class signals only.
-        min_profit_usd: if ev_mode { cfg.ev_floor_usd } else { cfg.min_profit_usd },
+        // the contract still reverts below it; the adaptive standard
+        // floor applies to standard-class signals only.
+        min_profit_usd: if ev_mode { cfg.ev_floor_usd } else { floor },
         ev_mode,
         calldata: None, // executor encodes
         ts_ms: now_ms(),
