@@ -34,23 +34,23 @@ NETWORKS = {
  "scroll":("scroll",     "https://scroll-rpc.publicnode.com"),
  "blast":("blast",       "https://blast-rpc.publicnode.com"),
 }
-MAX_DEXES = 14          # venues enumerated per chain
-PAGES_PER_DEX = 3       # ~60 pools/venue raw candidates
-MAX_PAIRINGS = 90       # multi-instance pairs kept per chain
-MAX_CONNECTORS = 40     # extra single-venue pools for graph density
+MAX_DEXES = 20          # venues enumerated per chain
+PAGES_PER_DEX = 5       # ~100 pools/venue raw candidates
+MAX_PAIRINGS = 200      # multi-instance pairs kept per chain
+MAX_CONNECTORS = 80     # extra single-venue pools for graph density
 # Depth floor (AGENTS §28): a shallow universe structurally caps profit —
 # observed counterfactuals topped out at $0.03 net because the registry
 # held only overlap-pairs on thin pools. Always keep the deepest pools
 # per chain regardless of pair overlap; a deep single-venue pool still
 # serves triangular routes and divergence legs.
 DEEP_USD_FLOOR = 100_000   # pools below this never enter "deep" keep
-MAX_DEEP = 40              # deepest single-instance pools kept per chain
+MAX_DEEP = 60              # deepest single-instance pools kept per chain
 # GT /networks/{net}/dexes ordering is NOT depth-sorted — on base it
 # returns dead venues (leetswap, kokonutswap) while aerodrome/uniswap-v3
 # never reach the top-14 → the dex enumeration was structurally blind.
 # /networks/{net}/pools IS depth-ordered; pull it as a second source so
 # deep venues enter the candidate set regardless of dex ranking.
-TOP_POOL_PAGES = 4         # ~80 top pools per network
+TOP_POOL_PAGES = 8         # ~160 top pools per network
 BATCH = 50              # eth_call batch size
 
 # ---- canonical selectors (self-tested at startup) --------------------

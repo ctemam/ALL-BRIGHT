@@ -1,267 +1,335 @@
 {
- "ts": 1791641682.762348,
+ "ts": 1791764945.1583152,
  "chains": {
-  "bsc": {
-   "top_pools": 60,
-   "tracked": 31,
+  "eth": {
+   "top_pools": 40,
+   "tracked": 20,
    "deep_missed": [
     {
-     "pool": "0x7bb2f6dab157e444ad8717b0178035c1b1cf24958b37c2a205e61a3582283249",
-     "reserve_usd": 632647.8037
+     "pool": "0x00b9edc1583bf6ef09ff3a09f6c23ecb57fd7d0bb75625717ec81eed181e22d7",
+     "reserve_usd": 1663654.0
     },
     {
-     "pool": "0x3bca91b9b847cff6f4b666fa1d966981678975e13fd69d647bd11bed99f5fa14",
-     "reserve_usd": 1232357.1131
+     "pool": "0x2287a9620adcbf6250dc71be9ee9b2d3a1ec85a464fc6f5c06669e8d07b61bba",
+     "reserve_usd": 495939.94
+    },
+    {
+     "pool": "0xf6187f124e9aca0628d50a59d1c81538a4f961edee92227af5145f1e9f0ca370",
+     "reserve_usd": 103033.4221
+    },
+    {
+     "pool": "0x90078845bceb849b171873cfbc92db8540e9c803ff57d9d21b1215ec158e79b3",
+     "reserve_usd": 2191661.6979
+    },
+    {
+     "pool": "0xe500210c7ea6bfd9f69dce044b09ef384ec2b34832f132baec3b418208e3a657",
+     "reserve_usd": 3160385.431
+    },
+    {
+     "pool": "0x06b3bf476b472ee9892ed93a668fa9ca64b85f2b2521e28fc00fb28612be0ead",
+     "reserve_usd": 606350.6992
+    },
+    {
+     "pool": "0x1ebfcafaa2ffe376338cd2200d90abd2b936415d82ce63b5e6f934c9997457eb",
+     "reserve_usd": 625321.8127
+    },
+    {
+     "pool": "0x0fb0e40cec3bb23e13abc585958a93c796fbea56955e19a23727a716a0423239",
+     "reserve_usd": 3311571.0564
+    },
+    {
+     "pool": "0xce2899b16743cfd5a954d8122d5e07f410305b1aebee39fd73d9f3b9ebf10c2f",
+     "reserve_usd": 13798573.3564
+    },
+    {
+     "pool": "0xfaa42866f7667e3a1a10d783f3b629171febd45f056336b8df766d74afc0f0f7",
+     "reserve_usd": 444601.3887
+    },
+    {
+     "pool": "0x2b21c65d9a7dc6926ee330a1c6e5a8037fd81774f3dc066536f800128e39f634",
+     "reserve_usd": 4710590.3306
+    },
+    {
+     "pool": "0xb07d640fd9e2eb9dc81b953c8e4fd006bdfeaf276010fb5418eb763ca15abfb3",
+     "reserve_usd": 2180949.7443
+    },
+    {
+     "pool": "0x3b1b1f2e775a6db1664f8e7d59ad568605ea2406312c11aef03146c0cf89d5b9",
+     "reserve_usd": 47489128.9428
+    },
+    {
+     "pool": "0x395f91b34aa34a477ce3bc6505639a821b286a62b1a164fc1887fa3a5ef713a5",
+     "reserve_usd": 3639364.1049
+    },
+    {
+     "pool": "0x60446cf938c80775d2cf640580da230ca80d69de93f4683a23aa1abb7e47e57b",
+     "reserve_usd": 114895.9613
+    }
+   ]
+  },
+  "bsc": {
+   "top_pools": 40,
+   "tracked": 21,
+   "deep_missed": [
+    {
+     "pool": "0x91967c2226784b9bb14b4d5d186fe3ce5cd68c5ffc0032a49377b90e5234fa9c",
+     "reserve_usd": 315371.0727
     },
     {
      "pool": "0x0ed93383c381227876010a8b163e54baba7d5726636b04dd9201806f299f0862",
-     "reserve_usd": 979216.032
-    },
-    {
-     "pool": "0x91967c2226784b9bb14b4d5d186fe3ce5cd68c5ffc0032a49377b90e5234fa9c",
-     "reserve_usd": 306846.7221
-    },
-    {
-     "pool": "0x628ea54a6450645d2bb7b2911c8c6f3d7f3944c2f4703c259a1b85bf5569870b",
-     "reserve_usd": 397267.4103
-    },
-    {
-     "pool": "0xff84bf0ab4772bfa399b42b2633617a08506dfd8ba6fb3b7a782b3c021c0bba1",
-     "reserve_usd": 374445.207
+     "reserve_usd": 995218.6042
     },
     {
      "pool": "0xc7bb4cf4c51fd655ea0368255929f1a42ba1a67e1e8805c54e81d61dc28f3f74",
-     "reserve_usd": 1341332.997
+     "reserve_usd": 1315059.3747
     },
     {
-     "pool": "0x76628d8a999780bc572225b10eee122899887206",
-     "reserve_usd": 227923.3714
-    },
-    {
-     "pool": "0xba2eab70102e8e1ca982dce825328cadf1cd33ca4e0d1bb4e7408fe9bcdecec4",
-     "reserve_usd": 864428.7589
-    },
-    {
-     "pool": "0xdb4c4d91f12ce76f5c9ac0eae193cf3b4d6684cd5f09bf35d03dd9ae6d8a43b1",
-     "reserve_usd": 2573504.1582
-    },
-    {
-     "pool": "0xa27e05a64e6e5b1d967438c6ce6a2796bb95c7396ca7c40ae35373f37d29b77f",
-     "reserve_usd": 230822.0637
-    },
-    {
-     "pool": "0xd37aa0f0d66ad670279f6b89325c88bdff17d0265144762fb01f54fca9779944",
-     "reserve_usd": 529779.1992
-    },
-    {
-     "pool": "0xd9434e63fe78a6e77dafe2abc504121bf8500822f6d3a59eccba577cf0a070f2",
-     "reserve_usd": 875164.0158
+     "pool": "0x36f0e68ef7a97744389b9b5c859566629ba7c3f3899f0cc630ca68d82b6f488f",
+     "reserve_usd": 1486279.6696
     },
     {
      "pool": "0x7cc59be0a3754a33144a091e7b62dbcbf1a7a6f8540f224f4798fb739fd742e9",
-     "reserve_usd": 3422365.7575
+     "reserve_usd": 3107707.3377
     },
     {
-     "pool": "0x434d3b73640a81022adf8529b612cc221010f6bf",
-     "reserve_usd": 139584.3256
+     "pool": "0x628ea54a6450645d2bb7b2911c8c6f3d7f3944c2f4703c259a1b85bf5569870b",
+     "reserve_usd": 405721.7139
     },
     {
-     "pool": "0x02eda8dbc97a0c9adfbbfab589430d76a7c7f5b6",
-     "reserve_usd": 200247.3974
+     "pool": "0x7bb2f6dab157e444ad8717b0178035c1b1cf24958b37c2a205e61a3582283249",
+     "reserve_usd": 491414.6363
+    },
+    {
+     "pool": "0xba2eab70102e8e1ca982dce825328cadf1cd33ca4e0d1bb4e7408fe9bcdecec4",
+     "reserve_usd": 844174.5942
     },
     {
      "pool": "0xdd21c2d2fbd1487605799fbaa5854411afccd3faa3460ffa7fc9dacff94cad49",
-     "reserve_usd": 1014862.1742
-    },
-    {
-     "pool": "0xdaa3fe7b6b8aba32844d4f73450d6c65922519535f18a6e19fb93be0f3945c90",
-     "reserve_usd": 876507.5744
+     "reserve_usd": 1058208.1654
     }
    ]
   },
   "arb": {
-   "top_pools": 60,
-   "tracked": 37,
+   "top_pools": 80,
+   "tracked": 46,
    "deep_missed": [
     {
      "pool": "0xb1026b8e7276e7ac75410f1fcbbe21796e8f7526",
-     "reserve_usd": 253806.5627
+     "reserve_usd": 256932.5319
     },
     {
      "pool": "0xab05003a63d2f34ac7eec4670bca3319f0e3d2f62af5c2b9cbd69d03fd804fd2",
-     "reserve_usd": 540337.1495
+     "reserve_usd": 549247.15
     },
     {
      "pool": "0x864abca0a6202dba5b8868772308da953ff125b0f95015adbf89aaf579e903a8",
-     "reserve_usd": 5727327.2709
+     "reserve_usd": 6039122.4604
     },
     {
-     "pool": "0xd3b190d7e8b7f91ffd1827a5611c1958c7e2623a8214d75bbd700917a42491dc",
-     "reserve_usd": 1034390.1954
+     "pool": "0x973b2ab0a5108ead5eb3c6feeffc5c2b9c3c4004be8376d51f6f3241c41aca6e",
+     "reserve_usd": 403243.0338
     },
     {
      "pool": "0xec6e37b2d66aa5ef5a9fc296b4da3474b121f512428dd425a51c6424955fc5eb",
-     "reserve_usd": 3445861.3813
+     "reserve_usd": 3652734.8581
     },
     {
-     "pool": "0xc35aa1cec34e02a8acc3e5f79c22be364823094c",
-     "reserve_usd": 116333.7988
-    },
-    {
-     "pool": "0x80c735c5a0222241f211b3edb8df2ccefad94553ec18f1c29143f0399c78f500",
-     "reserve_usd": 3078393.6785
-    },
-    {
-     "pool": "0xfc7b3ad139daaf1e9c3637ed921c154d1b04286f8a82b805a6c352da57028653",
-     "reserve_usd": 243991.9754
+     "pool": "0xb2aec80e582cec4ffceacfcd01eef7dc31d4d0f3d8241843ffafbc4623d2d517",
+     "reserve_usd": 409200.3566
     },
     {
      "pool": "0xe88bba0ec2fc9091d68344b32b504abcc59f0aa9e1ae2ef048b69bc7ec3f4df8",
-     "reserve_usd": 764931.0957
+     "reserve_usd": 775236.3162
+    },
+    {
+     "pool": "0xd3b190d7e8b7f91ffd1827a5611c1958c7e2623a8214d75bbd700917a42491dc",
+     "reserve_usd": 1049623.5054
+    },
+    {
+     "pool": "0x80c735c5a0222241f211b3edb8df2ccefad94553ec18f1c29143f0399c78f500",
+     "reserve_usd": 3178547.9159
+    },
+    {
+     "pool": "0xfc7b3ad139daaf1e9c3637ed921c154d1b04286f8a82b805a6c352da57028653",
+     "reserve_usd": 245909.3911
+    },
+    {
+     "pool": "0xc35aa1cec34e02a8acc3e5f79c22be364823094c",
+     "reserve_usd": 114978.0921
+    },
+    {
+     "pool": "0x0f143fc50d6c71fee95d6ec1030e62d788507b84",
+     "reserve_usd": 141067.8957
+    },
+    {
+     "pool": "0x87ba69021d369bf2a080687cab68b623b716cb98df215694dd983055363212a7",
+     "reserve_usd": 159775.3888
+    },
+    {
+     "pool": "0x3c0441b42195f4ad6aa9a0978e06096ea616cda7",
+     "reserve_usd": 11687532.2878
+    },
+    {
+     "pool": "0x8b3781471ab98774c59775df9cc505ce20b36afffd297aef2dc17daafce3b140",
+     "reserve_usd": 1184476.0942
+    }
+   ]
+  },
+  "op": {
+   "top_pools": 40,
+   "tracked": 31,
+   "deep_missed": [
+    {
+     "pool": "0xd8dd9a8b2aca88e68c46af9008259d0ec04b7751",
+     "reserve_usd": 227722.9532
+    },
+    {
+     "pool": "0x03771e24b7c9172d163bf447490b142a15be3485",
+     "reserve_usd": 258476.3639
     }
    ]
   },
   "poly": {
    "top_pools": 80,
-   "tracked": 44,
+   "tracked": 41,
    "deep_missed": [
     {
-     "pool": "0xe1882ad75ae55f11733eb6a8b969fceabf23def0dd9fc8242395ef03f3fd49ff",
-     "reserve_usd": 925617.2759
+     "pool": "0xa37d3e6da98dfeb7dc8103a6614f586916a6e04d41ea0a929bc19a029de1a399",
+     "reserve_usd": 547429.0443
     },
     {
-     "pool": "0xa37d3e6da98dfeb7dc8103a6614f586916a6e04d41ea0a929bc19a029de1a399",
-     "reserve_usd": 469197.4218
+     "pool": "0xe1882ad75ae55f11733eb6a8b969fceabf23def0dd9fc8242395ef03f3fd49ff",
+     "reserve_usd": 977827.3333
     },
     {
      "pool": "0xbc8f3da0bd42e1f2509cd8671ce7c7e5f7fd39c8",
-     "reserve_usd": 227950.2289
-    },
-    {
-     "pool": "0x0e3eb2c75bd7dd0e12249d96b1321d9570764d77",
-     "reserve_usd": 146945.2657
-    },
-    {
-     "pool": "0xd3a9331a654444f9fe7ddbaec6678c2dc9113197",
-     "reserve_usd": 596186.7563
-    },
-    {
-     "pool": "0xb5992cc7db01c2430f87f7990713676f5b603d04d8d469250efe24ee18461174",
-     "reserve_usd": 31415937.5739
-    },
-    {
-     "pool": "0xe3f907c3512aea11d4cf0c2990970016b5ee5b1f83368c388287001f419052a4",
-     "reserve_usd": 1263128.8724
+     "reserve_usd": 228243.9052
     },
     {
      "pool": "0xa22a3fb3ab8f44db2692b0a810bc98e9459c8e746d08cdf09afe31a08830de0d",
-     "reserve_usd": 171618.1962
+     "reserve_usd": 179409.3611
     },
     {
-     "pool": "0x702d3438b2c6de6911a6a43a673ce5593c797f74",
-     "reserve_usd": 163565.7471
+     "pool": "0xb5992cc7db01c2430f87f7990713676f5b603d04d8d469250efe24ee18461174",
+     "reserve_usd": 31904410.8496
     },
     {
-     "pool": "0x5fe84b85ba7dea0fbc8c4571491aca80d97f5e01",
-     "reserve_usd": 563926.5603
+     "pool": "0xd3a9331a654444f9fe7ddbaec6678c2dc9113197",
+     "reserve_usd": 593084.882
+    },
+    {
+     "pool": "0x0e3eb2c75bd7dd0e12249d96b1321d9570764d77",
+     "reserve_usd": 147051.0822
+    },
+    {
+     "pool": "0xe3f907c3512aea11d4cf0c2990970016b5ee5b1f83368c388287001f419052a4",
+     "reserve_usd": 976375.4207
+    },
+    {
+     "pool": "0x55caabb0d2b704fd0ef8192a7e35d8837e678207",
+     "reserve_usd": 142147.4237
     },
     {
      "pool": "0x6da799cefb9ea6ceb8e45b37585c4cd7844b3aec34aa999c266beff925af1829",
-     "reserve_usd": 538705.2179
+     "reserve_usd": 428171.0625
+    },
+    {
+     "pool": "0x702d3438b2c6de6911a6a43a673ce5593c797f74",
+     "reserve_usd": 166754.9849
+    },
+    {
+     "pool": "0x5fe84b85ba7dea0fbc8c4571491aca80d97f5e01",
+     "reserve_usd": 538633.0779
+    },
+    {
+     "pool": "0xdb26d6f2af41f431d447f292d9d96950f3d3a86cdfc321673301d029412502a1",
+     "reserve_usd": 103990.6184
     }
    ]
   },
   "avax": {
-   "top_pools": 80,
-   "tracked": 35,
-   "deep_missed": [
-    {
-     "pool": "0x41100c6d2c6920b10d12cd8d59c8a9aa2ef56fc7",
-     "reserve_usd": 549079.4012
-    },
-    {
-     "pool": "0x864d4e5ee7318e97483db7eb0912e09f161516ea",
-     "reserve_usd": 460216.5677
-    },
-    {
-     "pool": "0x8fef4fe4970a5d6bfa7c65871a2ebfd0f42aa822",
-     "reserve_usd": 118372.499
-    },
-    {
-     "pool": "0x76eb2c0c8adabc6be513a1f3b6cc9191d017fac7",
-     "reserve_usd": 254970.2746
-    },
-    {
-     "pool": "0x8dc096ecc5cb7565daa9615d6b6b4e6d1ffb3b16cca4e0971dfaf0ed9cb55c63",
-     "reserve_usd": 102964.5646
-    },
-    {
-     "pool": "0x16888ee58e706c253b821eaa637ae9b2cfea255c",
-     "reserve_usd": 3718607.101
-    },
-    {
-     "pool": "0x4224f6f4c9280509724db2dbac314621e4465c29",
-     "reserve_usd": 735462.9518
-    },
-    {
-     "pool": "0xebdff15cdddb59a8d32e5ec1e3800708b306f4ee",
-     "reserve_usd": 684828.2149
-    },
-    {
-     "pool": "0x162c79b641de90c14a8b02b061bf53d8a8cb6c01",
-     "reserve_usd": 152934.7978
-    },
-    {
-     "pool": "0x87eb2f90d7d0034571f343fb7429ae22c1bd9f72",
-     "reserve_usd": 142464.3575
-    },
-    {
-     "pool": "0xd446eb1660f766d533beceef890df7a69d26f7d1",
-     "reserve_usd": 208845.9796
-    },
-    {
-     "pool": "0xf0f633fa7bbced625aa72c679491b5df17a4664c",
-     "reserve_usd": 118433.8057
-    },
-    {
-     "pool": "0x35ff620a2c44193260e7c3bd787f2e131223242e",
-     "reserve_usd": 101821.5322
-    },
-    {
-     "pool": "0x7d94f880736c2558e039e573b9a8fe230d60297e",
-     "reserve_usd": 252538.5028
-    }
-   ]
+   "top_pools": 0,
+   "tracked": 0,
+   "deep_missed": []
   },
   "base": {
-   "top_pools": 80,
-   "tracked": 64,
+   "top_pools": 160,
+   "tracked": 120,
    "deep_missed": [
     {
      "pool": "0x7681c00520c26da8d8970c21a65461c726f274068eb08743debc1178e697044e",
-     "reserve_usd": 324218.3662
-    },
-    {
-     "pool": "0xe2654cc01616e962fbfcc4277c23062e59e70e39f87221d77b6d438705a5f286",
-     "reserve_usd": 4284551.5762
-    },
-    {
-     "pool": "0x5a74ea01e29115bdd633ed7559802ddbdcc600ba22a778b6d200893c2e7a2690",
-     "reserve_usd": 5436305.3576
-    },
-    {
-     "pool": "0xc3f617c8a3da6d286c8f97af946a8f293632c852",
-     "reserve_usd": 167283.8763
+     "reserve_usd": 305579.6143
     },
     {
      "pool": "0xf13203ddbf2c9816a79b656a1a952521702715d92fea465b84ae2ed6e94a7f22",
-     "reserve_usd": 230498.4854
+     "reserve_usd": 233287.4232
+    },
+    {
+     "pool": "0x8357668966377879be18a942029dae8ba6b34dd8",
+     "reserve_usd": 111148.6768
+    },
+    {
+     "pool": "0x3dfdecc334a8f2618321c78a9de0e9428438f871",
+     "reserve_usd": 100030.092
     },
     {
      "pool": "0x25424bf60fbb8b43bdf2efee7bb9b89b1ff991f0256f8e1e5206fd23cd6fe2db",
-     "reserve_usd": 115554.015
+     "reserve_usd": 117032.8992
+    },
+    {
+     "pool": "0x215b2146c3164aba3f5b18e8619b737c7f7dd11e5ba693646dcd9a336c5a30ba",
+     "reserve_usd": 513164.7654
+    },
+    {
+     "pool": "0x96d4b53a38337a5733179751781178a2613306063c511b78cd02684739288c0a",
+     "reserve_usd": 426639.5195
+    },
+    {
+     "pool": "0xe2654cc01616e962fbfcc4277c23062e59e70e39f87221d77b6d438705a5f286",
+     "reserve_usd": 4293333.3422
+    },
+    {
+     "pool": "0x3f9b863ef4b295d6ba370215bcca3785fcc44f44",
+     "reserve_usd": 1169203.6232
+    },
+    {
+     "pool": "0x5a74ea01e29115bdd633ed7559802ddbdcc600ba22a778b6d200893c2e7a2690",
+     "reserve_usd": 5513674.821
+    },
+    {
+     "pool": "0x24ecedb296899f0110dce5cfdd9c9dd74b2b11a21dee752e085f93c700c7fccb",
+     "reserve_usd": 320353.6504
     }
    ]
+  },
+  "linea": {
+   "top_pools": 20,
+   "tracked": 10,
+   "deep_missed": [
+    {
+     "pool": "0x5ec5b1e9b1bd5198343abb6e55fb695d2f7bb308",
+     "reserve_usd": 390411.8049
+    }
+   ]
+  },
+  "scroll": {
+   "top_pools": 80,
+   "tracked": 47,
+   "deep_missed": [
+    {
+     "pool": "0x814a23b053fd0f102aeeda0459215c2444799c70",
+     "reserve_usd": 346265.0586
+    },
+    {
+     "pool": "0x2076d4632853fb165cf7c7e7fad592dac70f4fe1",
+     "reserve_usd": 104389.4679
+    }
+   ]
+  },
+  "blast": {
+   "top_pools": 0,
+   "tracked": 0,
+   "deep_missed": []
   }
  }
 }
